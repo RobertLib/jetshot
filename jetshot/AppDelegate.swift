@@ -15,6 +15,25 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Override point for customization after application launch.
+
+        // Initialize iCloud storage (this will start synchronization)
+        _ = CloudStorageManager.shared
+
+        // Optional: Print iCloud status for debugging
+        #if DEBUG
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            CloudStorageManager.shared.printCloudStatus()
+        }
+        #endif
+
+        // Authenticate with Game Center
+        // We'll authenticate from the root view controller once it's available
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let rootViewController = self.window?.rootViewController {
+                GameCenterManager.shared.authenticatePlayer(from: rootViewController)
+            }
+        }
+
         return true
     }
 
