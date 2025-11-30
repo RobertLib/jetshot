@@ -609,6 +609,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isGameStarted = true
         gameContentNode.isPaused = false
         physicsWorld.speed = 1.0
+
+        // Play level start sound
+        SoundManager.shared.playLevelStartSound(on: self)
     }
 
     private func setupPauseButton(topMargin: CGFloat) {
@@ -905,6 +908,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         for node in nodesAtPoint {
             if isGameStarted && (node.name == "pauseButton" || node.parent?.name == "pauseButton") {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playPauseSound(on: self)
                 togglePause()
                 return
             }
@@ -913,21 +917,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             if gameContentNode.isPaused {
                 if node.name == "resumeButton" || node.parent?.name == "resumeButton" {
                     HapticManager.shared.lightTap()
+                    SoundManager.shared.playResumeSound(on: self)
                     handleResumeButton()
                     return
                 }
                 if node.name == "pauseRetryButton" || node.parent?.name == "pauseRetryButton" {
                     HapticManager.shared.lightTap()
+                    SoundManager.shared.playButtonClickSound(on: self)
                     handlePauseRetryButton()
                     return
                 }
                 if node.name == "pauseLevelsButton" || node.parent?.name == "pauseLevelsButton" {
                     HapticManager.shared.lightTap()
+                    SoundManager.shared.playButtonClickSound(on: self)
                     handlePauseLevelsButton()
                     return
                 }
                 if node.name == "pauseMenuButton" || node.parent?.name == "pauseMenuButton" {
                     HapticManager.shared.lightTap()
+                    SoundManager.shared.playButtonClickSound(on: self)
                     handlePauseMenuButton()
                     return
                 }
@@ -940,6 +948,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let topNode = nodesAtPoint.first
             if topNode?.name == "pauseOverlayBackground" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playResumeSound(on: self)
                 togglePause()
                 return
             }
@@ -1004,6 +1013,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Shoot missiles if available
         if player.sideMissileCount > 0 {
+            SoundManager.shared.playMissileSound(on: self)
             for i in 0..<player.sideMissileCount {
                 let side = i == 0 ? -1 : 1
                 let missile = player.shootMissile(side: side)
@@ -1018,6 +1028,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func shootLightning() {
+        // Play lightning sound
+        SoundManager.shared.playLightningSound(on: self)
+
         // Create screen-wide lightning attack
         let lightning = LightningHelper.createScreenWideLightning(
             at: player.position,
@@ -1264,6 +1277,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // Boss defeated - add points
             addScore(result.points)
 
+            // Play boss defeat sound
+            SoundManager.shared.playBossDefeatSound(on: self)
+
             // Track boss defeat for Game Center
             let isFirstBoss = (currentLevel == 1) // Adjust based on which level has first boss
             GameCenterManager.shared.trackBossDefeated(isFirstBoss: isFirstBoss)
@@ -1278,6 +1294,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         } else {
             // Boss took damage but still alive
             createHitEffect(at: boss.position)
+            SoundManager.shared.playBossHitSound(on: self)
             HapticManager.shared.mediumTap()
         }
     }
@@ -1406,6 +1423,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             if player.hasShield {
                 // Shield absorbs the hit - just create visual feedback
                 createExplosion(at: bullet.position)
+                SoundManager.shared.playShieldHitSound(on: self)
                 HapticManager.shared.lightTap()
             }
             bullet.removeFromParent()
@@ -1578,39 +1596,47 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         case .extraLife:
             if lives < 4 {
                 lives += 1
+                SoundManager.shared.playExtraLifeSound(on: self)
                 HapticManager.shared.heavyTap()
             }
 
         case .multiShot:
             if player.bulletCount < 4 {
                 player.bulletCount += 1
+                SoundManager.shared.playMultiShotActivateSound(on: self)
                 HapticManager.shared.lightTap()
             }
 
         case .sideMissiles:
             if player.sideMissileCount < 2 {
                 player.sideMissileCount += 1
+                SoundManager.shared.playMissileSound(on: self)
                 HapticManager.shared.lightTap()
             }
 
         case .shield:
             activateShield()
+            SoundManager.shared.playShieldActivateSound(on: self)
             HapticManager.shared.heavyTap()
 
         case .lightning:
             activateLightningWeapon()
+            SoundManager.shared.playLightningSound(on: self)
             HapticManager.shared.heavyTap()
 
         case .rapidFire:
             activateRapidFire()
+            SoundManager.shared.playRapidFireActivateSound(on: self)
             HapticManager.shared.mediumTap()
 
         case .magnet:
             activateMagnet()
+            SoundManager.shared.playMagnetActivateSound(on: self)
             HapticManager.shared.mediumTap()
 
         case .slowMotion:
             activateSlowMotion()
+            SoundManager.shared.playSlowMotionActivateSound(on: self)
             HapticManager.shared.heavyTap()
 
         case .freezeBomb:
@@ -1619,14 +1645,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         case .homingMissiles:
             launchHomingMissiles()
+            SoundManager.shared.playMissileSound(on: self)
             HapticManager.shared.heavyTap()
 
         case .scoreMultiplier:
             activateScoreMultiplier()
+            SoundManager.shared.playScoreMultiplierSound(on: self)
             HapticManager.shared.mediumTap()
 
         case .barrier:
             activateBarrier()
+            SoundManager.shared.playBarrierActivateSound(on: self)
             HapticManager.shared.heavyTap()
 
         case .nuke:
@@ -2546,6 +2575,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Show warning before boss appears
         showBossWarning {
+            // Play boss appear sound
+            SoundManager.shared.playBossAppearSound(on: self)
             // Spawn the boss after warning
             self.bossManager.spawnBoss(level: self.currentLevel) {
                 // Boss entrance complete, attacks begin
@@ -2554,6 +2585,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func showBossWarning(completion: @escaping () -> Void) {
+        // Play warning sound
+        SoundManager.shared.playWarningSound(on: self)
+
         let warningNode = SKNode()
         warningNode.zPosition = 1500
         warningNode.name = "bossWarning"

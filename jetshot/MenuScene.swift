@@ -135,12 +135,14 @@ class MenuScene: SKScene {
         // Check if start button was tapped
         if touchedNodes.contains(where: { $0.name == "startButton" }) {
             HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
             startGame()
         }
 
         // Check if Game Center button was tapped
         if touchedNodes.contains(where: { $0.name == "gameCenterButton" }) {
             HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
             showGameCenter()
         }
     }

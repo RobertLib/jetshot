@@ -437,15 +437,19 @@ class LevelCompleteScene: SKScene {
             switch nodeName {
             case "nextButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleNextButton()
             case "victoryButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleVictoryButton()
             case "levelsButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleLevelsButton()
             case "menuButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleMenuButton()
             default:
                 break

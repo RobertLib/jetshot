@@ -373,6 +373,7 @@ class LevelSelectScene: SKScene {
             // Back button (check both button and label)
             if nodeName == "backButton" || nodeName == "backButtonLabel" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleBackButton()
                 return
             }
@@ -380,6 +381,7 @@ class LevelSelectScene: SKScene {
             // Reset button (check both button and label)
             if nodeName == "resetButton" || nodeName == "resetButtonLabel" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleResetButton()
                 return
             }
@@ -387,6 +389,7 @@ class LevelSelectScene: SKScene {
             // Navigation arrows
             if nodeName == "leftArrow" && currentPage > 0 {
                 HapticManager.shared.selection()
+                SoundManager.shared.playMenuSelectSound(on: self)
                 changePage(currentPage - 1)
                 return
             }
@@ -395,6 +398,7 @@ class LevelSelectScene: SKScene {
                 let totalPages = (levelManager.totalLevels + levelsPerPage - 1) / levelsPerPage
                 if currentPage < totalPages - 1 {
                     HapticManager.shared.selection()
+                    SoundManager.shared.playMenuSelectSound(on: self)
                     changePage(currentPage + 1)
                 }
                 return
@@ -411,12 +415,14 @@ class LevelSelectScene: SKScene {
             // Confirmation dialog buttons
             if nodeName == "confirmYes" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 confirmReset()
                 return
             }
 
             if nodeName == "confirmNo" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 dismissConfirmationDialog()
                 return
             }
@@ -428,6 +434,7 @@ class LevelSelectScene: SKScene {
             // Check parent for back button
             if parentName == "backButton" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleBackButton()
                 return
             }
@@ -435,6 +442,7 @@ class LevelSelectScene: SKScene {
             // Check parent for reset button
             if parentName == "resetButton" {
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleResetButton()
                 return
             }
@@ -495,6 +503,7 @@ class LevelSelectScene: SKScene {
     private func handleLevelTap(level: Int) {
         if levelManager.isLevelUnlocked(level) {
             HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
 
             // Button press animation
             if let button = levelButtons.first(where: { $0.name == "levelButton_\(level)" }) {
@@ -506,6 +515,7 @@ class LevelSelectScene: SKScene {
             }
         } else {
             HapticManager.shared.warning()
+            SoundManager.shared.playWarningSound(on: self)
             // Show locked feedback
             if let button = levelButtons.first(where: { $0.name == "levelButton_\(level)" }) {
                 let shake = SKAction.sequence([

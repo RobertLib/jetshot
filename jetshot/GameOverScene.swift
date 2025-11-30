@@ -243,12 +243,15 @@ class GameOverScene: SKScene {
             switch nodeName {
             case "retryButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleRetryButton()
             case "levelsButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleLevelsButton()
             case "menuButton":
                 HapticManager.shared.lightTap()
+                SoundManager.shared.playButtonClickSound(on: self)
                 handleMenuButton()
             default:
                 break
