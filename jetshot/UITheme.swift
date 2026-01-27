@@ -63,6 +63,41 @@ struct UITheme {
 
         // Shadow colors
         static let shadowBlack = UIColor.black
+
+        // MARK: - Enemy Colors
+
+        // Basic enemy types
+        static let enemyBasic = UIColor.red
+        static let enemyBasicStroke = UIColor(red: 1.0, green: 0.6, blue: 0.6, alpha: 1.0)
+        static let enemyFast = UIColor.orange
+        static let enemyFastStroke = UIColor(red: 1.0, green: 0.8, blue: 0.5, alpha: 1.0)
+        static let enemyHeavy = UIColor.purple
+        static let enemyHeavyStroke = UIColor(red: 0.9, green: 0.7, blue: 1.0, alpha: 1.0)
+        static let enemyZigzag = UIColor.cyan
+        static let enemyZigzagStroke = UIColor(red: 0.6, green: 1.0, blue: 1.0, alpha: 1.0)
+        static let enemyKamikaze = UIColor.yellow
+        static let enemyKamikazeStroke = UIColor(red: 1.0, green: 1.0, blue: 0.6, alpha: 1.0)
+        static let enemyFormation = UIColor(red: 0.0, green: 0.8, blue: 0.4, alpha: 1.0)
+        static let enemyFormationStroke = UIColor(red: 0.5, green: 1.0, blue: 0.7, alpha: 1.0)
+
+        // Special enemy types
+        static let enemySniper = UIColor(red: 1.0, green: 0.4, blue: 0.2, alpha: 1.0)
+        static let enemySniperStroke = UIColor(red: 1.0, green: 0.7, blue: 0.5, alpha: 1.0)
+        static let enemyTank = UIColor(red: 0.2, green: 0.3, blue: 0.6, alpha: 1.0)
+        static let enemyTankStroke = UIColor(red: 0.5, green: 0.6, blue: 0.9, alpha: 1.0)
+        static let enemyStriker = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0)
+        static let enemyStrikerStroke = UIColor(red: 0.6, green: 0.9, blue: 1.0, alpha: 1.0)
+
+        // MARK: - PowerUp Colors
+
+        static let powerUpShield = UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0)
+        static let powerUpLightning = UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0)
+        static let powerUpRapidFire = UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0)
+        static let powerUpMagnet = UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)
+        static let powerUpSlowMotion = UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0)
+        static let powerUpMultiShot = UIColor(red: 0.2, green: 1.0, blue: 0.8, alpha: 1.0)
+        static let powerUpExtraLife = UIColor(red: 0.0, green: 1.0, blue: 0.3, alpha: 1.0)
+        static let powerUpScoreMultiplier = UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0)
     }
 
     // MARK: - Typography

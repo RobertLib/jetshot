@@ -645,8 +645,16 @@ class Obstacle: SKNode {
         // Move down the screen
         let moveDuration: TimeInterval = 8.0
         let moveAction = SKAction.moveBy(x: 0, y: -(sceneSize.height + 200), duration: moveDuration)
+
+        // Cleanup all repeating actions before removal
+        let cleanup = SKAction.run { [weak self] in
+            self?.removeAction(forKey: "rotate")
+            self?.removeAction(forKey: "horizontalMovement")
+            self?.removeAction(forKey: "pulse")
+            self?.removeAllActions()
+        }
         let removeAction = SKAction.removeFromParent()
-        let sequence = SKAction.sequence([moveAction, removeAction])
+        let sequence = SKAction.sequence([moveAction, cleanup, removeAction])
         run(sequence, withKey: "moveDown")
     }
 

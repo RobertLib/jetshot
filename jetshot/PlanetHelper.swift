@@ -54,7 +54,7 @@ class PlanetHelper {
 
         static func random() -> PlanetType {
             let types: [PlanetType] = [.rocky, .gasGiant, .ice, .desert, .toxic]
-            return types.randomElement()!
+            return types.randomElement() ?? .rocky
         }
     }
 
@@ -68,7 +68,7 @@ class PlanetHelper {
         }
 
         // Random color from the palette of the given type
-        let planetColor = type.colors.randomElement()!
+        let planetColor = type.colors.randomElement() ?? type.colors.first ?? UIColor.gray
 
         // Draw main planet circle
         context.setFillColor(planetColor.cgColor)

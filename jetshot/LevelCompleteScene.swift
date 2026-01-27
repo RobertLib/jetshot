@@ -428,7 +428,7 @@ class LevelCompleteScene: SKScene {
         for _ in 0..<12 {  // Reduced from 20
             let particle = SKShapeNode(rectOf: CGSize(width: 8, height: 8), cornerRadius: 2)
             let colors: [UIColor] = [.red, .yellow, .green, .cyan, .magenta]
-            particle.fillColor = colors.randomElement()!
+            particle.fillColor = colors.randomElement() ?? .yellow
             particle.strokeColor = .clear
             particle.position = CGPoint(x: size.width / 2, y: size.height - 100)
             particle.zPosition = 10

@@ -26,29 +26,35 @@ struct BackgroundSegment {
 class ParallaxBackgroundHelper {
 
     private static var activeSegments: [SKNode] = []
-    private static var scheduledTimers: [Timer] = []
     private static var prerenderedTextures: [String: SKTexture] = [:]
+    private static let maxCachedTextures = 10  // Limit cache size to prevent memory issues
 
     /// Adds parallax background segments to scene based on level
     static func addParallaxBackground(to scene: SKScene, parentNode: SKNode, levelNumber: Int) {
         // Clear any existing segments
         removeParallaxBackground(from: parentNode)
         activeSegments.removeAll()
-        scheduledTimers.forEach { $0.invalidate() }
-        scheduledTimers.removeAll()
+
+        // Clean up texture cache if it gets too large
+        if prerenderedTextures.count > maxCachedTextures {
+            prerenderedTextures.removeAll()
+        }
 
         // Get segments for this level (deterministic)
         let segments = getBackgroundSegments(for: levelNumber)
 
         // Pre-render textures asynchronously in background
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak scene, weak parentNode] in
+            // Check if scene still exists before processing
+            guard scene != nil, parentNode != nil else { return }
+
             for segment in segments {
                 let cacheKey = "\(levelNumber)_\(segment.type)_\(Int(Date().timeIntervalSince1970))"
                 if prerenderedTextures[cacheKey] == nil {
                     // Pre-render texture in background thread
                     var generator = SeededRandomGenerator(seed: UInt64(levelNumber * 1000 + Int(segment.startDelay)))
                     let tempNode = SKNode()
-                    let tileSize = CGSize(width: scene.size.width, height: 512)
+                    let tileSize = CGSize(width: scene?.size.width ?? 375, height: 512)
 
                     switch segment.type {
                     case .grid:
@@ -63,26 +69,33 @@ class ParallaxBackgroundHelper {
 
                     let texture = renderNodeToTexture(node: tempNode, size: tileSize)
 
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak scene, weak parentNode] in
+                        // Double-check scene and parentNode still exist before caching
+                        guard scene != nil, parentNode != nil else { return }
                         prerenderedTextures[cacheKey] = texture
                     }
                 }
             }
         }
 
-        // Schedule each segment
+        // Schedule each segment using SKAction to respect pause state
         for segment in segments {
-            let timer = Timer.scheduledTimer(withTimeInterval: segment.startDelay, repeats: false) { _ in
+            let waitAction = SKAction.wait(forDuration: segment.startDelay)
+            let spawnAction = SKAction.run { [weak scene, weak parentNode] in
+                guard let scene = scene, let parentNode = parentNode else { return }
                 let segmentNode = createBackgroundSegment(type: segment.type, scene: scene, parentNode: parentNode, levelNumber: levelNumber)
                 activeSegments.append(segmentNode)
 
                 // Schedule removal after duration
-                Timer.scheduledTimer(withTimeInterval: segment.duration, repeats: false) { _ in
+                let removeWait = SKAction.wait(forDuration: segment.duration)
+                let removeAction = SKAction.run { [weak segmentNode] in
+                    guard let segmentNode = segmentNode else { return }
                     fadeOutAndRemove(node: segmentNode)
                     activeSegments.removeAll { $0 == segmentNode }
                 }
+                scene.run(SKAction.sequence([removeWait, removeAction]))
             }
-            scheduledTimers.append(timer)
+            scene.run(SKAction.sequence([waitAction, spawnAction]))
         }
     }
 
@@ -159,6 +172,7 @@ class ParallaxBackgroundHelper {
                     // Create sprite directly from cached texture
                     let tile = SKSpriteNode(texture: sharedTexture)
                     tile.size = tileSize
+                    tile.anchorPoint = CGPoint(x: 0, y: 0)  // Set anchor to bottom-left
                     tile.position = CGPoint(
                         x: CGFloat(j) * tileSize.width,
                         y: CGFloat(i) * tileHeight
@@ -603,11 +617,14 @@ class ParallaxBackgroundHelper {
 
     /// Removes parallax background from scene
     static func removeParallaxBackground(from parentNode: SKNode) {
-        scheduledTimers.forEach { $0.invalidate() }
-        scheduledTimers.removeAll()
         activeSegments.forEach { $0.removeFromParent() }
         activeSegments.removeAll()
         parentNode.children.filter { $0.name == "backgroundSegment" }.forEach { $0.removeFromParent() }
+    }
+
+    /// Clear texture cache (call this on memory warning)
+    static func clearTextureCache() {
+        prerenderedTextures.removeAll()
     }
 }
 

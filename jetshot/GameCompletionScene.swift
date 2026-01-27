@@ -363,7 +363,7 @@ class GameCompletionScene: SKScene {
                 .red, .yellow, .green, .cyan, .magenta,
                 UITheme.Colors.primaryGold, .orange, .purple
             ]
-            particle.fillColor = colors.randomElement()!
+            particle.fillColor = colors.randomElement() ?? .yellow
             particle.strokeColor = .clear
             particle.position = CGPoint(x: size.width / 2, y: size.height - 50)
             particle.zPosition = 10

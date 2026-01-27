@@ -14,20 +14,23 @@ class GameViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        if let view = self.view as! SKView? {
-            // Create menu scene (intro screen)
-            let scene = MenuScene(size: view.bounds.size)
-            scene.scaleMode = .resizeFill
-
-            // Present scene
-            view.presentScene(scene)
-
-            view.ignoresSiblingOrder = true
-            view.shouldCullNonVisibleNodes = true
-            view.preferredFramesPerSecond = 60
-            // view.showsFPS = true
-            // view.showsNodeCount = true
+        guard let view = self.view as? SKView else {
+            assertionFailure("View is not SKView")
+            return
         }
+
+        // Create menu scene (intro screen)
+        let scene = MenuScene(size: view.bounds.size)
+        scene.scaleMode = .resizeFill
+
+        // Present scene
+        view.presentScene(scene)
+
+        view.ignoresSiblingOrder = true
+        view.shouldCullNonVisibleNodes = true
+        view.preferredFramesPerSecond = 60
+        // view.showsFPS = true
+        // view.showsNodeCount = true
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {

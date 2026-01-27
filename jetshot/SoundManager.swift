@@ -21,7 +21,11 @@ class SoundManager: NSObject {
 
     var isMusicEnabled: Bool {
         get {
-            return UserDefaults.standard.bool(forKey: "isMusicEnabled") // Default is false, so we use inverted logic below
+            // Check if value was ever set, if not return true (enabled by default)
+            guard UserDefaults.standard.object(forKey: "isMusicEnabled") != nil else {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: "isMusicEnabled")
         }
         set {
             UserDefaults.standard.set(newValue, forKey: "isMusicEnabled")
@@ -33,7 +37,7 @@ class SoundManager: NSObject {
         }
     }
 
-    var musicVolume: Float = 0.3 {
+    var musicVolume: Float = GameConfiguration.defaultMusicVolume {
         didSet {
             musicPlayer?.volume = musicVolume
         }
@@ -92,7 +96,11 @@ class SoundManager: NSObject {
     // Sound settings
     var isSoundEnabled: Bool {
         get {
-            return UserDefaults.standard.bool(forKey: "isSoundEnabled") // Default is false, so we use inverted logic below
+            // Check if value was ever set, if not return true (enabled by default)
+            guard UserDefaults.standard.object(forKey: "isSoundEnabled") != nil else {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: "isSoundEnabled")
         }
         set {
             UserDefaults.standard.set(newValue, forKey: "isSoundEnabled")
@@ -108,7 +116,10 @@ class SoundManager: NSObject {
             UserDefaults.standard.set(true, forKey: "isSoundEnabled")
             UserDefaults.standard.set(true, forKey: "hasSetSoundDefaults")
         }
-        preloadSounds()
+        // Preload sounds asynchronously to avoid blocking startup
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.preloadSounds()
+        }
     }
 
     // Helper function to create sound action

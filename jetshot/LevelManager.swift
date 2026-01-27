@@ -21,7 +21,7 @@ class LevelManager {
     private init() {}
 
     // Total number of levels
-    let totalLevels = 50  // Expanded to 50 levels
+    let totalLevels = GameConfiguration.totalLevels
 
     // Check if level is unlocked
     func isLevelUnlocked(_ level: Int) -> Bool {

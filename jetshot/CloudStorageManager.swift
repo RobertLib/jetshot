@@ -17,6 +17,15 @@ class CloudStorageManager {
     private let cloudStore = NSUbiquitousKeyValueStore.default
     private let userDefaults = UserDefaults.standard
 
+    // Thread safety for merge operations
+    private let mergeQueue = DispatchQueue(label: "com.jetshot.cloudStorageMerge", qos: .utility)
+    private let mergeLock = NSLock()
+    private var isMerging = false
+
+    // Throttle synchronization to avoid excessive iCloud API calls
+    private var lastSyncTime: TimeInterval = 0
+    private let minSyncInterval: TimeInterval = 1.0 // Min 1 second between syncs
+
     // MARK: - Keys
     struct Keys {
         static let completedLevels = "completedLevels"
@@ -61,12 +70,39 @@ class CloudStorageManager {
         // Only merge on external changes (from other devices or after reinstall)
         if reasonForChange == NSUbiquitousKeyValueStoreServerChange ||
            reasonForChange == NSUbiquitousKeyValueStoreInitialSyncChange {
-            mergeCloudDataWithLocal()
+            // Use dedicated serial queue to prevent race conditions
+            mergeQueue.async { [weak self] in
+                self?.mergeCloudDataWithLocal()
+            }
         }
     }
 
     /// Merge cloud data with local data, keeping the best progress
     private func mergeCloudDataWithLocal() {
+        // Check if iCloud is available
+        guard isCloudAvailable() else {
+            #if DEBUG
+            print("☁️ iCloud not available - skipping merge")
+            #endif
+            return
+        }
+
+        // Prevent concurrent merge operations with thread-safe lock
+        mergeLock.lock()
+        if isMerging {
+            mergeLock.unlock()
+            return
+        }
+        isMerging = true
+        mergeLock.unlock()
+
+        // Ensure isMerging is always reset, even if error occurs
+        defer {
+            mergeLock.lock()
+            isMerging = false
+            mergeLock.unlock()
+        }
+
         // Merge completed levels (union of both)
         let cloudLevels = cloudStore.array(forKey: Keys.completedLevels) as? [Int] ?? []
         let localLevels = userDefaults.array(forKey: Keys.completedLevels) as? [Int] ?? []
@@ -74,6 +110,9 @@ class CloudStorageManager {
 
         if mergedLevels != localLevels {
             userDefaults.set(mergedLevels, forKey: Keys.completedLevels)
+            #if DEBUG
+            print("☁️ Merged completed levels: local=\(localLevels.count), cloud=\(cloudLevels.count), merged=\(mergedLevels.count)")
+            #endif
         }
 
         // Merge level scores (keep highest score for each level)
@@ -90,6 +129,9 @@ class CloudStorageManager {
 
         if mergedScores != localScores {
             userDefaults.set(mergedScores, forKey: Keys.levelScores)
+            #if DEBUG
+            print("☁️ Merged level scores: \(mergedScores.count) levels")
+            #endif
         }
 
         // Merge level stars (keep highest stars for each level)
@@ -106,6 +148,9 @@ class CloudStorageManager {
 
         if mergedStars != localStars {
             userDefaults.set(mergedStars, forKey: Keys.levelStars)
+            #if DEBUG
+            print("☁️ Merged level stars: \(mergedStars.count) levels")
+            #endif
         }
 
         // Merge level weapons (keep highest bulletCount and sideMissileCount for each level)
@@ -137,36 +182,56 @@ class CloudStorageManager {
     /// Save array to both local and cloud storage
     func saveArray(_ array: [Any], forKey key: String) {
         userDefaults.set(array, forKey: key)
-        cloudStore.set(array, forKey: key)
-        synchronize()
+
+        // Only sync to iCloud if available
+        if isCloudAvailable() {
+            cloudStore.set(array, forKey: key)
+            synchronize()
+        }
     }
 
     /// Save dictionary to both local and cloud storage
     func saveDictionary(_ dictionary: [String: Any], forKey key: String) {
         userDefaults.set(dictionary, forKey: key)
-        cloudStore.set(dictionary, forKey: key)
-        synchronize()
+
+        // Only sync to iCloud if available
+        if isCloudAvailable() {
+            cloudStore.set(dictionary, forKey: key)
+            synchronize()
+        }
     }
 
     /// Save integer to both local and cloud storage
     func saveInteger(_ value: Int, forKey key: String) {
         userDefaults.set(value, forKey: key)
-        cloudStore.set(Int64(value), forKey: key)
-        synchronize()
+
+        // Only sync to iCloud if available
+        if isCloudAvailable() {
+            cloudStore.set(Int64(value), forKey: key)
+            synchronize()
+        }
     }
 
     /// Save string to both local and cloud storage
     func saveString(_ value: String, forKey key: String) {
         userDefaults.set(value, forKey: key)
-        cloudStore.set(value, forKey: key)
-        synchronize()
+
+        // Only sync to iCloud if available
+        if isCloudAvailable() {
+            cloudStore.set(value, forKey: key)
+            synchronize()
+        }
     }
 
     /// Remove object from both local and cloud storage
     func removeObject(forKey key: String) {
         userDefaults.removeObject(forKey: key)
-        cloudStore.removeObject(forKey: key)
-        synchronize()
+
+        // Only sync to iCloud if available
+        if isCloudAvailable() {
+            cloudStore.removeObject(forKey: key)
+            synchronize()
+        }
     }
 
     // MARK: - Load Methods
@@ -193,10 +258,36 @@ class CloudStorageManager {
 
     // MARK: - Synchronization
 
-    /// Force synchronization with iCloud
+    /// Force synchronization with iCloud (throttled to prevent excessive API calls)
     func synchronize() {
+        let now = Date().timeIntervalSince1970
+
+        // Thread-safe check and update of lastSyncTime
+        mergeLock.lock()
+        let timeSinceLastSync = now - lastSyncTime
+        guard timeSinceLastSync >= minSyncInterval else {
+            mergeLock.unlock()
+            #if DEBUG
+            print("☁️ Sync throttled - too soon since last sync")
+            #endif
+            return
+        }
+        lastSyncTime = now
+        mergeLock.unlock()
+
         userDefaults.synchronize()
         cloudStore.synchronize()
+    }
+
+    /// Force immediate synchronization, bypassing throttle (use sparingly)
+    func synchronizeImmediate() {
+        userDefaults.synchronize()
+        cloudStore.synchronize()
+
+        // Thread-safe update of lastSyncTime
+        mergeLock.lock()
+        lastSyncTime = Date().timeIntervalSince1970
+        mergeLock.unlock()
     }
 
     /// Check if iCloud is available

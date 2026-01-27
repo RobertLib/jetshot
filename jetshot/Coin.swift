@@ -27,6 +27,17 @@ class Coin: SKNode {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        // Stop all animations before deallocation
+        shape?.removeAllActions()
+        removeAllActions()
+
+        // Unregister from cache when coin is deallocated
+        if let scene = self.scene as? GameScene {
+            scene.unregisterCoin(self)
+        }
+    }
+
     private func setupVisuals() {
         // Main container for star shape
         shape = SKShapeNode()

@@ -491,25 +491,35 @@ class PowerUp: SKNode {
     }
 
     private func addAnimations() {
-        // Gentle rotation
+        // Gentle rotation with key for cleanup
         let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 3.0)
-        shape.run(SKAction.repeatForever(rotate))
+        shape.run(SKAction.repeatForever(rotate), withKey: "rotation")
 
-        // Pulsing size
+        // Pulsing size with key for cleanup
         let scaleUp = SKAction.scale(to: 1.1, duration: 0.8)
         let scaleDown = SKAction.scale(to: 0.9, duration: 0.8)
         let pulse = SKAction.sequence([scaleUp, scaleDown])
-        shape.run(SKAction.repeatForever(pulse))
+        shape.run(SKAction.repeatForever(pulse), withKey: "pulse")
 
-        // Slow downward movement
+        // Slow downward movement with cleanup before removal
         let moveDown = SKAction.moveTo(y: -50, duration: 8.0)
+        let cleanup = SKAction.run { [weak self] in
+            self?.shape?.removeAction(forKey: "rotation")
+            self?.shape?.removeAction(forKey: "pulse")
+            self?.removeAllActions()
+        }
         let remove = SKAction.removeFromParent()
-        run(SKAction.sequence([moveDown, remove]))
+        run(SKAction.sequence([moveDown, cleanup, remove]))
     }
 
     func collect() {
         // Immediately disable physics to prevent multiple collisions
         self.physicsBody = nil
+
+        // Stop all repeating animations
+        shape?.removeAction(forKey: "rotation")
+        shape?.removeAction(forKey: "pulse")
+        removeAllActions()
 
         // Collection animation
         let fadeOut = SKAction.fadeOut(withDuration: 0.2)

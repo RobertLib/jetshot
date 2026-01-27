@@ -49,7 +49,7 @@ class BossManager {
     private func scheduleNextAttack() {
         guard isAttacking, let boss = boss, boss.isAlive() else { return }
 
-        let delay = TimeInterval.random(in: 1.5...3.5)
+        let delay = TimeInterval.random(in: GameConfiguration.bossAttackDelayMin...GameConfiguration.bossAttackDelayMax)
 
         // Use SKAction instead of DispatchQueue to respect pause state
         let waitAction = SKAction.wait(forDuration: delay)
@@ -126,14 +126,16 @@ class BossManager {
 
     private func shootStraight(from position: CGPoint) {
         createBullet(at: position, angle: -.pi / 2)
-        SoundManager.shared.playEnemyShootSound(on: scene!)
+        guard let scene = scene else { return }
+        SoundManager.shared.playEnemyShootSound(on: scene)
     }
 
     private func shootDouble(from position: CGPoint) {
         let offset: CGFloat = 30
         createBullet(at: CGPoint(x: position.x - offset, y: position.y), angle: -.pi / 2)
         createBullet(at: CGPoint(x: position.x + offset, y: position.y), angle: -.pi / 2)
-        SoundManager.shared.playEnemyShootSound(on: scene!)
+        guard let scene = scene else { return }
+        SoundManager.shared.playEnemyShootSound(on: scene)
     }
 
     private func shootTriple(from position: CGPoint) {
@@ -141,7 +143,8 @@ class BossManager {
         createBullet(at: CGPoint(x: position.x - offset, y: position.y), angle: -.pi / 2)
         createBullet(at: position, angle: -.pi / 2)
         createBullet(at: CGPoint(x: position.x + offset, y: position.y), angle: -.pi / 2)
-        SoundManager.shared.playEnemyShootSound(on: scene!)
+        guard let scene = scene else { return }
+        SoundManager.shared.playEnemyShootSound(on: scene)
     }
 
     private func shootSpread(from position: CGPoint) {
@@ -149,7 +152,8 @@ class BossManager {
         for angle in angles {
             createBullet(at: position, angle: -.pi / 2 + angle)
         }
-        SoundManager.shared.playEnemyShootSound(on: scene!)
+        guard let scene = scene else { return }
+        SoundManager.shared.playEnemyShootSound(on: scene)
     }
 
     private func shootAimed(from position: CGPoint) {
@@ -164,7 +168,8 @@ class BossManager {
         let angle = atan2(dy, dx)
 
         createBullet(at: position, angle: angle, speed: 300)
-        SoundManager.shared.playEnemyShootSound(on: scene!)
+        guard let scene = scene else { return }
+        SoundManager.shared.playEnemyShootSound(on: scene)
     }
 
     private func shootSpiral(from position: CGPoint) {
@@ -232,8 +237,8 @@ class BossManager {
                 self.createBullet(at: position, angle: -.pi / 2)
                 self.createBullet(at: CGPoint(x: position.x + offset, y: position.y), angle: -.pi / 2)
                 // Play sound every other burst
-                if i % 2 == 0 {
-                    SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if i % 2 == 0, let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
                 }
             }
 
@@ -247,19 +252,20 @@ class BossManager {
     }
 
     private func shootHoming(from position: CGPoint) {
-        guard player != nil else {
+        guard let scene = scene, player != nil else {
             shootAimed(from: position)
             return
         }
 
         let bullet = createBullet(at: position, angle: -.pi / 2, speed: 150, isHoming: true)
-        SoundManager.shared.playPowerUpSound(on: scene!)  // Different sound for homing missiles
+        SoundManager.shared.playPowerUpSound(on: scene)  // Different sound for homing missiles
 
         // Add homing behavior
         let updateAction = SKAction.run { [weak self, weak bullet] in
             guard let self = self,
                   let bullet = bullet,
-                  let player = self.player else { return }
+                  let player = self.player,
+                  let bulletBody = bullet.physicsBody else { return }
 
             let playerPosition = player.position
             let bulletPosition = bullet.position
@@ -268,7 +274,7 @@ class BossManager {
             let targetAngle = atan2(dy, dx)
 
             // Smooth rotation towards player
-            let currentAngle = atan2(bullet.physicsBody!.velocity.dy, bullet.physicsBody!.velocity.dx)
+            let currentAngle = atan2(bulletBody.velocity.dy, bulletBody.velocity.dx)
             var angleDiff = targetAngle - currentAngle
 
             // Normalize angle difference
@@ -279,7 +285,7 @@ class BossManager {
             let newAngle = currentAngle + angleDiff * turnSpeed
 
             let speed: CGFloat = 150
-            bullet.physicsBody?.velocity = CGVector(
+            bulletBody.velocity = CGVector(
                 dx: cos(newAngle) * speed,
                 dy: sin(newAngle) * speed
             )
@@ -373,7 +379,9 @@ class BossManager {
                     self.createBullet(at: position, angle: -.pi / 2 + spreadAngle, speed: 200)
                 }
 
-                SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
+                }
                 HapticManager.shared.lightTap()
             }
 
@@ -414,8 +422,8 @@ class BossManager {
                     self.createBullet(at: bulletPosition, angle: -.pi / 2 + 0.12) // Slightly right
                 }
 
-                if i % 2 == 0 {
-                    SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if i % 2 == 0, let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
                 }
             }
 
@@ -446,8 +454,8 @@ class BossManager {
                 // Second spiral - sweeps from right to left
                 self.createBullet(at: position, angle: -.pi / 2 + currentSpread2, speed: 220)
 
-                if i % 4 == 0 {
-                    SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if i % 4 == 0, let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
                 }
             }
 
@@ -494,7 +502,9 @@ class BossManager {
                     self.createBullet(at: bulletPos, angle: baseAngle + randomSpread, speed: 260)
                 }
 
-                SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
+                }
                 HapticManager.shared.mediumTap()
             }
 
@@ -525,8 +535,8 @@ class BossManager {
                 self.createBullet(at: position, angle: baseAngle + sideAngle * 0.5, speed: 260)
                 self.createBullet(at: position, angle: baseAngle, speed: 260)
 
-                if group % 2 == 0 {
-                    SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if group % 2 == 0, let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
                 }
             }
 
@@ -562,8 +572,8 @@ class BossManager {
                     self.createBullet(at: position, angle: -.pi / 2 + centerSpread + spreadAngle, speed: 220)
                 }
 
-                if i % 3 == 0 {
-                    SoundManager.shared.playEnemyShootSound(on: self.scene!)
+                if i % 3 == 0, let scene = self.scene {
+                    SoundManager.shared.playEnemyShootSound(on: scene)
                 }
             }
 

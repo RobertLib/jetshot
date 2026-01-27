@@ -706,17 +706,33 @@ class Boss: SKShapeNode {
                 // Play multiple explosion sounds for the final big explosion
                 if let scene = self.scene as? GameScene {
                     SoundManager.shared.playExplosionSound(on: scene)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        SoundManager.shared.playExplosionSound(on: scene)
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        SoundManager.shared.playExplosionSound(on: scene)
-                    }
                 }
             }
 
+            // Additional explosion sounds using SKAction to respect pause state
+            let secondExplosion = SKAction.sequence([
+                SKAction.wait(forDuration: 0.1),
+                SKAction.run { [weak self] in
+                    if let scene = self?.scene as? GameScene {
+                        SoundManager.shared.playExplosionSound(on: scene)
+                    }
+                }
+            ])
+            let thirdExplosion = SKAction.sequence([
+                SKAction.wait(forDuration: 0.2),
+                SKAction.run { [weak self] in
+                    if let scene = self?.scene as? GameScene {
+                        SoundManager.shared.playExplosionSound(on: scene)
+                    }
+                }
+            ])
+
             explosionActions.append(finalWait)
             explosionActions.append(finalExplosion)
+
+            // Run additional sound effects in parallel
+            run(secondExplosion, withKey: "bossExplosionSound2")
+            run(thirdExplosion, withKey: "bossExplosionSound3")
 
             // Fade out and remove
             let fadeOut = SKAction.fadeOut(withDuration: 0.5)
@@ -733,7 +749,8 @@ class Boss: SKShapeNode {
 
         // Update health bar only if boss is still alive
         let healthPercent = CGFloat(currentHealth) / CGFloat(config.maxHealth)
-        let originalWidth = (scene!.size.width * 0.8) - 4
+        guard let scene = scene else { return false }
+        let originalWidth = (scene.size.width * 0.8) - 4
         let newSize = CGSize(width: originalWidth * healthPercent, height: 16)
 
         healthBarFill.path = CGPath(

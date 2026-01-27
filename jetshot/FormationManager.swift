@@ -318,6 +318,12 @@ class FormationManager {
             }
 
             parentNode.addChild(enemy)
+
+            // Register enemy in cache for optimized updates
+            if let gameScene = scene as? GameScene {
+                gameScene.registerEnemy(enemy)
+            }
+
             enemies.append(enemy)
 
             // Move to formation position with staggered delay and curved path
@@ -425,7 +431,8 @@ class Formation {
             }
 
             // Start attack after delay
-            if currentTime - formationStartTime! >= attackDelay {
+            guard let startTime = formationStartTime else { return }
+            if currentTime - startTime >= attackDelay {
                 initiateAttack()
                 hasAttacked = true
             }
@@ -472,7 +479,7 @@ class Formation {
     private func initiateStaggeredAttack(enemies: [Enemy]) {
         for (index, enemy) in enemies.enumerated() {
             let delay = TimeInterval(index) * 0.6  // Stagger all attacks
-            let attackPattern: AttackPattern = [.dive, .loop, .swoop].randomElement()!
+            let attackPattern: AttackPattern = [.dive, .loop, .swoop].randomElement() ?? .dive
 
             let waitAction = SKAction.wait(forDuration: delay)
             let attackAction = SKAction.run { [weak self, weak enemy] in
@@ -492,7 +499,7 @@ class Formation {
     private func initiateEliteGuardAttack(enemies: [Enemy]) {
         // All attack at the same time with coordinated patterns
         for enemy in enemies {
-            let attackPattern: AttackPattern = [.dive, .loop].randomElement()! // More coordinated patterns
+            let attackPattern: AttackPattern = [.dive, .loop].randomElement() ?? .dive // More coordinated patterns
 
             let waitAction = SKAction.wait(forDuration: 0.2) // Minimal delay for all
             let attackAction = SKAction.run { [weak self, weak enemy] in
@@ -600,7 +607,7 @@ class Formation {
         // Slow, deliberate attacks
         for (index, enemy) in enemies.enumerated() {
             let delay = TimeInterval(index) * 0.8  // Slower succession
-            let attackPattern: AttackPattern = [.dive, .swoop].randomElement()!
+            let attackPattern: AttackPattern = [.dive, .swoop].randomElement() ?? .dive
 
             let waitAction = SKAction.wait(forDuration: delay)
             let attackAction = SKAction.run { [weak self, weak enemy] in

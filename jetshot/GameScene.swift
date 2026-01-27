@@ -4,6 +4,11 @@
 //
 //  Created by Robert Libšanský on 16.10.2025.
 //
+// WARNING: This file is large (3700+ lines). Consider refactoring into:
+//  - CollisionHandler for physics collision logic
+//  - PowerUpHandler for power-up activation/deactivation
+//  - UIManager for UI setup and updates
+//  - WeaponSystem for shooting and weapon management
 
 import SpriteKit
 import GameplayKit
@@ -34,7 +39,8 @@ enum ExplosionSize {
 /// Manages player, enemies, obstacles, power-ups, bosses, and scoring system.
 class GameScene: SKScene, SKPhysicsContactDelegate {
 
-    // Level system
+    // MARK: - Level System
+
     var currentLevel: Int = 1
     private var levelConfig: LevelConfig!
 
@@ -66,10 +72,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     // Level completion tracking
     private var noEnemiesTime: TimeInterval?
-    private let levelCompletionDelay: TimeInterval = 2.0 // Complete level 2 seconds after last enemy disappears
+    private let levelCompletionDelay: TimeInterval = GameConfiguration.levelCompletionDelay
 
     // Lives system
-    private var lives: Int = 3 {
+    private var lives: Int = GameConfiguration.defaultLives {
         didSet {
             updateLivesDisplay(topMargin: currentTopMargin)
         }
@@ -77,23 +83,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var livesNodes: [SKShapeNode] = []
     private var currentTopMargin: CGFloat = 50
     private var isInvulnerable: Bool = false
-    private let invulnerabilityDuration: TimeInterval = 2.0
+    private let invulnerabilityDuration: TimeInterval = GameConfiguration.invulnerabilityDuration
 
     // Timers
     private var lastUpdateTime: TimeInterval = 0
     private var lastShootTime: TimeInterval = 0
     private var lastCleanupTime: TimeInterval = 0  // For bullet cleanup optimization
-    private let shootInterval: TimeInterval = 0.3
+    private let shootInterval: TimeInterval = GameConfiguration.defaultShootInterval
     private var currentShootInterval: TimeInterval {
-        return player?.hasRapidFire == true ? 0.1 : shootInterval
+        return player?.hasRapidFire == true ? GameConfiguration.rapidFireInterval : shootInterval
     }
 
     // Weapon overheat system
     private var weaponHeat: CGFloat = 0.0 // 0.0 to 1.0
-    private let maxHeat: CGFloat = 1.0
-    private let heatPerShot: CGFloat = 0.005 // Heat added per shot (~200 shots to overheat)
-    private let cooldownRate: CGFloat = 0.30 // Heat removed per second
-    private let overheatCooldownTime: TimeInterval = 3.0 // Cooldown time when overheated
+    private let maxHeat: CGFloat = GameConfiguration.maxHeat
+    private let heatPerShot: CGFloat = GameConfiguration.heatPerShot
+    private let cooldownRate: CGFloat = GameConfiguration.cooldownRate
+    private let overheatCooldownTime: TimeInterval = GameConfiguration.overheatCooldownTime
     private var isOverheated: Bool = false
     private var overheatStartTime: TimeInterval = 0
     private var heatBar: SKShapeNode?
@@ -109,22 +115,56 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // Performance optimization - cache active objects to avoid enumerateChildNodes every frame
     private var activeEnemies: [ObjectIdentifier: Enemy] = [:]
     private var activeCoins: [ObjectIdentifier: Coin] = [:]
+    private var activeVortexEnemies: [ObjectIdentifier: Enemy] = [:]
+    private var coinCacheRefreshCounter: Int = 0
     private var cachedEnemyCount: Int = 0
     private var lastSlowMotionUpdateTime: TimeInterval = 0
     private var lastMagnetUpdateTime: TimeInterval = 0
+    private var lastVortexUpdateTime: TimeInterval = 0
+
+    // MARK: - Cache Management
+
+    /// Register enemy in cache for optimized updates
+    func registerEnemy(_ enemy: Enemy) {
+        activeEnemies[ObjectIdentifier(enemy)] = enemy
+        // Also cache vortex enemies for gravitational pull optimization
+        if enemy.enemyType == .vortex {
+            activeVortexEnemies[ObjectIdentifier(enemy)] = enemy
+        }
+    }
+
+    /// Unregister enemy from cache
+    func unregisterEnemy(_ enemy: Enemy) {
+        let id = ObjectIdentifier(enemy)
+        activeEnemies.removeValue(forKey: id)
+        // Also remove from vortex cache if applicable
+        if enemy.enemyType == .vortex {
+            activeVortexEnemies.removeValue(forKey: id)
+        }
+    }
+
+    /// Register coin in cache for optimized magnet updates
+    func registerCoin(_ coin: Coin) {
+        activeCoins[ObjectIdentifier(coin)] = coin
+    }
+
+    /// Unregister coin from cache
+    func unregisterCoin(_ coin: Coin) {
+        activeCoins.removeValue(forKey: ObjectIdentifier(coin))
+    }
 
     // iPad optimization - reduce particle effects on larger screens
     private var isIPad: Bool {
         return UIDevice.current.userInterfaceIdiom == .pad
     }
     private var particleMultiplier: CGFloat {
-        return isIPad ? 0.6 : 1.0  // Reduce particles by 40% on iPad
+        return GameConfiguration.particleMultiplier(for: UIDevice.current.userInterfaceIdiom)
     }
 
     // Touch tracking
     private var isTouching = false
     private var touchLocation: CGPoint = .zero
-    private let shootDistanceThreshold: CGFloat = 50 // Distance within which shooting is allowed
+    private let shootDistanceThreshold: CGFloat = GameConfiguration.shootDistanceThreshold
 
     // Pause system
     var gameContentNode: SKNode! // Node that gets paused (public for managers)
@@ -133,13 +173,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var pauseOverlay: SKNode?
     private var isInitialized = false
 
-    // DEBUG: God mode for testing
-    private let isGodModeEnabled = false // Set to false for normal gameplay
-
     // Level intro
     private var isGameStarted: Bool = false
     private var isPlayerExiting: Bool = false
     private var safeAreaBottom: CGFloat = 0
+
+    // MARK: - Lifecycle Methods
 
     override func didMove(to view: SKView) {
         // Load level configuration immediately (lightweight) - must be first!
@@ -147,9 +186,28 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Validate level config
         guard levelConfig != nil else {
-            print("ERROR: Failed to load level configuration for level \(currentLevel)")
-            // Return to level select on error
-            DispatchQueue.main.async { [weak self] in
+            #if DEBUG
+            print("[ERROR] Failed to load level configuration for level \(currentLevel)")
+            assertionFailure("Level configuration missing for level \(currentLevel)")
+            #endif
+
+            // Show error message to user
+            let errorLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            errorLabel.text = "Level \(currentLevel) Error"
+            errorLabel.fontSize = 24
+            errorLabel.fontColor = UITheme.Colors.dangerRed
+            errorLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
+            addChild(errorLabel)
+
+            let detailLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
+            detailLabel.text = "Failed to load level data"
+            detailLabel.fontSize = 16
+            detailLabel.fontColor = UITheme.Colors.textSecondary
+            detailLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 20)
+            addChild(detailLabel)
+
+            // Return to level select after showing error
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 guard let self = self else { return }
                 let levelSelectScene = LevelSelectScene(size: self.size)
                 levelSelectScene.scaleMode = self.scaleMode
@@ -188,6 +246,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             object: nil
         )
 
+        // Register for memory warnings
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMemoryWarning),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+
         // Dark background for better glow contrast
         backgroundColor = UIColor(red: 0.03, green: 0.03, blue: 0.12, alpha: 1.0)
 
@@ -205,7 +271,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Defer heavy initialization to avoid FPS drop
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.view != nil else {
+                // Scene was deallocated or removed from view, abort initialization
+                return
+            }
 
             // Add starfield (particle effect) - to game content node
             self.gameContentNode.addChild(StarfieldHelper.createStarfield(for: self))
@@ -228,7 +297,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             self.setupAsteroidManager()
             self.setupBossManager()
 
+            // Verify scene is still valid after async operations
+            guard self.view != nil else { return }
+
             self.isInitialized = true
+
+            #if DEBUG
+            print("[INFO] GameScene initialized for level \(self.currentLevel)")
+            #endif
 
             // Pause the game and show level intro after everything is ready
             self.gameContentNode.isPaused = true
@@ -286,6 +362,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     override func willMove(from view: SKView) {
+        #if DEBUG
+        print("[INFO] GameScene willMove - cleaning up resources")
+        #endif
+
         // Clean up all resources before scene is removed
 
         // Remove notification observers
@@ -299,6 +379,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         removeAllActions()
         gameContentNode?.removeAllActions()
         uiNode?.removeAllActions()
+
+        // CRITICAL: Stop all repeatForever actions in child nodes before removing
+        gameContentNode?.enumerateChildNodes(withName: "//") { node, _ in
+            node.removeAllActions()
+        }
+        uiNode?.enumerateChildNodes(withName: "//") { node, _ in
+            node.removeAllActions()
+        }
 
         // Remove all children (this also removes their actions)
         gameContentNode?.removeAllChildren()
@@ -357,10 +445,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    @objc private func handleMemoryWarning() {
+        // Clear texture caches to free up memory
+        ParallaxBackgroundHelper.clearTextureCache()
+        Player.clearTextureCache()
+
+        // Clean up off-screen objects immediately
+        cleanupOffScreenBullets()
+
+        // Clear cached enemies and coins to force refresh
+        activeEnemies.removeAll()
+        activeCoins.removeAll()
+        activeVortexEnemies.removeAll()
+
+        #if DEBUG
+        print("⚠️ Memory warning received - cleared caches and cleaned up off-screen objects")
+        #endif
+    }
+
     deinit {
         NotificationCenter.default.removeObserver(self)
         PlanetHelper.stopPlanetGeneration()
     }
+
+    // MARK: - Setup Methods
 
     private func setupPlayer(view: SKView) {
         // Get safe area bottom inset
@@ -408,10 +516,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func setupCoinManager() {
         // Configure coin spawning - balanced frequency
         let coinConfig = CoinSpawnConfig(
-            spawnInterval: 5.0,        // Every 5 seconds
-            spawnProbability: 0.5,     // 50% chance
-            minCoins: 10,              // At least 10 coins per level
-            maxCoins: 18               // At most 18 coins per level
+            spawnInterval: GameConfiguration.coinSpawnInterval,
+            spawnProbability: GameConfiguration.coinSpawnProbability,
+            minCoins: GameConfiguration.minCoinsPerLevel,
+            maxCoins: GameConfiguration.maxCoinsPerLevel
         )
         coinManager = CoinManager(scene: self, config: coinConfig)
     }
@@ -652,8 +760,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             guard let self = self else { return }
             if self.currentLevel == 1 {
                 // Show countdown for level 1
-                self.showCountdown(in: introNode, background: background, completion: {
-                    self.startPlayerEntryAnimation(targetY: originalPlayerY)
+                self.showCountdown(in: introNode, background: background, completion: { [weak self] in
+                    self?.startPlayerEntryAnimation(targetY: originalPlayerY)
                 })
             } else {
                 // Start immediately for other levels
@@ -696,7 +804,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let numberDuration: TimeInterval = 1.0
 
         // Show 3
-        let show3 = SKAction.run {
+        let show3 = SKAction.run { [weak self] in
+            guard self != nil else { return }
             countdownLabel.text = "3"
             countdownLabel.alpha = 0
             countdownLabel.setScale(0.5)
@@ -709,7 +818,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let fadeOut3 = SKAction.fadeOut(withDuration: 0.1)
 
         // Show 2
-        let show2 = SKAction.run {
+        let show2 = SKAction.run { [weak self] in
+            guard self != nil else { return }
             countdownLabel.text = "2"
             countdownLabel.alpha = 0
             countdownLabel.setScale(0.5)
@@ -722,7 +832,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let fadeOut2 = SKAction.fadeOut(withDuration: 0.1)
 
         // Show 1
-        let show1 = SKAction.run {
+        let show1 = SKAction.run { [weak self] in
+            guard self != nil else { return }
             countdownLabel.text = "1"
             countdownLabel.alpha = 0
             countdownLabel.setScale(0.5)
@@ -735,7 +846,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let fadeOut1 = SKAction.fadeOut(withDuration: 0.1)
 
         // Show "GO!"
-        let showGo = SKAction.run {
+        let showGo = SKAction.run { [weak self] in
+            guard self != nil else { return }
             countdownLabel.text = "GO!"
             countdownLabel.alpha = 0
             countdownLabel.setScale(0.5)
@@ -769,13 +881,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         countdownActions.append(fadeOutGo)
 
         // Fade out background
-        let fadeBackground = SKAction.run {
+        let fadeBackground = SKAction.run { [weak self] in
+            guard self != nil else { return }
             let fade = SKAction.fadeOut(withDuration: 0.3)
             background.run(fade)
         }
 
         // Complete
-        let complete = SKAction.run {
+        let complete = SKAction.run { [weak self] in
+            guard self != nil else { return }
             parentNode.removeFromParent()
             completion()
         }
@@ -1093,6 +1207,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    // MARK: - Touch Handling
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         let location = touch.location(in: self)
@@ -1202,7 +1318,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         weaponHeat += heatPerShot
         if weaponHeat >= maxHeat {
             weaponHeat = maxHeat
-            triggerOverheat()
+            triggerOverheat(currentTime: lastUpdateTime)
             return
         }
 
@@ -1264,7 +1380,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         addChild(lightning)
 
         // Damage all enemies on screen
-        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
+        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
+            guard let self = self else { return }
             if let enemy = node as? Enemy {
                 // Instantly destroy enemy
                 enemy.health = 0
@@ -1321,7 +1438,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         camera?.run(shake)
     }
 
-    // Collision detection
+    // MARK: - Collision Detection
+
     func didBegin(_ contact: SKPhysicsContact) {
         let firstBody: SKPhysicsBody
         let secondBody: SKPhysicsBody
@@ -1649,57 +1767,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 HapticManager.shared.mediumTap()
             }
 
-            // Play hit sound
-            SoundManager.shared.playHitSound(on: self)
-
-            // Check if player has any powerups
-            if player.hasAnyPowerUps() {
-                // Player has powerups - degrade them but don't lose life
-                player.degradePowerUps()
-            } else {
-                // No powerups - lose a life (unless god mode is enabled)
-                if !isGodModeEnabled {
-                    lives -= 1
-                }
-
-                // Check for game over
-                if lives <= 0 {
-                    playerDestroyed()
-                    return
-                }
-            }
-
-            // Cancel powerup timers only for powerups that were removed
-            if !player.hasShield {
-                removeAction(forKey: "shieldDeactivation")
-            }
-            if !player.hasLightningWeapon {
-                removeAction(forKey: "lightningDeactivation")
-            }
-            if !player.hasRapidFire {
-                removeAction(forKey: "rapidFireDeactivation")
-            }
-            if !player.hasMagnet {
-                removeAction(forKey: "magnetDeactivation")
-            }
-            if !player.hasSlowMotion {
-                removeAction(forKey: "slowMotionDeactivation")
-                // Reset speeds only if slow motion was removed
-                resetEntitySpeeds()
-            }
-            if !player.hasScoreMultiplier {
-                removeAction(forKey: "scoreMultiplierDeactivation")
-                // Reset score multiplier only if it was removed
-                scoreMultiplier = 1
-            }
-            if !player.hasBarrier {
-                removeAction(forKey: "barrierDeactivation")
-            }
-
-            // Play hit animation and activate invulnerability
-            player.playHitAnimation()
-            activateInvulnerability()
-
+            handlePlayerDamage()
             return
         }
 
@@ -1712,29 +1780,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         enemy.markAsDestroyed()
         enemy.removeFromParent()
 
-        // Play hit sound
-        SoundManager.shared.playHitSound(on: self)
-
-        // Check if player has any powerups
-        if player.hasAnyPowerUps() {
-            // Player has powerups - degrade them but don't lose life
-            player.degradePowerUps()
-        } else {
-            // No powerups - lose a life (unless god mode is enabled)
-            if !isGodModeEnabled {
-                lives -= 1
-            }
-
-            // Check for game over
-            if lives <= 0 {
-                playerDestroyed()
-                return
-            }
-        }
-
-        // Play hit animation and activate invulnerability
-        player.playHitAnimation()
-        activateInvulnerability()
+        handlePlayerDamage()
     }
 
     private func playerDidCollideWithEnemyBullet(bullet: SKShapeNode?) {
@@ -1756,26 +1802,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createExplosion(at: bullet.position, size: .small)
         bullet.removeFromParent()
 
-        // Play hit sound
-        SoundManager.shared.playHitSound(on: self)
+        handlePlayerDamage()
+    }
 
-        // Check if player has any powerups
-        if player.hasAnyPowerUps() {
-            // Player has powerups - degrade them but don't lose life
-            player.degradePowerUps()
-        } else {
-            // No powerups - lose a life (unless god mode is enabled)
-            if !isGodModeEnabled {
-                lives -= 1
-            }
-
-            // Check for game over
-            if lives <= 0 {
-                playerDestroyed()
-                return
-            }
-        }
-
+    private func cancelRemovedPowerUpTimers() {
         // Cancel powerup timers only for powerups that were removed
         if !player.hasShield {
             removeAction(forKey: "shieldDeactivation")
@@ -1799,6 +1829,26 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         if !player.hasBarrier {
             removeAction(forKey: "barrierDeactivation")
+        }
+    }
+
+    // Central helper method for handling player damage
+    private func handlePlayerDamage() {
+        SoundManager.shared.playHitSound(on: self)
+
+        if player.hasAnyPowerUps() {
+            // Player has powerups - degrade them but don't lose life
+            player.degradePowerUps()
+            cancelRemovedPowerUpTimers()
+        } else {
+            // No powerups - lose a life
+            lives -= 1
+
+            // Check for game over
+            if lives <= 0 {
+                playerDestroyed()
+                return
+            }
         }
 
         // Play hit animation and activate invulnerability
@@ -1823,54 +1873,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createExplosion(at: player.position, size: .huge)
         HapticManager.shared.heavyTap()
 
-        // Play hit sound
-        SoundManager.shared.playHitSound(on: self)
-
-        // Check if player has any powerups
-        if player.hasAnyPowerUps() {
-            // Player has powerups - degrade them but don't lose life
-            player.degradePowerUps()
-        } else {
-            // No powerups - lose a life (unless god mode is enabled)
-            if !isGodModeEnabled {
-                lives -= 1
-            }
-
-            // Check for game over
-            if lives <= 0 {
-                playerDestroyed()
-                return
-            }
-        }
-
-        // Cancel powerup timers only for powerups that were removed
-        if !player.hasShield {
-            removeAction(forKey: "shieldDeactivation")
-        }
-        if !player.hasLightningWeapon {
-            removeAction(forKey: "lightningDeactivation")
-        }
-        if !player.hasRapidFire {
-            removeAction(forKey: "rapidFireDeactivation")
-        }
-        if !player.hasMagnet {
-            removeAction(forKey: "magnetDeactivation")
-        }
-        if !player.hasSlowMotion {
-            removeAction(forKey: "slowMotionDeactivation")
-            resetEntitySpeeds()
-        }
-        if !player.hasScoreMultiplier {
-            removeAction(forKey: "scoreMultiplierDeactivation")
-            scoreMultiplier = 1
-        }
-        if !player.hasBarrier {
-            removeAction(forKey: "barrierDeactivation")
-        }
-
-        // Play hit animation and activate invulnerability
-        player.playHitAnimation()
-        activateInvulnerability()
+        handlePlayerDamage()
     }
 
     private func bulletDidCollideWithObstacle(bullet: SKShapeNode?) {
@@ -1958,6 +1961,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    // MARK: - PowerUp System
+
     private func playerDidCollideWithPowerUp(powerUp: PowerUp?) {
         guard let powerUp = powerUp else { return }
 
@@ -1976,7 +1981,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Apply powerup effect based on type
         switch powerUp.powerUpType {
         case .extraLife:
-            if lives < 4 {
+            if lives < GameConfiguration.maxLives {
                 lives += 1
                 SoundManager.shared.playExtraLifeSound(on: self)
                 HapticManager.shared.heavyTap()
@@ -1984,7 +1989,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
 
         case .multiShot:
-            if player.bulletCount < 8 {
+            if player.bulletCount < GameConfiguration.maxBulletCount {
                 player.bulletCount += 1
                 SoundManager.shared.playMultiShotActivateSound(on: self)
                 HapticManager.shared.lightTap()
@@ -2163,76 +2168,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         asteroid.markAsDestroyed()
         asteroid.removeFromParent()
 
-        // Play hit sound
-        SoundManager.shared.playHitSound(on: self)
-
-        // Check if player has any powerups
-        if player.hasAnyPowerUps() {
-            // Player has powerups - degrade them but don't lose life
-            player.degradePowerUps()
-        } else {
-            // No powerups - lose a life (unless god mode is enabled)
-            if !isGodModeEnabled {
-                lives -= 1
-            }
-
-            // Check for game over
-            if lives <= 0 {
-                playerDestroyed()
-                return
-            }
-        }
-
-        // Cancel powerup timers only for powerups that were removed
-        if !player.hasShield {
-            removeAction(forKey: "shieldDeactivation")
-        }
-        if !player.hasLightningWeapon {
-            removeAction(forKey: "lightningDeactivation")
-        }
-        if !player.hasRapidFire {
-            removeAction(forKey: "rapidFireDeactivation")
-        }
-        if !player.hasMagnet {
-            removeAction(forKey: "magnetDeactivation")
-        }
-        if !player.hasSlowMotion {
-            removeAction(forKey: "slowMotionDeactivation")
-            resetEntitySpeeds()
-        }
-        if !player.hasScoreMultiplier {
-            removeAction(forKey: "scoreMultiplierDeactivation")
-            scoreMultiplier = 1
-        }
-        if !player.hasBarrier {
-            removeAction(forKey: "barrierDeactivation")
-        }
-
-        // Play hit animation and activate invulnerability
-        removeAction(forKey: "barrierDeactivation")
-
-        // Reset score multiplier
-        scoreMultiplier = 1
-
-        // Reset speeds for all entities
-        resetEntitySpeeds()
-
-        // Play hit animation and activate invulnerability
-        player.playHitAnimation()
-        activateInvulnerability()
+        handlePlayerDamage()
     }
 
     private func activateShield() {
         player.hasShield = true
 
+        let duration = GameConfiguration.shieldDuration
         // Show timer
-        showPowerUpTimer(name: "shield", duration: 5.0, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), icon: "SHIELD")
+        showPowerUpTimer(name: "shield", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), icon: "SHIELD")
 
         // Cancel any previous shield deactivation
         removeAction(forKey: "shieldDeactivation")
 
         // Deactivate shield after duration using SKAction (respects pause)
-        let wait = SKAction.wait(forDuration: 5.0)
+        let wait = SKAction.wait(forDuration: duration)
         let deactivate = SKAction.run { [weak self] in
             guard let self = self else { return }
             if self.player.hasShield {
@@ -2247,14 +2197,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func activateLightningWeapon() {
         player.hasLightningWeapon = true
 
+        let duration = GameConfiguration.lightningDuration
         // Show timer
-        showPowerUpTimer(name: "lightning", duration: 7.0, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), icon: "LIGHTNING")
+        showPowerUpTimer(name: "lightning", duration: duration, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), icon: "LIGHTNING")
 
         // Cancel any previous lightning weapon deactivation
         removeAction(forKey: "lightningDeactivation")
 
         // Deactivate lightning weapon after duration (7 seconds) using SKAction (respects pause)
-        let wait = SKAction.wait(forDuration: 7.0)
+        let wait = SKAction.wait(forDuration: duration)
         let deactivate = SKAction.run { [weak self] in
             guard let self = self else { return }
             if self.player.hasLightningWeapon {
@@ -2267,14 +2218,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func activateRapidFire() {
         player.hasRapidFire = true
 
+        let duration = GameConfiguration.rapidFireDuration
         // Show timer
-        showPowerUpTimer(name: "rapidFire", duration: 8.0, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), icon: "RAPID FIRE")
+        showPowerUpTimer(name: "rapidFire", duration: duration, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), icon: "RAPID FIRE")
 
         // Cancel any previous rapid fire deactivation
         removeAction(forKey: "rapidFireDeactivation")
 
         // Deactivate after 8 seconds
-        let wait = SKAction.wait(forDuration: 8.0)
+        let wait = SKAction.wait(forDuration: duration)
         let deactivate = SKAction.run { [weak self] in
             self?.player.hasRapidFire = false
         }
@@ -2284,14 +2236,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func activateMagnet() {
         player.hasMagnet = true
 
+        let duration = GameConfiguration.magnetDuration
         // Show timer
-        showPowerUpTimer(name: "magnet", duration: 10.0, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), icon: "MAGNET")
+        showPowerUpTimer(name: "magnet", duration: duration, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), icon: "MAGNET")
 
         // Cancel any previous magnet deactivation
         removeAction(forKey: "magnetDeactivation")
 
         // Deactivate after 10 seconds
-        let wait = SKAction.wait(forDuration: 10.0)
+        let wait = SKAction.wait(forDuration: duration)
         let deactivate = SKAction.run { [weak self] in
             self?.player.hasMagnet = false
             self?.activeCoins.removeAll()  // Clear cache when magnet deactivates
@@ -2302,14 +2255,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func activateSlowMotion() {
         player.hasSlowMotion = true
 
+        let duration = GameConfiguration.slowMotionDuration
         // Show timer
-        showPowerUpTimer(name: "slowMotion", duration: 6.0, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), icon: "SLOW MO")
+        showPowerUpTimer(name: "slowMotion", duration: duration, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), icon: "SLOW MO")
 
         // Cancel any previous slow motion deactivation
         removeAction(forKey: "slowMotionDeactivation")
 
         // Deactivate after 6 seconds
-        let wait = SKAction.wait(forDuration: 6.0)
+        let wait = SKAction.wait(forDuration: duration)
         let deactivate = SKAction.run { [weak self] in
             guard let self = self else { return }
             self.player.hasSlowMotion = false
@@ -2335,9 +2289,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func activateFreezeBomb() {
         // Freeze all enemies for 2.5 seconds, then they explode
-        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
+        let duration = GameConfiguration.freezeBombDuration
+        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
+            guard self != nil else { return }
             if let enemy = node as? Enemy {
-                enemy.freeze(duration: 2.5)
+                enemy.freeze(duration: duration)
             }
         }
 
@@ -2354,12 +2310,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func launchHomingMissiles() {
-        let missileCount = 6 // Always launch 6 missiles
+        let missileCount = GameConfiguration.homingMissileCount
         var targets: [Any] = []
 
         // Find up to 6 closest enemies
         var enemies: [Enemy] = []
-        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
+        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
+            guard self != nil else { return }
             if let enemy = node as? Enemy {
                 enemies.append(enemy)
             }
@@ -2388,7 +2345,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // If still no targets, just launch missiles that will seek any enemy
         if targets.isEmpty {
             for i in 0..<missileCount {
-                let delay = SKAction.wait(forDuration: Double(i) * 0.15)
+                let delay = SKAction.wait(forDuration: Double(i) * GameConfiguration.homingMissileLaunchDelay)
                 let launch = SKAction.run { [weak self] in
                     self?.createSeekingMissile()
                 }
@@ -2399,7 +2356,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Launch a homing missile for each target
         for (index, target) in targets.enumerated() {
-            let delay = SKAction.wait(forDuration: Double(index) * 0.15)
+            let delay = SKAction.wait(forDuration: Double(index) * GameConfiguration.homingMissileLaunchDelay)
             let launch = SKAction.run { [weak self] in
                 if let enemy = target as? Enemy {
                     self?.createHomingMissile(target: enemy)
@@ -2424,7 +2381,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Add glow
         GlowHelper.addEnhancedGlow(to: missile, color: UIColor(red: 1.0, green: 0.3, blue: 0.6, alpha: 1.0), intensity: 1.2)
 
-        // Physics body
+        // Physics body - uses bullet category to trigger standard collision handling
+        // This allows homing missiles to interact with enemies using existing bullet/enemy collision logic
         missile.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 8, height: 20))
         missile.physicsBody?.isDynamic = true
         missile.physicsBody?.categoryBitMask = PhysicsCategory.bullet
@@ -2469,6 +2427,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Add glow
         GlowHelper.addEnhancedGlow(to: missile, color: UIColor(red: 1.0, green: 0.3, blue: 0.6, alpha: 1.0), intensity: 1.2)
+
+        // Physics body - uses bullet category to work with boss collision detection
+        // Boss nodes check for bullet contacts, so homing missiles need bullet category
 
         // Physics body - use bullet category so it triggers boss collision
         missile.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 8, height: 20))
@@ -2541,7 +2502,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             var closestDistance: CGFloat = .infinity
 
             // Check enemies
-            self.gameContentNode.enumerateChildNodes(withName: "enemy") { enemyNode, _ in
+            self.gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] enemyNode, _ in
+                guard self != nil else { return }
                 if let enemy = enemyNode as? Enemy {
                     let distance = hypot(enemy.position.x - missile.position.x,
                                        enemy.position.y - missile.position.y)
@@ -2589,14 +2551,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         scoreMultiplier = 2
         player.hasScoreMultiplier = true
 
+        let duration = GameConfiguration.scoreMultiplierDuration
         // Show timer
-        showPowerUpTimer(name: "scoreMultiplier", duration: 12.0, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), icon: "SCORE x2")
+        showPowerUpTimer(name: "scoreMultiplier", duration: duration, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), icon: "SCORE x2")
 
         // Cancel any previous multiplier deactivation
         removeAction(forKey: "scoreMultiplierDeactivation")
 
-        // Deactivate after 12 seconds
-        let wait = SKAction.wait(forDuration: 12.0)
+        // Deactivate after duration
+        let wait = SKAction.wait(forDuration: duration)
         let deactivate = SKAction.run { [weak self] in
             self?.scoreMultiplier = 1
             self?.player.hasScoreMultiplier = false
@@ -2607,8 +2570,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func activateBarrier() {
         player.hasBarrier = true
 
+        let duration = GameConfiguration.barrierDuration
         // Show timer
-        showPowerUpTimer(name: "barrier", duration: 8.0, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), icon: "BARRIER")
+        showPowerUpTimer(name: "barrier", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), icon: "BARRIER")
 
         // Cancel any previous barrier deactivation
         removeAction(forKey: "barrierDeactivation")
@@ -2619,6 +2583,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             guard let self = self else { return }
 
             // Setup physics for barrier segments
+            // Barrier blocks both enemies and enemy bullets
             self.player.enumerateChildNodes(withName: "barrierSegment") { node, _ in
                 if node.physicsBody == nil {
                     node.physicsBody = SKPhysicsBody(circleOfRadius: 8)
@@ -2642,7 +2607,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func activateNuke() {
         // Destroy all enemies except bosses
         var enemiesToDestroy: [Enemy] = []
-        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
+        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
+            guard self != nil else { return }
             if let enemy = node as? Enemy {
                 enemiesToDestroy.append(enemy)
             }
@@ -2847,9 +2813,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private var deltaTime: TimeInterval = 0
 
+    /// Attracts coins towards player when magnet powerup is active
+    /// Uses cached coin dictionary for optimal performance
     private func attractCoins() {
-        let magnetRadius: CGFloat = 200
-        // Refresh cached coins periodically instead of every frame
+        let magnetRadius = GameConfiguration.magnetRadius
+
+        // Note: Coins are automatically registered in cache when spawned
+        // Only refresh if cache is empty (e.g., after scene restart)
         if activeCoins.isEmpty {
             gameContentNode.enumerateChildNodes(withName: "coin") { [weak self] node, _ in
                 if let coin = node as? Coin {
@@ -2861,7 +2831,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Remove destroyed coins from cache and update positions
         var toRemove: [ObjectIdentifier] = []
         for (id, coin) in activeCoins {
-            guard coin.parent != nil else {
+            // Validate coin still exists in scene hierarchy
+            guard coin.parent != nil, coin.scene != nil else {
                 toRemove.append(id)
                 continue
             }
@@ -2872,7 +2843,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             if distance < magnetRadius && distance > 0 {
                 // Move coin towards player
-                let speed: CGFloat = 300
+                let speed = GameConfiguration.magnetSpeed
                 let moveX = (dx / distance) * speed * CGFloat(self.deltaTime)
                 let moveY = (dy / distance) * speed * CGFloat(self.deltaTime)
                 coin.position.x += moveX
@@ -2886,23 +2857,32 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    /// Applies gravitational pull from vortex enemies to player bullets
+    /// Vortex enemies can absorb or deflect bullets based on proximity
     private func applyVortexGravitationalPull() {
-        // Find all active vortex enemies
-        var vortexEnemies: [Enemy] = []
-        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
-            if let enemy = node as? Enemy, enemy.enemyType == .vortex {
-                vortexEnemies.append(enemy)
+        // Use cached vortex enemies for better performance
+        // Clean up destroyed vortex enemies from cache
+        var toRemove: [ObjectIdentifier] = []
+        for (id, vortex) in activeVortexEnemies {
+            if vortex.parent == nil {
+                toRemove.append(id)
             }
+        }
+        for id in toRemove {
+            activeVortexEnemies.removeValue(forKey: id)
         }
 
         // If no vortex enemies, nothing to do
-        guard !vortexEnemies.isEmpty else { return }
+        guard !activeVortexEnemies.isEmpty else { return }
 
-        let vortexGravityRadius: CGFloat = 150 // Radius of gravitational influence
-        let pullStrength: CGFloat = 5.0 // Strength of the pull
+        let vortexEnemies = Array(activeVortexEnemies.values)
+
+        let vortexGravityRadius = GameConfiguration.vortexGravityRadius
+        let pullStrength = GameConfiguration.vortexPullStrength
 
         // Apply gravitational pull to all player bullets
-        gameContentNode.enumerateChildNodes(withName: "bullet") { node, _ in
+        gameContentNode.enumerateChildNodes(withName: "bullet") { [weak self] node, _ in
+            guard self != nil else { return }
             guard let bullet = node as? SKShapeNode,
                   let bulletBody = bullet.physicsBody else { return }
 
@@ -2933,31 +2913,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let slowFactor: CGFloat = 0.5
 
-        // Slow down enemies - use cached dictionary when possible
-        if activeEnemies.isEmpty {
-            gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
-                if let enemy = node as? Enemy {
-                    self?.activeEnemies[ObjectIdentifier(enemy)] = enemy
-                    if enemy.speed != slowFactor {
-                        enemy.speed = slowFactor
-                    }
-                }
+        // Slow down enemies - use cached dictionary only for performance
+        var toRemove: [ObjectIdentifier] = []
+        for (id, enemy) in activeEnemies {
+            // Validate enemy still exists in scene hierarchy
+            guard enemy.parent != nil, enemy.scene != nil else {
+                toRemove.append(id)
+                continue
             }
-        } else {
-            var toRemove: [ObjectIdentifier] = []
-            for (id, enemy) in activeEnemies {
-                guard enemy.parent != nil else {
-                    toRemove.append(id)
-                    continue
-                }
-                if enemy.speed != slowFactor {
-                    enemy.speed = slowFactor
-                }
+            if enemy.speed != slowFactor {
+                enemy.speed = slowFactor
             }
-            // Clean up destroyed enemies
-            for id in toRemove {
-                activeEnemies.removeValue(forKey: id)
-            }
+        }
+        // Clean up destroyed enemies
+        for id in toRemove {
+            activeEnemies.removeValue(forKey: id)
         }
 
         // Slow down asteroids
@@ -3003,14 +2973,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let transition = SKTransition.fade(withDuration: transitionDuration)
         view?.presentScene(newScene, transition: transition)
 
-        // Clean up after transition completes using SKAction
-        // Note: This still runs even after scene change, but that's intentional for cleanup
+        // Clean up after transition completes using SKAction with weak self
         let wait = SKAction.wait(forDuration: transitionDuration + 0.1)
         let cleanup = SKAction.run { [weak self] in
             guard let self = self else { return }
             self.removeAllChildren()
         }
-        run(SKAction.sequence([wait, cleanup]))
+        run(SKAction.sequence([wait, cleanup]), withKey: "transitionCleanup")
     }
 
     private func playerDestroyed() {
@@ -3161,16 +3130,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         SoundManager.shared.playExplosionSound(on: self)
 
         // Camera shake based on explosion size (reduced on iPad)
-        let shakeMultiplier: CGFloat = isIPad ? 0.7 : 1.0
+        let shakeMultiplier: CGFloat = isIPad ? GameConfiguration.iPadShakeMultiplier : 1.0
         switch size {
         case .small:
-            shakeCamera(intensity: 3.0 * shakeMultiplier, duration: 0.15)
+            shakeCamera(intensity: GameConfiguration.shakeIntensitySmall * shakeMultiplier, duration: 0.15)
         case .normal:
-            shakeCamera(intensity: 6.0 * shakeMultiplier, duration: 0.25)
+            shakeCamera(intensity: GameConfiguration.shakeIntensityNormal * shakeMultiplier, duration: 0.25)
         case .large:
-            shakeCamera(intensity: 10.0 * shakeMultiplier, duration: 0.35)
+            shakeCamera(intensity: GameConfiguration.shakeIntensityLarge * shakeMultiplier, duration: 0.35)
         case .huge:
-            shakeCamera(intensity: 15.0 * shakeMultiplier, duration: 0.45)
+            shakeCamera(intensity: GameConfiguration.shakeIntensityHuge * shakeMultiplier, duration: 0.45)
         }
 
         // Enhanced multi-layered explosion effect
@@ -3257,6 +3226,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ]))
     }
 
+    // MARK: - Game Update Loop
+
     override func update(_ currentTime: TimeInterval) {
         // Check if player is exiting and off screen (must be before pause/start checks)
         if isPlayerExiting && player.position.y > size.height + 50 {
@@ -3329,6 +3300,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         lastUpdateTime = currentTime
     }
 
+    /// Removes bullets that are off-screen to prevent memory buildup
+    /// Note: This is a performance-critical method called periodically, not every frame
     private func cleanupOffScreenBullets() {
         // Remove enemy bullets that are off-screen to prevent memory buildup
         // Check both above and below screen, plus some margin on sides
@@ -3338,7 +3311,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let minX = -margin
         let maxX = size.width + margin
 
-        gameContentNode.enumerateChildNodes(withName: "enemybullet") { node, _ in
+        gameContentNode.enumerateChildNodes(withName: "enemyBullet") { [weak self] node, _ in
+            guard self != nil else { return }
             let pos = node.position
             if pos.y < minY || pos.y > maxY || pos.x < minX || pos.x > maxX {
                 node.removeFromParent()
@@ -3346,7 +3320,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         // Also clean up player bullets that are off-screen
-        gameContentNode.enumerateChildNodes(withName: "bullet") { node, _ in
+        gameContentNode.enumerateChildNodes(withName: "bullet") { [weak self] node, _ in
+            guard self != nil else { return }
             let pos = node.position
             if pos.y > maxY || pos.x < minX || pos.x > maxX {
                 node.removeFromParent()
@@ -3354,6 +3329,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    /// Checks if level is complete by counting remaining enemies
+    /// Uses cached enemy count to avoid expensive enumeration every frame
+    /// Note: Performance-critical - called every frame
     private func checkLevelCompletion(currentTime: TimeInterval) {
         // If boss is active, don't check for level completion
         // (level completes when boss is defeated)
@@ -3395,7 +3373,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 noEnemiesTime = currentTime
             } else {
                 // Check if enough time has passed
-                let timeWithoutEnemies = currentTime - noEnemiesTime!
+                guard let noEnemiesTime = noEnemiesTime else { return }
+                let timeWithoutEnemies = currentTime - noEnemiesTime
                 if timeWithoutEnemies >= levelCompletionDelay {
                     // Spawn boss instead of completing level
                     spawnBoss()
@@ -3408,7 +3387,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func spawnBoss() {
-        guard !bossSpawned else { return }
+        guard !bossSpawned else {
+            #if DEBUG
+            print("[WARNING] Attempted to spawn boss but boss already spawned")
+            #endif
+            return
+        }
 
         bossSpawned = true
         isBossActive = true
@@ -3598,9 +3582,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
         bullet.fillColor = .red
 
-        // Reverse velocity
-        if let velocity = bullet.physicsBody?.velocity {
+        // Reverse velocity - if no velocity, apply default reflected velocity
+        if let velocity = bullet.physicsBody?.velocity, (velocity.dx != 0 || velocity.dy != 0) {
             bullet.physicsBody?.velocity = CGVector(dx: -velocity.dx, dy: -velocity.dy * 1.2)
+        } else {
+            // Fallback: shoot downward at player if velocity is zero
+            bullet.physicsBody?.velocity = CGVector(dx: 0, dy: -300)
         }
 
         // Flash effect on mirror
@@ -3700,11 +3687,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         uiNode.addChild(background)
         heatBarBackground = background
 
-        // Heat bar (foreground)
-        let heat = SKShapeNode(rectOf: CGSize(width: 0, height: barHeight - 2), cornerRadius: 3)
+        // Heat bar (foreground) - using full width, will scale down
+        let heat = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight - 2), cornerRadius: 3)
         heat.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.8, alpha: 0.9)
         heat.strokeColor = .clear
-        heat.position = CGPoint(x: size.width / 2 - barWidth / 2, y: bottomMargin)
+        heat.position = CGPoint(x: size.width / 2, y: bottomMargin)
+        heat.xScale = 0.0  // Start with zero width
         heat.zPosition = 101
         uiNode.addChild(heat)
         heatBar = heat
@@ -3729,34 +3717,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         background.alpha = shouldShow ? 1.0 : 0.0
         label.alpha = shouldShow ? 1.0 : 0.0
 
-        let barWidth: CGFloat = 120
-        let currentWidth = barWidth * weaponHeat
-
-        // Update bar width
-        let newBar = SKShapeNode(rectOf: CGSize(width: currentWidth, height: 6), cornerRadius: 3)
+        // Update bar width using xScale (much more efficient than recreating)
+        heatBar.xScale = weaponHeat
 
         // Color changes based on heat level
         if weaponHeat < 0.5 {
             // Green to yellow
             let green = 1.0 - (weaponHeat * 2)
-            newBar.fillColor = UIColor(red: weaponHeat * 2, green: green, blue: 0.0, alpha: 0.9)
+            heatBar.fillColor = UIColor(red: weaponHeat * 2, green: green, blue: 0.0, alpha: 0.9)
         } else if weaponHeat < 0.8 {
             // Yellow to orange
             let progress = (weaponHeat - 0.5) / 0.3
-            newBar.fillColor = UIColor(red: 1.0, green: 1.0 - (progress * 0.5), blue: 0.0, alpha: 0.9)
+            heatBar.fillColor = UIColor(red: 1.0, green: 1.0 - (progress * 0.5), blue: 0.0, alpha: 0.9)
         } else {
             // Orange to red
             let progress = (weaponHeat - 0.8) / 0.2
-            newBar.fillColor = UIColor(red: 1.0, green: 0.5 - (progress * 0.5), blue: 0.0, alpha: 0.9)
+            heatBar.fillColor = UIColor(red: 1.0, green: 0.5 - (progress * 0.5), blue: 0.0, alpha: 0.9)
         }
-
-        newBar.strokeColor = .clear
-        newBar.position = CGPoint(x: size.width / 2 - barWidth / 2 + currentWidth / 2, y: background.position.y)
-        newBar.zPosition = 101
-
-        heatBar.removeFromParent()
-        uiNode.addChild(newBar)
-        self.heatBar = newBar
 
         // Pulse effect when near overheating
         if weaponHeat > 0.85 && !isOverheated {
@@ -3779,9 +3756,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 // Visual feedback - flash green
                 if let background = heatBarBackground {
                     let flash = SKAction.sequence([
-                        SKAction.run { background.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.0, alpha: 0.8) },
+                        SKAction.run { [weak self] in
+                            guard self != nil else { return }
+                            background.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.0, alpha: 0.8)
+                        },
                         SKAction.wait(forDuration: 0.2),
-                        SKAction.run { background.fillColor = UIColor(white: 0.2, alpha: 0.6) }
+                        SKAction.run { [weak self] in
+                            guard self != nil else { return }
+                            background.fillColor = UIColor(white: 0.2, alpha: 0.6)
+                        }
                     ])
                     background.run(flash)
                 }
@@ -3801,28 +3784,31 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
-    private func triggerOverheat() {
+    private func triggerOverheat(currentTime: TimeInterval) {
         isOverheated = true
-        overheatStartTime = lastUpdateTime
+        overheatStartTime = currentTime
 
         // Visual feedback
         if let background = heatBarBackground, let label = heatBarLabel {
             // Flash red
             let flash = SKAction.sequence([
-                SKAction.run {
+                SKAction.run { [weak self] in
+                    guard self != nil else { return }
                     background.fillColor = UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 0.9)
                     label.text = "OVERHEATED!"
                     label.fontColor = UIColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
                 },
                 SKAction.wait(forDuration: 0.3),
-                SKAction.run {
+                SKAction.run { [weak self] in
+                    guard self != nil else { return }
                     background.fillColor = UIColor(white: 0.2, alpha: 0.6)
                 },
                 SKAction.wait(forDuration: 0.3)
             ])
 
             let flashSequence = SKAction.repeat(flash, count: 3)
-            let reset = SKAction.run {
+            let reset = SKAction.run { [weak self] in
+                guard self != nil else { return }
                 label.text = "HEAT"
                 label.fontColor = UIColor(white: 0.8, alpha: 0.9)
             }

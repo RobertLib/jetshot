@@ -19,7 +19,7 @@ enum CoinFormation {
 
     static func random() -> CoinFormation {
         let formations: [CoinFormation] = [.line, .vShape, .circle, .wave, .diagonal, .cross, .arrow, .zigzag]
-        return formations.randomElement()!
+        return formations.randomElement() ?? .line
     }
 }
 
@@ -82,15 +82,22 @@ class CoinManager {
 
         // Get GameScene to access gameContentNode
         let parentNode: SKNode
-        if let gameScene = scene as? GameScene {
-            parentNode = gameScene.gameContentNode
+        let gameScene: GameScene?
+        if let gs = scene as? GameScene {
+            parentNode = gs.gameContentNode
+            gameScene = gs
         } else {
             parentNode = scene
+            gameScene = nil
         }
 
         for position in positions {
             let coin = Coin(position: position)
             parentNode.addChild(coin)
+
+            // Register coin in cache for optimized magnet updates
+            gameScene?.registerCoin(coin)
+
             totalCoinsSpawned += 1
         }
     }

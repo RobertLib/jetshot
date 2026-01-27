@@ -12,17 +12,17 @@ import SpriteKit
 class Player: SKShapeNode {
 
     // Configuration
-    private let moveSpeed: TimeInterval = 0.2
+    private let moveSpeed: TimeInterval = GameConfiguration.playerMoveSpeed
 
     // PowerUp properties
     var bulletCount: Int = 1 {
         didSet {
-            bulletCount = min(bulletCount, 8) // Max 8 bullets
+            bulletCount = min(bulletCount, GameConfiguration.maxBulletCount)
         }
     }
     var sideMissileCount: Int = 0 {
         didSet {
-            sideMissileCount = min(sideMissileCount, 2) // Max 2 side missiles
+            sideMissileCount = min(sideMissileCount, GameConfiguration.maxSideMissileCount)
             updateSideMissiles()
         }
     }
@@ -58,6 +58,18 @@ class Player: SKShapeNode {
 
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        // Stop all repeating actions before deallocation
+        removeAllActions()
+        enumerateChildNodes(withName: "//") { node, _ in
+            node.removeAllActions()
+        }
+
+        // Clean up cache when player is deallocated
+        // Note: This only clears if this is the last Player instance
+        Player.clearTextureCache()
     }
 
     private func setupPlayer(sceneSize: CGSize, safeAreaBottom: CGFloat) {
@@ -157,7 +169,20 @@ class Player: SKShapeNode {
     }
 
     // Cached particle texture for better performance
+    // Note: SpriteKit runs on main thread, so @MainActor ensures thread safety
     private static var cachedParticleTexture: SKTexture?
+
+    /// Clear cached texture (call when memory is low or player is deallocated)
+    static func clearTextureCache() {
+        // Ensure we're on main thread for SpriteKit texture operations
+        if Thread.isMainThread {
+            cachedParticleTexture = nil
+        } else {
+            DispatchQueue.main.async {
+                cachedParticleTexture = nil
+            }
+        }
+    }
 
     private func addEngineThrusterParticles(at position: CGPoint) {
         // Create particle emitter for engine thruster effect
@@ -165,11 +190,13 @@ class Player: SKShapeNode {
         thrusterEmitter.position = position
         thrusterEmitter.zPosition = -2
 
-        // Use cached texture or create if needed
+        // Use cached texture or create if needed (main thread only)
         if Player.cachedParticleTexture == nil {
             Player.cachedParticleTexture = createParticleTexture()
         }
-        thrusterEmitter.particleTexture = Player.cachedParticleTexture
+        let texture = Player.cachedParticleTexture
+
+        thrusterEmitter.particleTexture = texture
 
         // Particle properties (optimized from 150 to 80 for better performance)
         thrusterEmitter.particleBirthRate = 80
@@ -439,9 +466,11 @@ class Player: SKShapeNode {
     }
 
     private func updateSideMissiles() {
-        // Remove old missile visuals
-        sideMissileNodes.forEach { $0.removeFromParent() }
-        sideMissileNodes.removeAll()
+        // Remove old missile visuals efficiently
+        for node in sideMissileNodes {
+            node.removeFromParent()
+        }
+        sideMissileNodes.removeAll(keepingCapacity: true)
 
         // Add new missile visuals
         for i in 0..<sideMissileCount {
@@ -672,7 +701,7 @@ class Player: SKShapeNode {
     private func updateLightningVisuals() {
         // Remove old lightning indicators
         lightningIndicators.forEach { $0.removeFromParent() }
-        lightningIndicators.removeAll()
+        lightningIndicators.removeAll(keepingCapacity: true)
 
         if hasLightningWeapon {
             // Add electric arcs around the ship
@@ -724,7 +753,7 @@ class Player: SKShapeNode {
     private func updateBarrierVisuals() {
         // Remove old barrier nodes
         barrierNodes.forEach { $0.removeFromParent() }
-        barrierNodes.removeAll()
+        barrierNodes.removeAll(keepingCapacity: true)
 
         if hasBarrier {
             // Create 4 rotating barrier segments

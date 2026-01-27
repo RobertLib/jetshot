@@ -247,7 +247,7 @@ class Enemy: SKShapeNode {
 
     // Shooting properties (optimized to use SKAction instead of Timer)
     private let shootInterval: TimeInterval
-    var gameScene: GameScene?
+    weak var gameScene: GameScene?
     private var movementDuration: TimeInterval = 4.0 // Will be set in startMovement
     let enemyType: EnemyType
     private var sceneSize: CGSize
@@ -333,8 +333,24 @@ class Enemy: SKShapeNode {
     // Mark enemy as destroyed (prevents completion callback from firing)
     func markAsDestroyed() {
         hasCompletedMovement = true
+
+        // Remove all named repeating actions
+        removeAction(forKey: "vortexRotation")
+        removeAction(forKey: "vortexPulse")
+        removeAction(forKey: "mirrorShimmer")
+        removeAction(forKey: "mirrorWobble")
+        removeAction(forKey: "ghostPhase")
+        removeAction(forKey: "shieldRotation")
+        removeAction(forKey: "bouncerMovement")
+        removeAction(forKey: "teleporterBlink")
+
         removeAllActions()
         pauseShooting()
+
+        // Unregister from GameScene cache
+        if let gameScene = gameScene {
+            gameScene.unregisterEnemy(self)
+        }
 
         // Stop turret specific actions
         if enemyType == .turret || enemyType == .turretSpiral {

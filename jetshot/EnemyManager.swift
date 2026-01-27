@@ -133,14 +133,20 @@ class EnemyManager {
 
         // Get GameScene to access gameContentNode
         let parentNode: SKNode
-        if let gameScene = scene as? GameScene {
-            parentNode = gameScene.gameContentNode
+        let gameScene: GameScene?
+        if let gs = scene as? GameScene {
+            parentNode = gs.gameContentNode
+            gameScene = gs
         } else {
             parentNode = scene
+            gameScene = nil
         }
 
         let enemy = Enemy(sceneSize: scene.size, scene: scene, type: type)
         parentNode.addChild(enemy)
+
+        // Register enemy in cache for optimized updates
+        gameScene?.registerEnemy(enemy)
 
         // Start enemy movement
         enemy.startMovement {
