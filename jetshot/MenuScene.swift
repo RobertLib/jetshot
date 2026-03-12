@@ -68,7 +68,7 @@ class MenuScene: SKScene {
 
         // Subtitle
         let subtitleLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        subtitleLabel.text = "Journey Beyond"
+        subtitleLabel.text = "Space Shooter"
         subtitleLabel.fontSize = UITheme.Typography.sizeRegular
         subtitleLabel.fontColor = UITheme.Colors.textPrimary
         subtitleLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)

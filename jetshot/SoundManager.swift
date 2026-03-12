@@ -120,6 +120,38 @@ class SoundManager: NSObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.preloadSounds()
         }
+        // Handle audio session interruptions (alarms, phone calls, etc.)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    @objc private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        switch type {
+        case .began:
+            musicPlayer?.pause()
+        case .ended:
+            let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            guard options.contains(.shouldResume) else { return }
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                #if DEBUG
+                print("❌ Could not reactivate audio session after interruption: \(error)")
+                #endif
+            }
+            resumeMusic()
+        @unknown default:
+            break
+        }
     }
 
     // Helper function to create sound action
@@ -620,6 +652,10 @@ class SoundManager: NSObject {
     private func playNextTrack() {
         currentMusicTrack = (currentMusicTrack + 1) % musicTracks.count
         playMusicTrack(index: currentMusicTrack)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }
 

@@ -281,10 +281,13 @@ class Player: SKShapeNode {
         // Clamp X position to screen bounds
         let targetX = max(10, min(sceneWidth - 10, x))
 
+        // Offset so the player appears above the thumb
+        let touchYOffset: CGFloat = 50
+
         // Allow limited upward movement - player can move up to 50% of screen height
         let minY = safeAreaBottom + 15  // Minimum Y (starting position)
         let maxY = minY + (sceneHeight * 0.5)  // Can move up by 50% of screen height
-        let targetY = max(minY, min(maxY, y))
+        let targetY = max(minY, min(maxY, y + touchYOffset))
 
         let moveAction = SKAction.move(to: CGPoint(x: targetX, y: targetY), duration: moveSpeed)
         run(moveAction)
@@ -294,10 +297,13 @@ class Player: SKShapeNode {
         // Clamp X position to screen bounds
         let targetX = max(10, min(sceneWidth - 10, x))
 
+        // Offset so the player appears above the thumb
+        let touchYOffset: CGFloat = 50
+
         // Allow limited upward movement - player can move up to 50% of screen height
         let minY = safeAreaBottom + 15  // Minimum Y (starting position)
         let maxY = minY + (sceneHeight * 0.5)  // Can move up by 50% of screen height
-        let targetY = max(minY, min(maxY, y))
+        let targetY = max(minY, min(maxY, y + touchYOffset))
 
         // Direct position update for smooth dragging
         position.x = targetX
