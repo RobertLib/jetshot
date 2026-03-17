@@ -1272,6 +1272,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isTouching = true
         touchLocation = location
 
+        spawnTouchRipple(at: location)
+
         // Move player to touch location with animation
         player.moveTo(x: location.x, y: location.y, sceneWidth: size.width, sceneHeight: size.height, safeAreaBottom: safeAreaBottom)
     }
@@ -1286,6 +1288,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isTouching = true
         touchLocation = location
 
+        spawnTouchRipple(at: location)
+
         // Move player instantly to follow touch smoothly
         player.moveToInstant(x: location.x, y: location.y, sceneWidth: size.width, sceneHeight: size.height, safeAreaBottom: safeAreaBottom)
     }
@@ -1294,6 +1298,29 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Don't handle game touches when paused or game hasn't started
         if gameContentNode.isPaused || !isGameStarted { return }
         isTouching = false
+    }
+
+    private var lastRippleTime: TimeInterval = 0
+
+    private func spawnTouchRipple(at position: CGPoint) {
+        let now = lastUpdateTime
+        // Throttle to avoid spawning too many rings during drag
+        guard now - lastRippleTime > 0.08 else { return }
+        lastRippleTime = now
+
+        let ring = SKShapeNode(circleOfRadius: 10)
+        ring.position = position
+        ring.strokeColor = UIColor(white: 1.0, alpha: 0.45)
+        ring.fillColor = UIColor(white: 1.0, alpha: 0.05)
+        ring.lineWidth = 1.2
+        ring.zPosition = 1000
+        addChild(ring)
+
+        let expand = SKAction.scale(to: 2.5, duration: 0.35)
+        let fade   = SKAction.fadeOut(withDuration: 0.35)
+        let group  = SKAction.group([expand, fade])
+        let remove = SKAction.removeFromParent()
+        ring.run(SKAction.sequence([group, remove]))
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
