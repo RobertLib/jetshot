@@ -28,12 +28,26 @@ class LevelSelectScene: SKScene {
     private var touchStartTime: TimeInterval = 0
     private var hasMoved = false
 
+    /// Number of pages the grid spans. Derived rather than restated: the same ceiling
+    /// division was written out at four separate call sites.
+    private var totalPages: Int {
+        return max(1, (levelManager.totalLevels + levelsPerPage - 1) / levelsPerPage)
+    }
+
     // Initialize with optional level to navigate to
     init(size: CGSize, startLevel: Int? = nil) {
         super.init(size: size)
-        // Calculate page based on start level if provided
+        // Calculate page based on start level if provided.
+        //
+        // Clamped, because an unclamped page is a crash rather than a blank grid:
+        // `loadPage` iterates `startLevel...endLevel`, and a page past the end of the
+        // grid makes `startLevel` exceed `endLevel` (which is capped at `totalLevels`),
+        // which traps on the invalid range. `LevelSelectScene(startLevel: 61)` was enough
+        // to do it. Every caller passes a level it read back from stored progress, and
+        // `LevelManager` already defends that same "saved level outruns totalLevels" case
+        // in `getLevelConfig(for:)` and `getLevelWeapons(level:)`.
         if let level = startLevel, level > 0 {
-            currentPage = (level - 1) / levelsPerPage
+            currentPage = min((level - 1) / levelsPerPage, totalPages - 1)
         }
     }
 
@@ -44,48 +58,55 @@ class LevelSelectScene: SKScene {
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
 
-        // Get safe area insets
-        if let windowScene = view.window?.windowScene {
-            safeAreaTop = windowScene.windows.first?.safeAreaInsets.top ?? 0
-            safeAreaBottom = windowScene.windows.first?.safeAreaInsets.bottom ?? 0
-        }
-
-        addChild(StarfieldHelper.createStarfield(for: self))
-        addChild(StarfieldHelper.createShootingStars(for: self))
-        addChild(StarfieldHelper.createMeteors(for: self))
-        setupTitle(view: view)
-        setupPageContainer()
-        setupNavigationArrows()
-        setupPageIndicator(view: view)
-        setupBackButton(view: view)
-        loadPage(currentPage)
+        readSafeArea(from: view)
+        buildScene(view: view)
         isInitialized = true
+
+        // `safeAreaInsets` is still zero during didMove(to:), so re-lay the scene
+        // once the view has been through a layout pass. Without this the title
+        // ends up tucked under the Dynamic Island.
+        DispatchQueue.main.async { [weak self, weak view] in
+            guard let self = self, let view = view, self.view != nil else { return }
+            let previousTop = self.safeAreaTop
+            let previousBottom = self.safeAreaBottom
+            self.readSafeArea(from: view)
+            if self.safeAreaTop != previousTop || self.safeAreaBottom != previousBottom {
+                self.removeAllChildren()
+                self.buildScene(view: view)
+            }
+        }
 
         // Start background music
         SoundManager.shared.startBackgroundMusic()
     }
 
-    override func didChangeSize(_ oldSize: CGSize) {
-        guard isInitialized, let view = view else { return }
+    private func readSafeArea(from view: SKView) {
+        safeAreaTop = GameConfiguration.safeAreaTop(in: view)
+        safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)
+    }
 
-        // Update safe area insets
-        if let windowScene = view.window?.windowScene {
-            safeAreaTop = windowScene.windows.first?.safeAreaInsets.top ?? 0
-            safeAreaBottom = windowScene.windows.first?.safeAreaInsets.bottom ?? 0
-        }
-
-        // Remove and recreate all elements
-        removeAllChildren()
-
+    private func buildScene(view: SKView) {
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
+        NeonFX.attachGrade(to: self, zPosition: 5)
         setupTitle(view: view)
         setupPageContainer()
         setupNavigationArrows()
         setupPageIndicator(view: view)
         setupBackButton(view: view)
         loadPage(currentPage)
+    }
+
+    override func didChangeSize(_ oldSize: CGSize) {
+        guard isInitialized, let view = view else { return }
+
+        readSafeArea(from: view)
+
+        // Remove and recreate all elements
+        removeAllChildren()
+        buildScene(view: view)
     }
 
     override func willMove(from view: SKView) {
@@ -98,20 +119,24 @@ class LevelSelectScene: SKScene {
         let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
         title.text = "SELECT LEVEL"
         title.fontSize = UITheme.Typography.sizeLarge
-        title.fontColor = UITheme.Colors.primaryGold
+        title.fontColor = UITheme.Colors.primaryGoldLight
+        title.zPosition = 10
 
         // Position below safe area with minimum margin for all devices
         let topMargin = max(safeAreaTop + 60, 70)
         title.position = CGPoint(x: size.width / 2, y: size.height - topMargin)
         addChild(title)
 
-        // Pulsing glow effect
-        title.run(UITheme.createGlowPulseAnimation())
+        // Breathe the halo rather than the glyphs: fading the title itself down
+        // to 0.3 alpha (the old behaviour) just made the heading look broken.
+        NeonFX.addTextBloom(to: title, color: UITheme.Colors.primaryGold, blur: 11, intensity: 0.95)
+        title.childNode(withName: "textBloom")?.run(UITheme.createGlowPulseAnimation(fromAlpha: 0.45, toAlpha: 1.0))
     }
 
     private func setupPageContainer() {
         pageContainer = SKNode()
         pageContainer.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
+        pageContainer.zPosition = 10
         addChild(pageContainer)
     }
 
@@ -123,6 +148,7 @@ class LevelSelectScene: SKScene {
         if let arrow = leftArrow {
             arrow.position = CGPoint(x: arrowMargin, y: size.height / 2 + 20)
             arrow.name = "leftArrow"
+            arrow.zPosition = 10
             addChild(arrow)
         }
 
@@ -131,6 +157,7 @@ class LevelSelectScene: SKScene {
         if let arrow = rightArrow {
             arrow.position = CGPoint(x: size.width - arrowMargin, y: size.height / 2 + 20)
             arrow.name = "rightArrow"
+            arrow.zPosition = 10
             addChild(arrow)
         }
 
@@ -154,8 +181,8 @@ class LevelSelectScene: SKScene {
         }
 
         let arrow = SKShapeNode(path: path)
-        arrow.strokeColor = UITheme.Colors.textPrimary
-        arrow.lineWidth = UITheme.Dimensions.lineWidthExtraThick
+        arrow.strokeColor = UITheme.Colors.primaryCyanLight
+        arrow.lineWidth = UITheme.Dimensions.lineWidthMedium
         arrow.lineCap = .round
         arrow.lineJoin = .round
 
@@ -165,23 +192,22 @@ class LevelSelectScene: SKScene {
     private func setupPageIndicator(view: SKView) {
         pageIndicator = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
         pageIndicator.fontSize = UITheme.Typography.sizeTiny
-        pageIndicator.fontColor = UITheme.Colors.textPrimary
+        pageIndicator.fontColor = UITheme.Colors.textSecondary
 
         // Position above safe area (home indicator) with minimum margin for all devices
         let bottomMargin = max(safeAreaBottom + 110, 120)
         pageIndicator.position = CGPoint(x: size.width / 2, y: bottomMargin)
+        pageIndicator.zPosition = 10
         addChild(pageIndicator)
         updatePageIndicator()
     }
 
     private func updateArrowsVisibility() {
-        let totalPages = (levelManager.totalLevels + levelsPerPage - 1) / levelsPerPage
         leftArrow?.alpha = currentPage > 0 ? UITheme.Animations.alphaFull : UITheme.Animations.alphaInactive
         rightArrow?.alpha = currentPage < totalPages - 1 ? UITheme.Animations.alphaFull : UITheme.Animations.alphaInactive
     }
 
     private func updatePageIndicator() {
-        let totalPages = (levelManager.totalLevels + levelsPerPage - 1) / levelsPerPage
         pageIndicator.text = "Page \(currentPage + 1) / \(totalPages)"
     }
 
@@ -192,6 +218,12 @@ class LevelSelectScene: SKScene {
 
         let startLevel = page * levelsPerPage + 1
         let endLevel = min(startLevel + levelsPerPage - 1, levelManager.totalLevels)
+
+        // Second line of defence for the range `for level in startLevel...endLevel`
+        // below, which traps rather than yielding nothing when the bounds cross. The
+        // page is clamped at both entry points (`init` and `changePage`), so reaching
+        // here means one of them grew a new path.
+        guard startLevel <= endLevel else { return }
 
         let buttonSize = UITheme.Dimensions.levelButtonSize
         let spacing = UITheme.Dimensions.levelButtonSpacing
@@ -236,6 +268,7 @@ class LevelSelectScene: SKScene {
     private func createLevelButton(level: Int, size: CGFloat) -> SKNode {
         let container = SKNode()
         container.name = "levelButton_\(level)"
+        container.zPosition = 10
 
         let isUnlocked = levelManager.isLevelUnlocked(level)
         let isCompleted = levelManager.isLevelCompleted(level)
@@ -244,8 +277,19 @@ class LevelSelectScene: SKScene {
         let button = createHexagonButton(size: size)
 
         if !isUnlocked {
-            button.fillColor = UITheme.Colors.levelLocked
-            button.strokeColor = UITheme.Colors.levelLockedBorder
+            // Hollow and cold, so locked levels read as "not yet" rather than as
+            // a broken tile. The number stays legible as a progress teaser.
+            button.fillColor = UITheme.Colors.levelLocked.withAlphaComponent(0.35)
+            button.strokeColor = UITheme.Colors.levelLockedBorder.withAlphaComponent(0.55)
+
+            let padlock = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            padlock.text = "🔒"
+            padlock.fontSize = 13
+            padlock.verticalAlignmentMode = .center
+            padlock.position = CGPoint(x: 0, y: -size * 0.34)
+            padlock.alpha = 0.5
+            padlock.zPosition = 3
+            container.addChild(padlock)
         } else if isCompleted {
             button.fillColor = UITheme.Colors.levelCompleted
             button.strokeColor = UITheme.Colors.levelCompletedBorder
@@ -351,10 +395,6 @@ class LevelSelectScene: SKScene {
         return SKShapeNode(path: path)
     }
 
-    private func createSmallStar() -> SKShapeNode {
-        return createEnhancedStar(radius: 5)
-    }
-
     private func setupBackButton(view: SKView) {
         let buttonWidth: CGFloat = 140
         let buttonSpacing: CGFloat = 10
@@ -374,6 +414,7 @@ class LevelSelectScene: SKScene {
             y: bottomMargin
         )
         backButton.alpha = 0
+        backButton.zPosition = 10
         addChild(backButton)
 
         // Reset button
@@ -388,6 +429,7 @@ class LevelSelectScene: SKScene {
             y: bottomMargin
         )
         resetButton.alpha = 0
+        resetButton.zPosition = 10
         addChild(resetButton)
 
         // Fade in both buttons
@@ -433,12 +475,14 @@ class LevelSelectScene: SKScene {
         let maxSwipeDuration: TimeInterval = 0.5
         let maxVerticalDeviation: CGFloat = 100
 
-        // Check if this is a horizontal swipe
-        if abs(deltaX) > minSwipeDistance &&
+        // Check if this is a horizontal swipe.
+        //
+        // Suppressed while the reset confirmation is up: it is modal, and a swipe across
+        // it used to page the grid behind it just as a tap on the arrow zones did.
+        if !isConfirmingReset &&
+           abs(deltaX) > minSwipeDistance &&
            abs(deltaY) < maxVerticalDeviation &&
            duration < maxSwipeDuration {
-
-            let totalPages = (levelManager.totalLevels + levelsPerPage - 1) / levelsPerPage
 
             // Swipe left (move to next page)
             if deltaX < 0 && currentPage < totalPages - 1 {
@@ -473,7 +517,25 @@ class LevelSelectScene: SKScene {
         hasMoved = false
     }
 
+    /// Whether the reset confirmation is on screen. While it is, it owns every touch.
+    private var isConfirmingReset: Bool {
+        return childNode(withName: "confirmationDialog") != nil
+    }
+
     private func handleTap(at location: CGPoint) {
+        // The confirmation dialog is modal, so it answers first and nothing behind it
+        // can be reached.
+        //
+        // This branch has to come before the arrow hit-testing below, which is circular
+        // and measured in scene space rather than against any node. The arrows sit at
+        // y = height/2 + 20 with a 50pt radius, and the dialog is 320x205 centred — so
+        // the two hot zones overlap the dialog's left and right edges, and a tap on the
+        // panel used to page the grid *behind* the dialog.
+        if isConfirmingReset {
+            handleConfirmationTap(at: location)
+            return
+        }
+
         // Check arrow touch areas first (with larger touch radius)
         let arrowTouchRadius: CGFloat = 50
 
@@ -490,7 +552,6 @@ class LevelSelectScene: SKScene {
         if let rightArrowPos = rightArrow?.position {
             let distance = hypot(location.x - rightArrowPos.x, location.y - rightArrowPos.y)
             if distance < arrowTouchRadius {
-                let totalPages = (levelManager.totalLevels + levelsPerPage - 1) / levelsPerPage
                 if currentPage < totalPages - 1 {
                     HapticManager.shared.selection()
                     SoundManager.shared.playMenuSelectSound(on: self)
@@ -500,88 +561,53 @@ class LevelSelectScene: SKScene {
             }
         }
 
+        // The hit node itself, or its parent when the tap landed on a button's label.
+        // The confirmYes/confirmNo cases that used to be duplicated here (twice over,
+        // once per level) now live in handleConfirmationTap, which is the only path
+        // reachable while the dialog is up.
         let touchedNode = atPoint(location)
+        guard let nodeName = touchedNode.name ?? touchedNode.parent?.name else { return }
 
-        if let nodeName = touchedNode.name {
-            // Back button (check both button and label)
-            if nodeName == "backButton" || nodeName == "backButtonLabel" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleBackButton()
-                return
-            }
-
-            // Reset button (check both button and label)
-            if nodeName == "resetButton" || nodeName == "resetButtonLabel" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleResetButton()
-                return
-            }
-
-            // Level button tapped
-            if nodeName.hasPrefix("levelButton_") {
-                if let levelString = nodeName.split(separator: "_").last,
-                   let level = Int(levelString) {
-                    handleLevelTap(level: level)
-                }
-            }
-
-            // Confirmation dialog buttons
-            if nodeName == "confirmYes" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                confirmReset()
-                return
-            }
-
-            if nodeName == "confirmNo" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                dismissConfirmationDialog()
-                return
-            }
+        if nodeName == "backButton" || nodeName == "backButtonLabel" {
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
+            handleBackButton()
+            return
         }
 
-        // Check if touched on a parent button
-        if let parent = touchedNode.parent,
-           let parentName = parent.name {
-            // Check parent for back button
-            if parentName == "backButton" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleBackButton()
-                return
-            }
+        if nodeName == "resetButton" || nodeName == "resetButtonLabel" {
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
+            handleResetButton()
+            return
+        }
 
-            // Check parent for reset button
-            if parentName == "resetButton" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleResetButton()
-                return
-            }
+        if nodeName.hasPrefix("levelButton_"),
+           let levelString = nodeName.split(separator: "_").last,
+           let level = Int(levelString) {
+            handleLevelTap(level: level)
+        }
+    }
 
-            // Check parent for level button
-            if parentName.hasPrefix("levelButton_") {
-                if let levelString = parentName.split(separator: "_").last,
-                   let level = Int(levelString) {
-                    handleLevelTap(level: level)
-                }
-            }
+    /// Touch handling while the reset confirmation is up: YES, NO, or nothing at all.
+    private func handleConfirmationTap(at location: CGPoint) {
+        let touched = atPoint(location)
+        let name = touched.name ?? touched.parent?.name
 
-            // Check parent for confirmation dialog buttons
-            if parentName == "confirmYes" {
-                HapticManager.shared.lightTap()
-                confirmReset()
-                return
-            }
-
-            if parentName == "confirmNo" {
-                HapticManager.shared.lightTap()
-                dismissConfirmationDialog()
-                return
-            }
+        switch name {
+        case "confirmYes":
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
+            confirmReset()
+        case "confirmNo":
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
+            dismissConfirmationDialog()
+        default:
+            // Swallowed. A destructive confirmation should not be dismissible by a
+            // stray tap on the scrim, so unlike the settings panel there is no
+            // tap-outside-to-close here.
+            break
         }
     }
 
@@ -801,8 +827,9 @@ class LevelSelectScene: SKScene {
     private func startLevel(_ level: Int) {
         guard let view = view else { return }
 
-        // Show opening story for level 1
-        if level == 1 {
+        // Show the opening story for level 1, but only the first time — see
+        // LevelManager.hasSeenOpeningStory.
+        if level == 1 && !LevelManager.shared.hasSeenOpeningStory {
             let storyScene = StoryScene(size: view.bounds.size, type: .opening, targetLevel: level)
             storyScene.scaleMode = scaleMode
             let transition = SKTransition.fade(withDuration: 0.5)

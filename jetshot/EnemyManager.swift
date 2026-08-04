@@ -104,7 +104,7 @@ class EnemyManager {
             let pattern = currentWave.formationPattern ?? .vShape
             formationManager?.spawnFormation(
                 pattern: pattern,
-                count: currentWave.enemies.count,
+                types: currentWave.enemies,
                 attackDelay: 2.0,
                 onEnemyComplete: {
                     // Enemy left the screen - no action needed

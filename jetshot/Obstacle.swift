@@ -509,9 +509,45 @@ class Obstacle: SKNode {
 
         addChild(bodyNode)
 
-        // Add enhanced glow effect (skip for destructible wall as blocks have their own glow)
+        // Shared industrial finish, so every obstacle type reads as lit hardware
+        // instead of a flat silhouette.
         if type != .destructibleWall {
-            GlowHelper.addEnhancedGlow(to: bodyNode, color: type.color, intensity: 0.7)
+            applyIndustrialFinish()
+            GlowHelper.addEnhancedGlow(to: bodyNode, color: type.color, intensity: 0.55)
+        }
+    }
+
+    /// Lit metal, hazard markings and an edge highlight.
+    private func applyIndustrialFinish() {
+        let size = type.size
+
+        // Only shade shapes that are actually filled; wireframe types (the ring)
+        // would just get muddied by a fill texture.
+        if bodyNode.fillColor.cgColor.alpha > 0.05 {
+            SurfaceFX.applyMetal(to: bodyNode, tint: type.color)
+        }
+        SurfaceFX.addEdgeHighlight(to: bodyNode)
+
+        // Plain slab-shaped hazards get caution stripes and a running light;
+        // the shaped types (spinner, blades, hexagons) already read as dangerous.
+        switch type {
+        case .wall, .movingWall, .horizontalWall, .zigzagWall:
+            let stripes = SurfaceFX.hazardStripes(size: size, cornerRadius: 6)
+            stripes.alpha = 0.65
+            bodyNode.addChild(stripes)
+
+            let isVertical = size.height >= size.width
+            let lightSize = isVertical
+                ? CGSize(width: max(2.5, size.width * 0.22), height: size.height * 0.34)
+                : CGSize(width: size.width * 0.34, height: max(2.5, size.height * 0.22))
+            // Amber regardless of hull colour: a beacon should read as a warning,
+            // and a pale hull stroke just looked like another highlight.
+            bodyNode.addChild(SurfaceFX.warningLight(
+                size: lightSize,
+                color: UIColor(red: 1.0, green: 0.55, blue: 0.12, alpha: 1.0)
+            ))
+        default:
+            break
         }
     }
 
@@ -747,8 +783,10 @@ class Obstacle: SKNode {
             blocks.remove(at: index)
         }
 
-        // Check if all blocks are destroyed
-        if blocks.allSatisfy({ $0.parent == nil }) {
+        // Check if all blocks are destroyed. Destroyed blocks are removed from the
+        // array above, so this is simply "nothing left" — the previous
+        // allSatisfy { $0.parent == nil } was only ever vacuously true.
+        if blocks.isEmpty {
             // Remove the entire obstacle after a short delay
             let wait = SKAction.wait(forDuration: 0.5)
             let removeObstacle = SKAction.removeFromParent()

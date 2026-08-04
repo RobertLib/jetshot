@@ -38,20 +38,21 @@ class LevelManager {
     }
 
     // Mark level as completed with score and weapon arsenal
+    //
+    // Each of the four writes below is a read-modify-write, and each one goes through
+    // `CloudStorageManager.mutate` so it is serialised against the iCloud merge. Doing
+    // the read and the write as separate steps (load..., then save...) let the merge
+    // interleave and overwrite a freshly finished level with its own stale union.
     func completeLevel(_ level: Int, score: Int, stars: Int = 3, bulletCount: Int = 1, sideMissileCount: Int = 0) {
-        var completedLevels = getCompletedLevels()
-        if !completedLevels.contains(level) {
-            completedLevels.append(level)
-            cloudStorage.saveArray(completedLevels, forKey: completedLevelsKey)
+        cloudStorage.mutate(array: completedLevelsKey) { current in
+            var levels = current as? [Int] ?? []
+            guard !levels.contains(level) else { return current }
+            levels.append(level)
+            return levels.sorted()
         }
 
-        // Save score for this level (always update to allow improving score)
         saveLevelScore(level: level, score: score)
-
-        // Save stars for this level (only update if better)
         saveLevelStars(level: level, stars: stars)
-
-        // Save weapon arsenal for this level (only update if better)
         saveLevelWeapons(level: level, bulletCount: bulletCount, sideMissileCount: sideMissileCount)
     }
 
@@ -60,14 +61,18 @@ class LevelManager {
         return cloudStorage.loadArray(forKey: completedLevelsKey) as? [Int] ?? []
     }
 
-    // Save score for a specific level
+    // Save score for a specific level (keeps the personal best)
     private func saveLevelScore(level: Int, score: Int) {
-        var levelScores = getLevelScores()
-
-        // Update or add score for this level
-        levelScores["\(level)"] = score
-
-        cloudStorage.saveDictionary(levelScores, forKey: levelScoresKey)
+        cloudStorage.mutate(dictionary: levelScoresKey) { current in
+            var scores = current as? [String: Int] ?? [:]
+            // Only record an improvement. Overwriting unconditionally meant replaying a
+            // level with a worse run lowered the stored score and shrank
+            // getTotalScore(), and it disagreed with the iCloud merge — which keeps
+            // max() — so the value flip-flopped between devices on every sync.
+            guard score > (scores["\(level)"] ?? Int.min) else { return current }
+            scores["\(level)"] = score
+            return scores
+        }
     }
 
     // Get score for a specific level
@@ -89,15 +94,13 @@ class LevelManager {
 
     // Save stars for a specific level
     private func saveLevelStars(level: Int, stars: Int) {
-        var levelStars = getLevelStarsDict()
-
-        // Only update if new stars are better than existing
-        if let existingStars = levelStars["\(level)"], existingStars >= stars {
-            return
+        cloudStorage.mutate(dictionary: levelStarsKey) { current in
+            var levelStars = current as? [String: Int] ?? [:]
+            // Only update if new stars are better than existing
+            guard stars > (levelStars["\(level)"] ?? Int.min) else { return current }
+            levelStars["\(level)"] = stars
+            return levelStars
         }
-
-        levelStars["\(level)"] = stars
-        cloudStorage.saveDictionary(levelStars, forKey: levelStarsKey)
     }
 
     // Get stars for a specific level
@@ -117,33 +120,46 @@ class LevelManager {
         cloudStorage.removeObject(forKey: levelScoresKey)
         cloudStorage.removeObject(forKey: levelStarsKey)
         cloudStorage.removeObject(forKey: levelWeaponsKey)
+
+        // A full reset should feel like a fresh install, so the intro plays again.
+        hasSeenOpeningStory = false
+    }
+
+    // MARK: - Story Playback
+
+    private var hasSeenOpeningStoryKey: String { "hasSeenOpeningStory" }
+
+    /// Whether the opening story has already been shown.
+    ///
+    /// Deliberately local rather than iCloud-backed: this is a presentation flag for
+    /// this device, not progress worth syncing or merging. Without it, entering level 1
+    /// from the level select replayed the whole intro crawl on every single attempt —
+    /// skippable, but a skip you had to perform every retry.
+    var hasSeenOpeningStory: Bool {
+        get { UserDefaults.standard.bool(forKey: hasSeenOpeningStoryKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hasSeenOpeningStoryKey) }
     }
 
     // MARK: - Weapon Arsenal Management
 
     // Save weapon arsenal for a specific level
     private func saveLevelWeapons(level: Int, bulletCount: Int, sideMissileCount: Int) {
-        var levelWeapons = getLevelWeaponsDict()
+        cloudStorage.mutate(dictionary: levelWeaponsKey) { current in
+            var levelWeapons = current
+            let existing = levelWeapons["\(level)"] as? [String: Int]
+            let existingBullets = existing?["bulletCount"] ?? 1
+            let existingMissiles = existing?["sideMissileCount"] ?? 0
 
-        // Only update if new weapons are better than existing
-        if let existingWeapons = levelWeapons["\(level)"] as? [String: Int] {
-            let existingBullets = existingWeapons["bulletCount"] ?? 1
-            let existingMissiles = existingWeapons["sideMissileCount"] ?? 0
-
-            // Only save if either weapon improved
-            if bulletCount <= existingBullets && sideMissileCount <= existingMissiles {
-                return
+            // Only save if either weapon improved, and then keep the better of each.
+            guard bulletCount > existingBullets || sideMissileCount > existingMissiles else {
+                return current
             }
-
-            // Keep the better of each weapon type
-            let newBullets = max(bulletCount, existingBullets)
-            let newMissiles = max(sideMissileCount, existingMissiles)
-            levelWeapons["\(level)"] = ["bulletCount": newBullets, "sideMissileCount": newMissiles]
-        } else {
-            levelWeapons["\(level)"] = ["bulletCount": bulletCount, "sideMissileCount": sideMissileCount]
+            levelWeapons["\(level)"] = [
+                "bulletCount": max(bulletCount, existingBullets),
+                "sideMissileCount": max(sideMissileCount, existingMissiles)
+            ]
+            return levelWeapons
         }
-
-        cloudStorage.saveDictionary(levelWeapons, forKey: levelWeaponsKey)
     }
 
     // Get weapon arsenal for a specific level

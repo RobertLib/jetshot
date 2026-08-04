@@ -21,12 +21,21 @@ class GameCompletionScene: SKScene {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// The victory screen, shown once the ending crawl has played.
+    ///
+    /// `didMove(to:)` used to immediately present `StoryScene(type: .ending)` and return,
+    /// which left this entire scene unreachable: `setupUI()` is only called from
+    /// `didChangeSize`, and that is gated on `isInitialized`, which nothing ever set.
+    /// So the trophy, the total score and all three buttons never rendered, and beating
+    /// level 50 dropped the player from the crawl straight back to the level select.
+    /// The crawl now runs *before* this scene — see `LevelCompleteScene` and
+    /// `StoryScene`'s `.ending` case — and this is the terminal screen.
     override func didMove(to view: SKView) {
-        // Show the ending story instead of completion screen
-        let storyScene = StoryScene(size: size, type: .ending)
-        storyScene.scaleMode = scaleMode
-        let transition = SKTransition.fade(withDuration: 1.0)
-        view.presentScene(storyScene, transition: transition)
+        backgroundColor = UITheme.Colors.sceneBackground
+        buildScene()
+        isInitialized = true
+
+        SoundManager.shared.startBackgroundMusic()
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -35,8 +44,13 @@ class GameCompletionScene: SKScene {
 
         // Remove and recreate all elements
         removeAllChildren()
+        buildScene()
+    }
 
+    private func buildScene() {
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
+        NeonFX.attachGrade(to: self, zPosition: -5)
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
         setupUI()
@@ -385,19 +399,7 @@ class GameCompletionScene: SKScene {
         // Golden fireworks from bottom
         let fireworks = SKEmitterNode()
 
-        let textureSize = CGSize(width: 32, height: 32)
-        let renderer = UIGraphicsImageRenderer(size: textureSize)
-        let circleImage = renderer.image { context in
-            let ctx = context.cgContext
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let colors = [UIColor.white.cgColor, UIColor.white.withAlphaComponent(0).cgColor] as CFArray
-            let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1])!
-            ctx.drawRadialGradient(gradient,
-                                   startCenter: CGPoint(x: 16, y: 16), startRadius: 0,
-                                   endCenter: CGPoint(x: 16, y: 16), endRadius: 16,
-                                   options: [])
-        }
-        fireworks.particleTexture = SKTexture(image: circleImage)
+        fireworks.particleTexture = ParticleTexture.softCircle(diameter: 32)
 
         let colorSequence = SKKeyframeSequence(keyframeValues: [
             UIColor(red: 1.0, green: 1.0, blue: 0.9, alpha: 1.0),

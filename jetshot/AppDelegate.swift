@@ -10,8 +10,9 @@ import UIKit
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
-    var window: UIWindow?
-
+    // No `window` property here. Under the UIScene life cycle the window belongs to
+    // the scene, not the application — see `SceneDelegate.window`. The one that used
+    // to sit here was never assigned by anything anyway.
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Override point for customization after application launch.
@@ -29,23 +30,28 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
-    func applicationWillResignActive(_ application: UIApplication) {
-        // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
-        // Use this method to pause ongoing tasks, disable timers, and invalidate graphics rendering callbacks. Games should use this method to pause the game.
+    // No app-lifecycle hooks here on purpose. Pausing and resuming gameplay is driven
+    // by GameScene, which observes UIApplication.willResignActive / didBecomeActive
+    // directly — see GameScene.appWillResignActive(). The empty Xcode template stubs
+    // that used to sit here just invited someone to add a second, competing pause path.
+    //
+    // Those two notifications are still posted in a scene-based app; it is the
+    // *delegate* callbacks (applicationDidBecomeActive(_:) and friends) that stop
+    // being called once the scene manifest is present, which is why there was nothing
+    // to migrate.
+
+    // MARK: - UISceneSession Lifecycle
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        // Called when a new scene session is being created. The single configuration
+        // this returns is the one declared in Info.plist, which names SceneDelegate.
+        return UISceneConfiguration(
+            name: "Default Configuration",
+            sessionRole: connectingSceneSession.role
+        )
     }
-
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
-    }
-
-    func applicationWillEnterForeground(_ application: UIApplication) {
-        // Called as part of the transition from the background to the active state; here you can undo many of the changes made on entering the background.
-    }
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
-    }
-
-
 }
-

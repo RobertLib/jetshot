@@ -102,31 +102,38 @@ class CoinManager {
         }
     }
 
-    private func generateFormationPositions(formation: CoinFormation, sceneSize: CGSize) -> [CGPoint] {
+    /// Builds a coin formation, laid out around x = 0 and then placed so that every coin
+    /// is reachable.
+    ///
+    /// The layout below is deliberately relative. Picking an absolute centre up front
+    /// (the previous approach: `centerX = random(100 ... width - 100)`) ignored how wide
+    /// each shape actually is, so the wider ones put coins past the screen edge — a
+    /// `.wave` or `.zigzag` spans ±125pt, which on a 375pt phone reaches x = -25 or
+    /// x = 400. Coins fall straight down at a fixed x, so those were unreachable, and
+    /// because they still counted towards the level's coin total they quietly cost the
+    /// player stars. Only `.line` clamped itself.
+    func generateFormationPositions(formation: CoinFormation, sceneSize: CGSize) -> [CGPoint] {
         var positions: [CGPoint] = []
 
-        // Random center x position (with margins)
-        let centerX = CGFloat.random(in: 100...(sceneSize.width - 100))
-        let y = sceneSize.height + 30
         let spacing: CGFloat = 50
+        let y: CGFloat = 0
 
         switch formation {
         case .line:
             // Horizontal line of 5-7 coins
             let count = Int.random(in: 5...7)
             let totalWidth = CGFloat(count - 1) * spacing
-            let startX = max(60, min(sceneSize.width - 60, centerX - totalWidth / 2))
             for i in 0..<count {
-                positions.append(CGPoint(x: startX + CGFloat(i) * spacing, y: y))
+                positions.append(CGPoint(x: -totalWidth / 2 + CGFloat(i) * spacing, y: y))
             }
 
         case .vShape:
             // V formation - 5 coins
-            positions.append(CGPoint(x: centerX, y: y))
-            positions.append(CGPoint(x: centerX - spacing, y: y + spacing))
-            positions.append(CGPoint(x: centerX + spacing, y: y + spacing))
-            positions.append(CGPoint(x: centerX - spacing * 2, y: y + spacing * 2))
-            positions.append(CGPoint(x: centerX + spacing * 2, y: y + spacing * 2))
+            positions.append(CGPoint(x: 0, y: y))
+            positions.append(CGPoint(x: -spacing, y: y + spacing))
+            positions.append(CGPoint(x: spacing, y: y + spacing))
+            positions.append(CGPoint(x: -spacing * 2, y: y + spacing * 2))
+            positions.append(CGPoint(x: spacing * 2, y: y + spacing * 2))
 
         case .circle:
             // Circle of 6-8 coins
@@ -134,88 +141,78 @@ class CoinManager {
             let radius: CGFloat = 40
             for i in 0..<count {
                 let angle = (CGFloat(i) / CGFloat(count)) * 2 * .pi
-                let x = centerX + cos(angle) * radius
-                let yPos = y + sin(angle) * radius
-                positions.append(CGPoint(x: x, y: yPos))
+                positions.append(CGPoint(x: cos(angle) * radius, y: y + sin(angle) * radius))
             }
 
         case .wave:
             // Sine wave - 6 coins
             for i in 0..<6 {
-                let x = centerX - spacing * 2.5 + CGFloat(i) * spacing
-                let waveY = y + sin(CGFloat(i) * 0.8) * 30
-                positions.append(CGPoint(x: x, y: waveY))
+                let x = -spacing * 2.5 + CGFloat(i) * spacing
+                positions.append(CGPoint(x: x, y: y + sin(CGFloat(i) * 0.8) * 30))
             }
 
         case .diagonal:
             // Diagonal line - 5 coins
             for i in 0..<5 {
-                let x = centerX - spacing * 2 + CGFloat(i) * spacing
-                let yPos = y + CGFloat(i) * spacing * 0.5
-                positions.append(CGPoint(x: x, y: yPos))
+                let x = -spacing * 2 + CGFloat(i) * spacing
+                positions.append(CGPoint(x: x, y: y + CGFloat(i) * spacing * 0.5))
             }
 
         case .cross:
             // Cross shape - 5 coins
-            positions.append(CGPoint(x: centerX, y: y)) // center
-            positions.append(CGPoint(x: centerX - spacing, y: y)) // left
-            positions.append(CGPoint(x: centerX + spacing, y: y)) // right
-            positions.append(CGPoint(x: centerX, y: y + spacing)) // top
-            positions.append(CGPoint(x: centerX, y: y - spacing)) // bottom
+            positions.append(CGPoint(x: 0, y: y)) // center
+            positions.append(CGPoint(x: -spacing, y: y)) // left
+            positions.append(CGPoint(x: spacing, y: y)) // right
+            positions.append(CGPoint(x: 0, y: y + spacing)) // top
+            positions.append(CGPoint(x: 0, y: y - spacing)) // bottom
 
         case .arrow:
             // Arrow pointing down - 7 coins
-            positions.append(CGPoint(x: centerX, y: y)) // tip
-            positions.append(CGPoint(x: centerX - spacing * 0.5, y: y + spacing))
-            positions.append(CGPoint(x: centerX + spacing * 0.5, y: y + spacing))
-            positions.append(CGPoint(x: centerX - spacing, y: y + spacing * 2))
-            positions.append(CGPoint(x: centerX + spacing, y: y + spacing * 2))
-            positions.append(CGPoint(x: centerX - spacing * 1.5, y: y + spacing * 3))
-            positions.append(CGPoint(x: centerX + spacing * 1.5, y: y + spacing * 3))
+            positions.append(CGPoint(x: 0, y: y)) // tip
+            positions.append(CGPoint(x: -spacing * 0.5, y: y + spacing))
+            positions.append(CGPoint(x: spacing * 0.5, y: y + spacing))
+            positions.append(CGPoint(x: -spacing, y: y + spacing * 2))
+            positions.append(CGPoint(x: spacing, y: y + spacing * 2))
+            positions.append(CGPoint(x: -spacing * 1.5, y: y + spacing * 3))
+            positions.append(CGPoint(x: spacing * 1.5, y: y + spacing * 3))
 
         case .zigzag:
             // Zigzag - 6 coins
             for i in 0..<6 {
-                let x = centerX - spacing * 2.5 + CGFloat(i) * spacing
+                let x = -spacing * 2.5 + CGFloat(i) * spacing
                 let offset: CGFloat = i % 2 == 0 ? 0 : spacing * 0.7
                 positions.append(CGPoint(x: x, y: y + offset))
             }
         }
 
-        return positions
+        return Self.place(positions, in: sceneSize)
     }
 
-    private func spawnCoin(in scene: SKScene) {
-        // Random x position
-        let x = CGFloat.random(in: 60...(scene.size.width - 60))
+    /// Slides a relative formation to a random horizontal position that keeps all of it
+    /// on screen, and lifts it above the top edge so nothing pops into view mid-fall.
+    static func place(_ positions: [CGPoint], in sceneSize: CGSize) -> [CGPoint] {
+        guard let minX = positions.map(\.x).min(),
+              let maxX = positions.map(\.x).max(),
+              let minY = positions.map(\.y).min() else { return positions }
 
-        // Spawn at top of screen
-        let y = scene.size.height + 30
+        // Half a coin plus a little breathing room, so the sprite is fully inside.
+        let margin: CGFloat = 30
 
-        let coin = Coin(position: CGPoint(x: x, y: y))
+        let lowerBound = margin - minX
+        let upperBound = sceneSize.width - margin - maxX
+        let offsetX: CGFloat = lowerBound <= upperBound
+            ? CGFloat.random(in: lowerBound...upperBound)
+            : (sceneSize.width - minX - maxX) / 2 // Wider than the screen: centre it.
 
-        // Get GameScene to access gameContentNode
-        let parentNode: SKNode
-        if let gameScene = scene as? GameScene {
-            parentNode = gameScene.gameContentNode
-        } else {
-            parentNode = scene
-        }
+        // `.cross` reaches below its own origin, which used to spawn its bottom coin
+        // already on screen.
+        let offsetY = sceneSize.height + 30 - minY
 
-        parentNode.addChild(coin)
-        totalCoinsSpawned += 1
+        return positions.map { CGPoint(x: $0.x + offsetX, y: $0.y + offsetY) }
     }
 
     func setBossFight(_ active: Bool) {
         isBossFight = active
-    }
-
-    func reset() {
-        lastSpawnTime = 0
-        nextSpawnDelay = spawnConfig.spawnInterval
-        totalCoinsSpawned = 0
-        isBossFight = false
-        targetCoinsForLevel = Int.random(in: spawnConfig.minCoins...spawnConfig.maxCoins)
     }
 
     // Get total coins that spawned in this level

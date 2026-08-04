@@ -17,6 +17,12 @@ class LevelCompleteScene: SKScene {
     private let sideMissileCount: Int
     private var isInitialized = false
 
+    /// Computed once and reused. `calculateStarsEarned()` was previously called both
+    /// here-equivalent (didMove, to persist progress) and again in createStarRating(),
+    /// so the rating was derived twice per scene — and once more on every resize, each
+    /// time re-logging the result in debug builds.
+    private lazy var starsEarned: Int = calculateStarsEarned()
+
     init(size: CGSize, level: Int, score: Int, coinsCollected: Int = 0, totalCoins: Int = 0, bulletCount: Int = 1, sideMissileCount: Int = 0) {
         self.level = level
         self.score = score
@@ -34,14 +40,13 @@ class LevelCompleteScene: SKScene {
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
 
-        // Calculate stars earned based on coins collected
-        let starsEarned = calculateStarsEarned()
-
         // Mark level as completed with score, stars, and weapon arsenal
         LevelManager.shared.completeLevel(level, score: score, stars: starsEarned, bulletCount: bulletCount, sideMissileCount: sideMissileCount)
 
         // Add starfield first (lightweight)
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
+        NeonFX.attachGrade(to: self, zPosition: -5)
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
 
@@ -60,36 +65,18 @@ class LevelCompleteScene: SKScene {
     }
 
     private func calculateStarsEarned() -> Int {
-        // If no coins in level, always give 3 stars (backwards compatibility)
-        guard totalCoins > 0 else { return 3 }
-
-        // Calculate percentage of coins collected
-        let percentage = Double(coinsCollected) / Double(totalCoins)
+        let stars = StarRating.stars(coinsCollected: coinsCollected, totalCoins: totalCoins)
 
         #if DEBUG
-        print("🌟 Level \(level) complete: Collected \(coinsCollected)/\(totalCoins) coins (\(Int(percentage * 100))%)")
+        if totalCoins > 0 {
+            let percentage = Int(Double(coinsCollected) / Double(totalCoins) * 100)
+            print("🌟 Level \(level): collected \(coinsCollected)/\(totalCoins) coins (\(percentage)%) → \(stars) stars")
+        } else {
+            print("🌟 Level \(level): no coins in level → \(stars) stars")
+        }
         #endif
 
-        // Star thresholds:
-        // 1 star: < 40% coins
-        // 2 stars: 40-69% coins
-        // 3 stars: 70%+ coins
-        if percentage >= 0.70 {
-            #if DEBUG
-            print("🌟 Earned 3 stars!")
-            #endif
-            return 3
-        } else if percentage >= 0.40 {
-            #if DEBUG
-            print("🌟 Earned 2 stars!")
-            #endif
-            return 2
-        } else {
-            #if DEBUG
-            print("🌟 Earned 1 star!")
-            #endif
-            return 1
-        }
+        return stars
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -99,7 +86,9 @@ class LevelCompleteScene: SKScene {
         // Remove and recreate all elements
         removeAllChildren()
 
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
+        NeonFX.attachGrade(to: self, zPosition: -5)
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
         setupUI()
@@ -206,9 +195,6 @@ class LevelCompleteScene: SKScene {
     }
 
     private func createStarRating(on panel: SKShapeNode, y: CGFloat) {
-        // Calculate how many stars player earned based on coins collected
-        let starsEarned = calculateStarsEarned()
-
         let starSpacing = UITheme.Dimensions.spacingMedium
         for i in 0..<3 {
             let starContainer = SKNode()
@@ -218,12 +204,15 @@ class LevelCompleteScene: SKScene {
             // Determine if this star should be filled
             let isEarned = i < starsEarned
 
-            // Glow effect behind star (only for earned stars)
-            let glowStar = UITheme.createStar()
-            glowStar.fillColor = UIColor(red: 1.0, green: 0.9, blue: 0.4, alpha: 0.6)
-            glowStar.strokeColor = .clear
-            glowStar.setScale(1.3)
+            // Halo behind the star. Additive on purpose: the old opaque yellow
+            // star scaled up behind the real one produced a dark olive fringe
+            // that made the whole rating look muddy.
+            let glowStar = NeonFX.radialGlow(
+                radius: UITheme.Dimensions.starOuterRadius * 1.9,
+                color: UIColor(red: 1.0, green: 0.82, blue: 0.28, alpha: 1.0)
+            )
             glowStar.alpha = 0
+            glowStar.zPosition = -1
             starContainer.addChild(glowStar)
 
             // Main star
@@ -231,14 +220,15 @@ class LevelCompleteScene: SKScene {
             if isEarned {
                 // Filled gold star for earned
                 star.fillColor = UITheme.Colors.primaryGold
-                star.strokeColor = UIColor(red: 1.0, green: 0.95, blue: 0.6, alpha: 1.0)
+                star.strokeColor = UIColor(red: 1.0, green: 0.98, blue: 0.78, alpha: 1.0)
             } else {
                 // Empty gray star for not earned
                 star.fillColor = UIColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 0.5)
                 star.strokeColor = UIColor(red: 0.4, green: 0.4, blue: 0.45, alpha: 0.8)
             }
-            star.lineWidth = UITheme.Dimensions.lineWidthMedium
+            star.lineWidth = UITheme.Dimensions.lineWidthRegular
             star.setScale(0)
+            star.zPosition = 2
             starContainer.addChild(star)
 
             // Pop-in animation with delay
@@ -270,30 +260,25 @@ class LevelCompleteScene: SKScene {
             // Add sparkle particles around stars - now with fixed texture
             let sparkle = SKEmitterNode()
 
-            // Create larger circle texture for sparkles
-            let sparkleSize = CGSize(width: 24, height: 24)
-            let sparkleRenderer = UIGraphicsImageRenderer(size: sparkleSize)
-            let sparkleImage = sparkleRenderer.image { context in
-                UIColor.white.setFill()
-                let rect = CGRect(origin: .zero, size: sparkleSize)
-                context.cgContext.fillEllipse(in: rect)
-            }
-            sparkle.particleTexture = SKTexture(image: sparkleImage)
+            sparkle.particleTexture = ParticleTexture.solidCircle(diameter: 24)
 
             sparkle.particleBirthRate = 5 // More sparkles
             sparkle.particleLifetime = 1.5
-            sparkle.particlePositionRange = CGVector(dx: 20, dy: 20)
+            // Emitted in a ring outside the star, not over its face — big
+            // sparkles on top of the star were what blurred the gold shape.
+            sparkle.particlePositionRange = CGVector(dx: 42, dy: 42)
             sparkle.particleSpeed = 15
             sparkle.particleSpeedRange = 10
             sparkle.emissionAngleRange = .pi * 2
-            sparkle.particleAlpha = 1.0 // Brighter
+            sparkle.particleAlpha = 0.9
             sparkle.particleAlphaSpeed = -0.7
-            sparkle.particleScale = 0.4 // Larger
-            sparkle.particleScaleSpeed = -0.2
+            sparkle.particleScale = 0.16
+            sparkle.particleScaleSpeed = -0.1
             sparkle.particleColor = UIColor(red: 1.0, green: 0.95, blue: 0.6, alpha: 1.0)
             sparkle.particleColorBlendFactor = 1.0
             sparkle.particleBlendMode = .add
             sparkle.alpha = 0
+            sparkle.zPosition = 1
             starContainer.addChild(sparkle)
 
             sparkle.run(SKAction.sequence([
@@ -531,14 +516,21 @@ class LevelCompleteScene: SKScene {
         }
     }
 
+    /// Finishing the last level runs the ending crawl, which then hands off to
+    /// `GameCompletionScene`.
+    ///
+    /// This used to present `GameCompletionScene` directly, but that scene's
+    /// `didMove(to:)` forwarded straight on to the crawl without ever building itself —
+    /// so the victory screen was skipped entirely. Going through `StoryScene` first
+    /// keeps the same order the player saw (crawl, then payoff) and makes the payoff
+    /// actually appear. It reads its own total from `LevelManager`, which is where the
+    /// value came from anyway.
     private func showGameCompletion() {
         guard let view = view else { return }
-        // Get total score from all completed levels
-        let totalScore = LevelManager.shared.getTotalScore()
-        let gameCompletionScene = GameCompletionScene(size: view.bounds.size, totalScore: totalScore)
-        gameCompletionScene.scaleMode = scaleMode
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(gameCompletionScene, transition: transition)
+        let storyScene = StoryScene(size: view.bounds.size, type: .ending)
+        storyScene.scaleMode = scaleMode
+        let transition = SKTransition.fade(withDuration: 1.0)
+        view.presentScene(storyScene, transition: transition)
     }
 
     private func goToLevelSelect() {
@@ -563,22 +555,7 @@ class LevelCompleteScene: SKScene {
         // Golden fire effect from bottom
         let particles = SKEmitterNode()
 
-        // Simple circular texture for better performance
-        let textureSize = CGSize(width: 32, height: 32)
-        let renderer = UIGraphicsImageRenderer(size: textureSize)
-        let circleImage = renderer.image { context in
-            let ctx = context.cgContext
-            // Soft circle with radial gradient
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let colors = [UIColor.white.cgColor, UIColor.white.withAlphaComponent(0).cgColor] as CFArray
-            if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1]) {
-                ctx.drawRadialGradient(gradient,
-                                       startCenter: CGPoint(x: 16, y: 16), startRadius: 0,
-                                       endCenter: CGPoint(x: 16, y: 16), endRadius: 16,
-                                       options: [])
-            }
-        }
-        particles.particleTexture = SKTexture(image: circleImage)
+        particles.particleTexture = ParticleTexture.softCircle(diameter: 32)
 
         // Golden fire color sequence: white-hot -> bright yellow -> golden -> orange -> dark
         let colorSequence = SKKeyframeSequence(keyframeValues: [

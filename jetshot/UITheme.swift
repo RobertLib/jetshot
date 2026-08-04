@@ -39,72 +39,47 @@ struct UITheme {
 
         // Panel colors
         static let panelBackground = UIColor(red: 0.1, green: 0.15, blue: 0.25, alpha: 0.95)
-        static let panelBoxBackground = UIColor(red: 0.15, green: 0.2, blue: 0.3, alpha: 1.0)
-        static let panelBoxBorder = UIColor(red: 0.5, green: 0.7, blue: 1.0, alpha: 1.0)
 
         // Text colors
         static let textPrimary = UIColor.white
         static let textSecondary = UIColor(red: 0.7, green: 0.8, blue: 0.9, alpha: 1.0)
         static let textLabel = UIColor(red: 0.95, green: 0.95, blue: 1.0, alpha: 1.0)
         static let textLabelInactive = UIColor(red: 0.4, green: 0.4, blue: 0.45, alpha: 1.0)
-        static let textOnButton = UIColor.black
 
         // Highlight colors
-        static let highlightWhite = UIColor(white: 1.0, alpha: 0.15)
         static let highlightWhiteStrong = UIColor(white: 1.0, alpha: 0.2)
-        static let highlightWhiteLight = UIColor(white: 1.0, alpha: 0.3)
 
         // Button colors
         static let buttonMenu = UIColor(red: 0.4, green: 0.4, blue: 0.5, alpha: 1.0)
         static let buttonLevels = UIColor(red: 0.3, green: 0.5, blue: 0.9, alpha: 1.0)
 
-        // Accent colors
-        static let accentGreen = UIColor(red: 0.2, green: 0.8, blue: 0.4, alpha: 1.0)
-
         // Shadow colors
         static let shadowBlack = UIColor.black
 
-        // MARK: - Enemy Colors
-
-        // Basic enemy types
-        static let enemyBasic = UIColor.red
-        static let enemyBasicStroke = UIColor(red: 1.0, green: 0.6, blue: 0.6, alpha: 1.0)
-        static let enemyFast = UIColor.orange
-        static let enemyFastStroke = UIColor(red: 1.0, green: 0.8, blue: 0.5, alpha: 1.0)
-        static let enemyHeavy = UIColor.purple
-        static let enemyHeavyStroke = UIColor(red: 0.9, green: 0.7, blue: 1.0, alpha: 1.0)
-        static let enemyZigzag = UIColor.cyan
-        static let enemyZigzagStroke = UIColor(red: 0.6, green: 1.0, blue: 1.0, alpha: 1.0)
-        static let enemyKamikaze = UIColor.yellow
-        static let enemyKamikazeStroke = UIColor(red: 1.0, green: 1.0, blue: 0.6, alpha: 1.0)
-        static let enemyFormation = UIColor(red: 0.0, green: 0.8, blue: 0.4, alpha: 1.0)
-        static let enemyFormationStroke = UIColor(red: 0.5, green: 1.0, blue: 0.7, alpha: 1.0)
-
-        // Special enemy types
-        static let enemySniper = UIColor(red: 1.0, green: 0.4, blue: 0.2, alpha: 1.0)
-        static let enemySniperStroke = UIColor(red: 1.0, green: 0.7, blue: 0.5, alpha: 1.0)
-        static let enemyTank = UIColor(red: 0.2, green: 0.3, blue: 0.6, alpha: 1.0)
-        static let enemyTankStroke = UIColor(red: 0.5, green: 0.6, blue: 0.9, alpha: 1.0)
-        static let enemyStriker = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0)
-        static let enemyStrikerStroke = UIColor(red: 0.6, green: 0.9, blue: 1.0, alpha: 1.0)
-
-        // MARK: - PowerUp Colors
-
-        static let powerUpShield = UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0)
-        static let powerUpLightning = UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0)
-        static let powerUpRapidFire = UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0)
-        static let powerUpMagnet = UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)
-        static let powerUpSlowMotion = UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0)
-        static let powerUpMultiShot = UIColor(red: 0.2, green: 1.0, blue: 0.8, alpha: 1.0)
-        static let powerUpExtraLife = UIColor(red: 0.0, green: 1.0, blue: 0.3, alpha: 1.0)
-        static let powerUpScoreMultiplier = UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0)
+        // Entity colours are deliberately *not* here. `EnemyType.color` /
+        // `.strokeColor` in Enemy.swift and `PowerUpType.color` in PowerUp.swift own
+        // them, keyed by the case they belong to, which is the only place that can stay
+        // exhaustive — there are 27 enemy types and 13 power-ups, and the compiler
+        // checks a switch over an enum but cannot check a list of loose constants.
+        //
+        // A partial copy of both lists used to sit here: nine enemy types, eight
+        // power-ups, referenced by nothing. It had also drifted, so it was actively
+        // misleading rather than merely dead — its `powerUpMagnet` was yellow against
+        // the real purple-blue, and its `powerUpMultiShot` was teal against the real
+        // yellow. Adding a colour here means maintaining two sources; add it to the
+        // enum instead.
     }
 
     // MARK: - Typography
 
     struct Typography {
-        static let fontRegular = "Arial"
-        static let fontBold = "Arial-BoldMT"
+        // Condensed grotesque: reads as arcade signage instead of a system
+        // dialog, and being narrower than Arial it also gives existing layouts
+        // more breathing room rather than less.
+        static let fontRegular = "AvenirNextCondensed-DemiBold"
+        static let fontBold = "AvenirNextCondensed-Heavy"
+        /// Fixed-width digits, so counters don't jitter as they tick up.
+        static let fontNumeric = "Menlo-Bold"
 
         // Font sizes
         static let sizeHuge: CGFloat = 64
@@ -130,13 +105,11 @@ struct UITheme {
         static let lineWidthMedium: CGFloat = 3
         static let lineWidthThick: CGFloat = 3.5
         static let lineWidthExtraThick: CGFloat = 4
-        static let lineWidthGlow: CGFloat = 6
         static let lineWidthGlowStrong: CGFloat = 8
 
         // Button sizes
         static let buttonHeight: CGFloat = 50
         static let buttonWidthSmall: CGFloat = 125
-        static let buttonWidthMedium: CGFloat = 160
         static let buttonWidthLarge: CGFloat = 200
         static let buttonWidthXLarge: CGFloat = 260
 
@@ -153,7 +126,6 @@ struct UITheme {
         static let levelButtonSpacing: CGFloat = 30
 
         // Spacing
-        static let spacingSmall: CGFloat = 30
         static let spacingMedium: CGFloat = 50
         static let spacingLarge: CGFloat = 60
     }
@@ -172,7 +144,6 @@ struct UITheme {
 
         // Alpha values
         static let alphaFadedLow: CGFloat = 0.3
-        static let alphaFadedMedium: CGFloat = 0.5
         static let alphaFadedHigh: CGFloat = 0.7
         static let alphaInactive: CGFloat = 0.3
         static let alphaFull: CGFloat = 1.0
@@ -262,6 +233,52 @@ struct UITheme {
         path.closeSubpath()
 
         return SKShapeNode(path: path)
+    }
+
+    /// Soft top-down scrim so HUD instrumentation stays legible over any
+    /// background. Cached, since it only depends on the screen size.
+    private static var scrimCache: [String: SKTexture] = [:]
+
+    /// Drops the cache. Called from `GameScene.handleMemoryWarning()` alongside the
+    /// other texture caches; the next request re-renders on demand.
+    ///
+    /// This was the one texture cache that warning did not reach, while
+    /// `ParallaxBackgroundHelper`, `ParticleTexture`, `NeonFX` and `SurfaceFX` were all
+    /// swept. Small in practice — the key is the screen size, so a phone only ever holds
+    /// one entry — but "every texture cache is cleared under pressure" is easier to keep
+    /// true than a list with one silent exception on it.
+    static func clearCaches() {
+        scrimCache.removeAll()
+    }
+
+    static func topScrimTexture(width: CGFloat, height: CGFloat) -> SKTexture {
+        let key = "\(Int(width))x\(Int(height))"
+        if let cached = scrimCache[key] { return cached }
+
+        let size = CGSize(width: max(width, 1), height: max(height, 1))
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            let stops: [(CGFloat, CGFloat)] = [(0.0, 0.72), (0.55, 0.34), (1.0, 0.0)]
+            let base = UIColor(red: 0.01, green: 0.02, blue: 0.07, alpha: 1.0)
+            let colors = stops.map { base.withAlphaComponent($0.1).cgColor } as CFArray
+            if let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: colors,
+                locations: stops.map { $0.0 }
+            ) {
+                ctx.cgContext.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: 0, y: 0),
+                    end: CGPoint(x: 0, y: size.height),
+                    options: []
+                )
+            }
+        }
+
+        let texture = SKTexture(image: image)
+        scrimCache[key] = texture
+        return texture
     }
 
     /// Creates a glow effect animation

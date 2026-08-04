@@ -26,7 +26,9 @@ class GameOverScene: SKScene {
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
 
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
+        NeonFX.attachGrade(to: self, zPosition: -5)
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
         setupUI()
@@ -43,7 +45,9 @@ class GameOverScene: SKScene {
         // Remove and recreate all elements
         removeAllChildren()
 
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
+        NeonFX.attachGrade(to: self, zPosition: -5)
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
         setupUI()
@@ -394,21 +398,7 @@ class GameOverScene: SKScene {
         // Red fire effect from bottom
         let particles = SKEmitterNode()
 
-        // Simple circular texture for better performance
-        let textureSize = CGSize(width: 32, height: 32)
-        let renderer = UIGraphicsImageRenderer(size: textureSize)
-        let circleImage = renderer.image { context in
-            let ctx = context.cgContext
-            // Soft circle with radial gradient
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let colors = [UIColor.white.cgColor, UIColor.white.withAlphaComponent(0).cgColor] as CFArray
-            let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1])!
-            ctx.drawRadialGradient(gradient,
-                                   startCenter: CGPoint(x: 16, y: 16), startRadius: 0,
-                                   endCenter: CGPoint(x: 16, y: 16), endRadius: 16,
-                                   options: [])
-        }
-        particles.particleTexture = SKTexture(image: circleImage)
+        particles.particleTexture = ParticleTexture.softCircle(diameter: 32)
 
         // Fire color sequence: white-hot -> yellow -> orange -> red -> dark
         let colorSequence = SKKeyframeSequence(keyframeValues: [

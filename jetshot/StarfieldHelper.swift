@@ -9,7 +9,107 @@ import SpriteKit
 
 class StarfieldHelper {
 
-    static func createStarfield(for scene: SKScene) -> SKEmitterNode {
+    /// One depth slice of the starfield.
+    private struct StarLayer {
+        let birthRate: CGFloat
+        let speed: CGFloat
+        let scale: CGFloat
+        let scaleRange: CGFloat
+        let alpha: CGFloat
+        let zPosition: CGFloat
+        let name: String
+    }
+
+    /// Distant and mid-distance star layers.
+    ///
+    /// A single emitter gives every star the same speed, which flattens the sky
+    /// into a wall. Three layers moving at different rates produce genuine
+    /// parallax, and it is what makes the ship feel like it's travelling.
+    private static let depthLayers: [StarLayer] = [
+        StarLayer(birthRate: 6, speed: 14, scale: 0.09, scaleRange: 0.06,
+                  alpha: 0.38, zPosition: -13, name: "starfieldFar"),
+        StarLayer(birthRate: 3.5, speed: 34, scale: 0.16, scaleRange: 0.10,
+                  alpha: 0.6, zPosition: -12, name: "starfieldMid")
+    ]
+
+    /// Adds the slower background star layers. The fast foreground layer is the
+    /// emitter returned by `createStarfield`.
+    static func addDepthLayers(to scene: SKScene, parentNode: SKNode? = nil) {
+        let parent = parentNode ?? scene
+        let texture = starTexture()
+
+        for layer in depthLayers {
+            parent.childNode(withName: layer.name)?.removeFromParent()
+
+            let emitter = SKEmitterNode()
+            emitter.particleTexture = texture
+            emitter.particleBirthRate = layer.birthRate
+            emitter.particleLifetime = (scene.size.height + 80) / layer.speed
+            emitter.particleLifetimeRange = 2
+            emitter.particlePositionRange = CGVector(dx: scene.size.width, dy: 0)
+            emitter.particleSpeed = layer.speed
+            emitter.particleSpeedRange = layer.speed * 0.25
+            emitter.emissionAngle = .pi * 1.5
+            emitter.emissionAngleRange = 0
+            emitter.particleScale = layer.scale
+            emitter.particleScaleRange = layer.scaleRange
+            emitter.particleAlpha = layer.alpha
+            emitter.particleAlphaRange = 0.2
+            emitter.particleColor = UIColor(white: 0.92, alpha: 1.0)
+            emitter.particleColorBlendFactor = 0.75
+            emitter.particleColorRedRange = 0.25
+            emitter.particleColorGreenRange = 0.15
+            emitter.particleColorBlueRange = 0.35
+            emitter.particleBlendMode = .add
+            emitter.position = CGPoint(x: scene.size.width / 2, y: scene.size.height + 10)
+            emitter.zPosition = layer.zPosition
+            emitter.name = layer.name
+            // Pre-fill so the sky isn't empty on the first frame of a level.
+            emitter.advanceSimulationTime(TimeInterval(scene.size.height / layer.speed))
+            parent.addChild(emitter)
+        }
+    }
+
+    /// Soft round star sprite with a glow falloff.
+    private static func starTexture() -> SKTexture {
+        let size = CGSize(width: 16, height: 16)
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            let colors = [
+                UIColor.white.cgColor,
+                UIColor(white: 1.0, alpha: 0.5).cgColor,
+                UIColor(white: 1.0, alpha: 0.0).cgColor
+            ] as CFArray
+            if let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: colors,
+                locations: [0.0, 0.5, 1.0]
+            ) {
+                let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+                ctx.cgContext.drawRadialGradient(
+                    gradient,
+                    startCenter: centre, startRadius: 0,
+                    endCenter: centre, endRadius: size.width / 2,
+                    options: []
+                )
+            }
+        }
+        return SKTexture(image: image)
+    }
+
+    /// Builds the foreground star emitter and attaches the static background dressing
+    /// (gradient, galaxies, nebulae) to `parentNode`.
+    ///
+    /// `parentNode` exists because the dressing used to be hardcoded onto the scene
+    /// while the returned emitter was parented by the caller. In `GameScene` — which
+    /// deliberately keeps every background node under `gameContentNode` so it freezes
+    /// with the gameplay clock — that meant the galaxies went on rotating behind the
+    /// pause menu, and they were invisible to the resize path that only ever looks
+    /// inside `gameContentNode`.
+    static func createStarfield(for scene: SKScene, parentNode: SKNode? = nil) -> SKEmitterNode {
+        let dressingParent = parentNode ?? scene
+
         // Create gradient background
         let gradientSize = CGSize(width: 1, height: scene.size.height)
         UIGraphicsBeginImageContextWithOptions(gradientSize, false, 0)
@@ -38,7 +138,8 @@ class StarfieldHelper {
                     gradientSprite.position = CGPoint(x: scene.size.width / 2, y: scene.size.height / 2)
                     gradientSprite.zPosition = -20
                     gradientSprite.name = "gradientBackground"
-                    scene.addChild(gradientSprite)
+                    dressingParent.childNode(withName: "gradientBackground")?.removeFromParent()
+                    dressingParent.addChild(gradientSprite)
                 } else {
                     UIGraphicsEndImageContext()
                 }
@@ -50,8 +151,8 @@ class StarfieldHelper {
         scene.backgroundColor = UIColor(red: 0.01, green: 0.02, blue: 0.08, alpha: 1.0)
 
         // Add distant galaxies and nebulae (static background)
-        addDistantGalaxies(to: scene)
-        addNebulae(to: scene)
+        addDistantGalaxies(to: scene, parentNode: dressingParent)
+        addNebulae(to: scene, parentNode: dressingParent)
 
         // Create star texture with glow (radial gradient for more realistic look)
         let size = CGSize(width: 16, height: 16)
@@ -125,7 +226,7 @@ class StarfieldHelper {
     }
 
     // Add distant galaxies to background
-    private static func addDistantGalaxies(to scene: SKScene) {
+    private static func addDistantGalaxies(to scene: SKScene, parentNode: SKNode) {
         let galaxyCount = 1
 
         for i in 0..<galaxyCount {
@@ -137,7 +238,8 @@ class StarfieldHelper {
             galaxy.zPosition = -18
             galaxy.name = "galaxy_\(i)"
             galaxy.alpha = 0.15 + CGFloat.random(in: 0...0.1)
-            scene.addChild(galaxy)
+            parentNode.childNode(withName: galaxy.name!)?.removeFromParent()
+            parentNode.addChild(galaxy)
 
             // Slow rotation for galaxies
             let rotation = SKAction.rotate(byAngle: .pi * 2, duration: 120 + Double.random(in: -20...20))
@@ -190,7 +292,7 @@ class StarfieldHelper {
     }
 
     // Add nebulae clouds to background
-    private static func addNebulae(to scene: SKScene) {
+    private static func addNebulae(to scene: SKScene, parentNode: SKNode) {
         let nebulaCount = 3
 
         for i in 0..<nebulaCount {
@@ -202,7 +304,8 @@ class StarfieldHelper {
             nebula.zPosition = -17
             nebula.name = "nebula_\(i)"
             nebula.alpha = 0.12 + CGFloat.random(in: 0...0.08)
-            scene.addChild(nebula)
+            parentNode.childNode(withName: nebula.name!)?.removeFromParent()
+            parentNode.addChild(nebula)
 
             // Very slow pulsing effect
             let pulse = SKAction.sequence([

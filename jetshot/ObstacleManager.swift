@@ -133,16 +133,10 @@ class ObstacleManager {
         }
     }
 
-    func removeAllObstacles() {
-        scene?.enumerateChildNodes(withName: "obstacle") { node, _ in
-            node.removeFromParent()
-        }
-        lastSpawnPositions.removeAll()
-    }
-
-    func isComplete() -> Bool {
-        return currentWaveIndex >= waves.count
-    }
+    // No removeAllObstacles()/isComplete() here. Neither had a caller, and
+    // removeAllObstacles() would not have worked if it had gained one: it swept
+    // `scene` for "obstacle" nodes, but spawnObstacle parents them to
+    // `gameScene.gameContentNode`, so the enumeration matched nothing.
 
     func stopSpawning() {
         currentWaveIndex = waves.count // Mark all waves as spawned

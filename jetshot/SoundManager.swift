@@ -15,9 +15,29 @@ class SoundManager: NSObject {
     static let shared = SoundManager()
 
     // Background music
+    //
+    // Tracks are 128 kbps AAC (.m4a). They were 256 kbps MP3, which put 33 MB of
+    // looping background music into a 51 MB app — over half the download for audio
+    // no one listens to critically through a phone speaker.
     private var musicPlayer: AVAudioPlayer?
-    private var currentMusicTrack: Int = 0
-    private let musicTracks = ["music-1.mp3", "music-2.mp3", "music-3.mp3", "music-4.mp3", "music-5.mp3", "music-6.mp3", "music-7.mp3"]
+
+    /// Exposed so `jetshotTests` can assert every track is actually in the bundle.
+    /// A renamed or unbundled track is otherwise silent at runtime, which is exactly
+    /// how five sound effects once shipped referencing files that were never added.
+    nonisolated static let musicExtension = "m4a"
+    nonisolated static let musicTracks = [
+        "music-1", "music-2", "music-3", "music-4", "music-5", "music-6", "music-7"
+    ]
+    /// One-off track played over the story crawl, outside the level rotation.
+    nonisolated static let storyMusicTrack = "music-story"
+
+    /// Resource name of the track that *should* be playing.
+    ///
+    /// Tracked by name rather than by index into `musicTracks`, because the story
+    /// track is not in that array at all. With an index, an unexpected stop during
+    /// the story crawl (see `audioPlayerDidFinishPlaying`) restarted whatever level
+    /// track the index happened to point at instead of the story music.
+    private var currentMusicResource: String?
 
     var isMusicEnabled: Bool {
         get {
@@ -52,7 +72,6 @@ class SoundManager: NSObject {
     private var gameOverSound: SKAction?
     private var levelCompleteSound: SKAction?
     private var buttonClickSound: SKAction?
-    private var buttonHoverSound: SKAction?
     private var menuSelectSound: SKAction?
     private var pauseSound: SKAction?
     private var resumeSound: SKAction?
@@ -116,8 +135,11 @@ class SoundManager: NSObject {
             UserDefaults.standard.set(true, forKey: "isSoundEnabled")
             UserDefaults.standard.set(true, forKey: "hasSetSoundDefaults")
         }
-        // Preload sounds asynchronously to avoid blocking startup
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Preload off the init call stack so startup isn't blocked, but stay on the
+        // main queue: every stored action is read from the main thread by the
+        // play* methods, and filling ~50 non-atomic properties from a background
+        // queue was an unsynchronised write/read race.
+        DispatchQueue.main.async { [weak self] in
             self?.preloadSounds()
         }
         // Handle audio session interruptions (alarms, phone calls, etc.)
@@ -156,11 +178,51 @@ class SoundManager: NSObject {
 
     // Helper function to create sound action
     // Note: SKAction.playSoundFileNamed doesn't support volume control - volume must be adjusted in the audio files themselves
-    private func createSoundAction(fileName: String) -> SKAction {
+    //
+    // The resource is verified up front: playSoundFileNamed on a missing file does
+    // not throw, it just logs "SKAction: Error loading sound resource" once and
+    // then plays silence forever. That failure mode already shipped once (five
+    // .wav effects were referenced but never added to the bundle), so a missing
+    // file now returns nil and trips an assertion in debug builds instead.
+    private func createSoundAction(fileName: String) -> SKAction? {
+        let name = (fileName as NSString).deletingPathExtension
+        let ext = (fileName as NSString).pathExtension
+
+        requestedEffectResources.append(fileName)
+
+        guard Bundle.main.url(forResource: name, withExtension: ext) != nil else {
+            missingEffectResources.append(fileName)
+            #if DEBUG
+            print("❌ Missing sound resource in bundle: \(fileName)")
+            assertionFailure("Sound file '\(fileName)' is referenced but not present in the app bundle")
+            #endif
+            return nil
+        }
+
         return SKAction.playSoundFileNamed(fileName, waitForCompletion: false)
     }
 
-    private func preloadSounds() {
+    /// Every effect file `preloadSounds()` asked for, in the order it asked.
+    ///
+    /// Recorded as it runs rather than declared up front, because the only other place
+    /// this list existed was a hand-copied duplicate of all 42 names inside
+    /// `AudioResourceTests`. That copy was correct only while someone remembered to
+    /// edit both — a newly added cue would have been silently untested, which is the
+    /// exact failure mode (a referenced file that is not bundled plays silence) the
+    /// test exists to catch. Reading it back off the manager cannot drift.
+    private(set) var requestedEffectResources: [String] = []
+
+    /// The subset of `requestedEffectResources` that could not be resolved in the
+    /// bundle, and will therefore play silence.
+    private(set) var missingEffectResources: [String] = []
+
+    /// Not private so `jetshotTests` can drive it synchronously: `init` schedules it on
+    /// the main queue, and a test that raced that dispatch would inspect empty lists.
+    /// Idempotent — every property it touches is unconditionally reassigned.
+    func preloadSounds() {
+        requestedEffectResources.removeAll()
+        missingEffectResources.removeAll()
+
         // Preload sound effects
         shootSound = createSoundAction(fileName: "shoot-sound.mp3")
         explosionSound = createSoundAction(fileName: "explosion.mp3")
@@ -170,7 +232,8 @@ class SoundManager: NSObject {
         gameOverSound = createSoundAction(fileName: "game-over.mp3")
         levelCompleteSound = createSoundAction(fileName: "level-complete.mp3")
         buttonClickSound = createSoundAction(fileName: "button-click.mp3")
-        buttonHoverSound = createSoundAction(fileName: "button-hover.mp3")
+        // No hover effect: nothing on a touch screen can hover, so the button-hover
+        // cue had no caller and its file has been dropped from the bundle.
         menuSelectSound = createSoundAction(fileName: "menu-select.mp3")
         pauseSound = createSoundAction(fileName: "pause.mp3")
         resumeSound = createSoundAction(fileName: "resume.mp3")
@@ -205,11 +268,16 @@ class SoundManager: NSObject {
         splitterSplitSound = createSoundAction(fileName: "splitter-split.mp3")
         bouncerBounceSound = createSoundAction(fileName: "bouncer-bounce.mp3")
         turretDockSound = createSoundAction(fileName: "turret-dock.mp3")
-        absorbSound = createSoundAction(fileName: "absorb.wav")
-        reflectSound = createSoundAction(fileName: "reflect.wav")
-        shieldBlockSound = createSoundAction(fileName: "shield_block.wav")
-        laserChargeSound = createSoundAction(fileName: "laser_charge.wav")
-        laserFireSound = createSoundAction(fileName: "laser_fire.wav")
+        // These five effects originally pointed at absorb.wav / reflect.wav /
+        // shield_block.wav / laser_charge.wav / laser_fire.wav, which were never
+        // added to the project — so vortex absorption, mirror reflection, shield
+        // blocks and the boss laser were all silent. Remapped onto the closest
+        // existing effects; swap in dedicated files here if they get recorded.
+        absorbSound = createSoundAction(fileName: "ghost-phase.mp3")
+        reflectSound = createSoundAction(fileName: "shield-hit.mp3")
+        shieldBlockSound = createSoundAction(fileName: "shield-hit.mp3")
+        laserChargeSound = createSoundAction(fileName: "mine-arm.mp3")
+        laserFireSound = createSoundAction(fileName: "lightning.mp3")
     }
 
     // MARK: - Existing Sound Effects
@@ -253,11 +321,6 @@ class SoundManager: NSObject {
 
     func playButtonClickSound(on node: SKNode) {
         guard isSoundEnabled, let sound = buttonClickSound else { return }
-        node.run(sound)
-    }
-
-    func playButtonHoverSound(on node: SKNode) {
-        guard isSoundEnabled, let sound = buttonHoverSound else { return }
         node.run(sound)
     }
 
@@ -477,84 +540,38 @@ class SoundManager: NSObject {
         node.run(sound)
     }
 
+
     // MARK: - Background Music
 
+    /// Starts (or restarts) whichever track is currently selected.
     func startBackgroundMusic() {
-        #if DEBUG
-        print("🎵 startBackgroundMusic called - isMusicEnabled: \(isMusicEnabled)")
-        #endif
-        guard isMusicEnabled else {
-            #if DEBUG
-            print("⚠️ Music is disabled")
-            #endif
+        guard isMusicEnabled else { return }
+        play(resource: currentMusicResource ?? Self.musicTracks[0])
+    }
+
+    /// Selects and starts the track belonging to a level.
+    func setMusicForLevel(_ level: Int) {
+        // `level` is 1-based, but a caller passing 0 or a negative value would make
+        // the remainder negative and trap on the subscript.
+        let index = (max(1, level) - 1) % Self.musicTracks.count
+        let resource = Self.musicTracks[index]
+
+        // Already playing the right thing: leave it alone rather than restarting it
+        // from the top, so consecutive levels that share a track play continuously.
+        if currentMusicResource == resource, musicPlayer?.isPlaying == true {
             return
         }
-        playMusicTrack(index: currentMusicTrack)
+
+        currentMusicResource = resource
+        guard isMusicEnabled else { return }
+        play(resource: resource)
     }
 
-    func setMusicForLevel(_ level: Int) {
-        let trackIndex = (level - 1) % musicTracks.count
-        currentMusicTrack = trackIndex
-
-        if isMusicEnabled {
-            stopBackgroundMusic()
-            playMusicTrack(index: trackIndex)
-        }
-    }
-
-    func playSpecificMusic(filename: String) {
-        let resourceName = filename.replacingOccurrences(of: ".mp3", with: "")
-
-        #if DEBUG
-        print("🎵 Attempting to load specific music: \(filename)")
-        #endif
-
-        // Try multiple methods to find the music file
-        var musicURL: URL?
-
-        // Method 1: Try subdirectory "Music"
-        musicURL = Bundle.main.url(forResource: resourceName, withExtension: "mp3", subdirectory: "Music")
-
-        if musicURL == nil {
-            // Method 2: Try root directory
-            musicURL = Bundle.main.url(forResource: resourceName, withExtension: "mp3")
-
-            if musicURL == nil {
-                // Method 3: Try jetshot/Music path
-                musicURL = Bundle.main.url(forResource: resourceName, withExtension: "mp3", subdirectory: "jetshot/Music")
-            }
-        }
-
-        if let musicURL = musicURL {
-            do {
-                // Configure audio session for background music
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try AVAudioSession.sharedInstance().setActive(true)
-
-                musicPlayer?.stop()
-                musicPlayer = try AVAudioPlayer(contentsOf: musicURL)
-                musicPlayer?.volume = musicVolume
-                musicPlayer?.delegate = self
-                musicPlayer?.numberOfLoops = -1 // Loop indefinitely
-                musicPlayer?.prepareToPlay()
-
-                if isMusicEnabled {
-                    musicPlayer?.play()
-                }
-
-                #if DEBUG
-                print("✅ Successfully playing specific music: \(filename)")
-                #endif
-            } catch {
-                #if DEBUG
-                print("❌ Could not load music file: \(filename), error: \(error)")
-                #endif
-            }
-        } else {
-            #if DEBUG
-            print("❌ Could not find music file: \(filename) anywhere in bundle")
-            #endif
-        }
+    /// Plays a one-off track that is not part of the level rotation (the story crawl).
+    func playSpecificMusic(named resource: String) {
+        currentMusicResource = resource
+        guard isMusicEnabled else { return }
+        play(resource: resource)
     }
 
     func stopBackgroundMusic() {
@@ -575,83 +592,52 @@ class SoundManager: NSObject {
         }
     }
 
-    private func playMusicTrack(index: Int) {
-        guard index < musicTracks.count else { return }
-
-        let trackName = musicTracks[index]
-        let resourceName = trackName.replacingOccurrences(of: ".mp3", with: "")
-
-        #if DEBUG
-        print("🎵 Attempting to load music: \(trackName)")
-        #endif
-
-        // Try multiple methods to find the music file
-        var musicURL: URL?
-
-        // Method 1: Try subdirectory "Music"
-        musicURL = Bundle.main.url(forResource: resourceName, withExtension: "mp3", subdirectory: "Music")
-        #if DEBUG
-        if musicURL != nil {
-            print("✅ Found music in Music subdirectory")
-        } else {
-            print("⚠️ Not found in Music subdirectory, trying root...")
-        }
-        #endif
-
-        if musicURL == nil {
-            // Method 2: Try root directory
-            musicURL = Bundle.main.url(forResource: resourceName, withExtension: "mp3")
+    /// Single loader for every music track.
+    ///
+    /// This used to be two near-identical methods, each trying three bundle
+    /// locations in turn: `subdirectory: "Music"`, then the bundle root, then
+    /// `subdirectory: "jetshot/Music"`. The build flattens the `Music` folder into
+    /// the bundle root, so the first lookup *always* failed (logging a warning on
+    /// every single track load) and the third was unreachable. One lookup at the
+    /// place the files actually are is the whole job.
+    private func play(resource: String) {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: Self.musicExtension) else {
             #if DEBUG
-            if musicURL != nil {
-                print("✅ Found music in root directory")
-            } else {
-                print("⚠️ Not found in root, trying jetshot/Music...")
-            }
+            print("❌ Missing music resource in bundle: \(resource).\(Self.musicExtension)")
+            assertionFailure("Music file '\(resource).\(Self.musicExtension)' is referenced but not present in the app bundle")
             #endif
-
-            if musicURL == nil {
-                // Method 3: Try jetshot/Music path
-                musicURL = Bundle.main.url(forResource: resourceName, withExtension: "mp3", subdirectory: "jetshot/Music")
-                #if DEBUG
-                if musicURL != nil {
-                    print("✅ Found music in jetshot/Music")
-                }
-                #endif
-            }
+            return
         }
 
-        // Get the path to the music file
-        if let musicURL = musicURL {
-            do {
-                // Configure audio session for background music
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try AVAudioSession.sharedInstance().setActive(true)
+        do {
+            // `.ambient`, not `.playback`: game audio is non-primary, so it has to
+            // honour the ring/silent switch. `.playback` ignores it, which made the
+            // game play music out loud on a phone the player had deliberately
+            // silenced. `.ambient` also mixes with other apps by default, so an
+            // explicit .mixWithOthers option is not needed.
+            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
 
-                musicPlayer = try AVAudioPlayer(contentsOf: musicURL)
-                musicPlayer?.volume = musicVolume
-                musicPlayer?.delegate = self
-                musicPlayer?.prepareToPlay()
-                musicPlayer?.play()
+            // Stop the outgoing player explicitly rather than relying on it being
+            // torn down when the property is reassigned.
+            musicPlayer?.stop()
 
-                #if DEBUG
-                print("✅ Successfully playing music: \(trackName) at volume: \(musicVolume)")
-                #endif
-            } catch {
-                #if DEBUG
-                print("❌ Could not load music file: \(trackName), error: \(error)")
-                #endif
-            }
-        } else {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.volume = musicVolume
+            player.delegate = self
+            // Loop. Without this the player ran to the end of the file and
+            // audioPlayerDidFinishPlaying() advanced to the next track, which made
+            // setMusicForLevel()'s whole point — one specific track per level —
+            // evaporate the moment that track ended.
+            player.numberOfLoops = -1
+            player.prepareToPlay()
+            player.play()
+            musicPlayer = player
+        } catch {
             #if DEBUG
-            print("❌ Could not find music file: \(trackName) anywhere in bundle")
-            print("📦 Bundle path: \(Bundle.main.bundlePath)")
+            print("❌ Could not play music file \(resource).\(Self.musicExtension): \(error)")
             #endif
         }
-    }
-
-    private func playNextTrack() {
-        currentMusicTrack = (currentMusicTrack + 1) % musicTracks.count
-        playMusicTrack(index: currentMusicTrack)
     }
 
     deinit {
@@ -664,8 +650,11 @@ class SoundManager: NSObject {
 
 extension SoundManager: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        if flag && isMusicEnabled {
-            playNextTrack()
-        }
+        // Players loop indefinitely (numberOfLoops = -1), so reaching here at all
+        // means playback stopped for some reason other than the track ending.
+        // Restart the current track rather than advancing: which track plays is a
+        // property of the level, decided by setMusicForLevel(_:).
+        guard flag, isMusicEnabled, let resource = currentMusicResource else { return }
+        play(resource: resource)
     }
 }

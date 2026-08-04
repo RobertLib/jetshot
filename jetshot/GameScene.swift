@@ -4,17 +4,35 @@
 //
 //  Created by Robert Libšanský on 16.10.2025.
 //
-// WARNING: This file is large (3700+ lines). Consider refactoring into:
+// WARNING: This file is large (~3900 lines) and still wants splitting up:
 //  - CollisionHandler for physics collision logic
 //  - PowerUpHandler for power-up activation/deactivation
 //  - UIManager for UI setup and updates
-//  - WeaponSystem for shooting and weapon management
+//
+// Three pieces have already gone this way: `WeaponHeatSystem` (the overheat rule and its
+// gauge), `PowerUpTimerHUD` (the countdown bar stack) and `ExplosionFX` (the blast node).
+// `WeaponHeatSystem` records why they are pulled out as collaborators owning their own
+// state rather than as extensions on this class: `private` is file-scoped in Swift, so an
+// extension in another file would force this class's ~50 private properties open to the
+// whole module — against the convention here of justifying every non-private member.
+//
+// The three that remain are harder than the three that are done, and not for their size:
+// they are entangled with `score`, `lives`, `player` and the spawn managers, so each is
+// its own refactor with its own round of verification rather than a lift-and-shift.
+//
+// Two conventions worth knowing before editing:
+//  - Gameplay nodes and visual effects belong under `gameContentNode` (see
+//    `effectsParent`), never the scene: the scene keeps ticking while paused.
+//  - Time-based logic uses `gameTime`, not the `currentTime` passed to update(_:),
+//    which is absolute system time and runs through pauses and backgrounding.
 
 import SpriteKit
 import GameplayKit
 
-// Physics categories for collision detection
-struct PhysicsCategory {
+// Physics categories for collision detection.
+//
+// `nonisolated` for the same reason as GameConfiguration: these are constants.
+nonisolated struct PhysicsCategory {
     static let none: UInt32 = 0
     static let player: UInt32 = 0b1        // 1
     static let bullet: UInt32 = 0b10       // 2
@@ -28,7 +46,7 @@ struct PhysicsCategory {
 }
 
 // Explosion sizes for camera shake intensity
-enum ExplosionSize {
+nonisolated enum ExplosionSize {
     case small    // Small enemies, bullets - minimal shake
     case normal   // Regular enemies - moderate shake
     case large    // Large enemies, asteroids - strong shake
@@ -53,21 +71,52 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var enemyManager: EnemyManager!
     private var obstacleManager: ObstacleManager!
     private var powerUpManager: PowerUpManager!
-    private var bossManager: BossManager!
+    /// Not private so `jetshotTests` can put a boss on screen directly.
+    ///
+    /// In play the only route here is `spawnBoss()`, which fires once every wave of the
+    /// level has spawned *and* the playfield has stayed clear for
+    /// `levelCompletionDelay` — minutes of real time per level. Without this seam the
+    /// entire boss fight, and with it the completion gate for all 50 levels, is
+    /// unreachable from a test.
+    var bossManager: BossManager!
     private var asteroidManager: AsteroidManager?
     private var coinManager: CoinManager!
     private var scoreLabel: SKLabelNode!
+    private var scoreHUD: SKNode?
     private var score: Int = 0 {
         didSet {
-            scoreLabel.text = "Score: \(score)"
+            scoreLabel.text = "\(score)"
+            // A short overshoot on every gain makes scoring feel earned.
+            scoreLabel.removeAction(forKey: "scorePunch")
+            let up = SKAction.scale(to: 1.22, duration: 0.07)
+            up.timingMode = .easeOut
+            let down = SKAction.scale(to: 1.0, duration: 0.16)
+            down.timingMode = .easeOut
+            scoreLabel.run(.sequence([up, down]), withKey: "scorePunch")
         }
+    }
+
+    /// Read-only score, for `jetshotTests`.
+    ///
+    /// Scoring is the observable outcome of most gameplay rules — kills, multipliers,
+    /// the boss payout — and the only other place it surfaces is `scoreLabel`, which is
+    /// unnamed and carries a formatted string mid-animation.
+    var currentScore: Int {
+        return score
     }
 
     // Coin tracking
     private var coinsCollected: Int = 0
 
     // Boss system
-    private var isBossActive: Bool = false
+    //
+    // Only the "has the boss been spawned at all" latch lives here. Whether a boss is
+    // currently alive is `bossManager.isBossActive()`, which is what every other call
+    // site already asks. A second `isBossActive` field used to shadow it: set true in
+    // spawnBoss() and cleared only in willMove(from:), so from the moment the boss
+    // appeared it stayed true for the rest of the scene — silently suppressing every
+    // power-up HUD bar via showPowerUpTimer(), including in the window after the boss
+    // was already dead.
     private var bossSpawned: Bool = false
 
     // Level completion tracking
@@ -86,7 +135,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let invulnerabilityDuration: TimeInterval = GameConfiguration.invulnerabilityDuration
 
     // Timers
-    private var lastUpdateTime: TimeInterval = 0
+    //
+    // Everything below is measured against `gameTime`, an accumulated clock that
+    // only advances while the game is actually running and never jumps by more
+    // than `GameConfiguration.maxFrameDelta` in a single frame. The raw
+    // `currentTime` handed to update(_:) is absolute system time and keeps
+    // running through pauses and backgrounding, so using it directly made every
+    // interval below fire at once on resume.
+    private var gameTime: TimeInterval = 0
+    private var lastFrameTime: TimeInterval = 0
     private var lastShootTime: TimeInterval = 0
     private var lastCleanupTime: TimeInterval = 0  // For bullet cleanup optimization
     private let shootInterval: TimeInterval = GameConfiguration.defaultShootInterval
@@ -94,35 +151,51 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return player?.hasRapidFire == true ? GameConfiguration.rapidFireInterval : shootInterval
     }
 
-    // Weapon overheat system
-    private var weaponHeat: CGFloat = 0.0 // 0.0 to 1.0
-    private let maxHeat: CGFloat = GameConfiguration.maxHeat
-    private let heatPerShot: CGFloat = GameConfiguration.heatPerShot
-    private let cooldownRate: CGFloat = GameConfiguration.cooldownRate
-    private let overheatCooldownTime: TimeInterval = GameConfiguration.overheatCooldownTime
-    private var isOverheated: Bool = false
-    private var overheatStartTime: TimeInterval = 0
-    private var heatBar: SKShapeNode?
-    private var heatBarBackground: SKShapeNode?
-    private var heatBarLabel: SKLabelNode?
+    /// Weapon overheat rule and its HEAT gauge. See `WeaponHeatSystem` for why this is a
+    /// collaborator rather than an extension on this class.
+    ///
+    /// `lazy` so it can hand the scene to the system's `weak` back-reference, and a
+    /// non-optional so it cannot be read after teardown: unlike the spawn managers, this
+    /// is touched from `update(_:)` on every frame, and `willMove(from:)` clearing it
+    /// would open a window for a nil dereference. Its HUD nodes hang off `uiNode` and are
+    /// torn down with it.
+    private lazy var weaponHeat = WeaponHeatSystem(scene: self)
 
     // PowerUp timers and states
     private var scoreMultiplier: Int = 1
 
-    // PowerUp timer UI
-    private var powerUpTimerBars: [String: SKNode] = [:] // Dictionary to store timer bars by powerup name
+    /// The stack of power-up countdown bars. See `PowerUpTimerHUD`, which owns the bars
+    /// and their layer; the "not while a boss is up" rule stays here, in
+    /// `showPowerUpTimer(name:duration:color:icon:)`.
+    ///
+    /// `lazy` so the anchor closure can capture the scene. The closure is read on every
+    /// re-flow rather than cached, because the anchor moves with the scene height and the
+    /// top margin — see the note on `PowerUpTimerHUD.anchorY`.
+    private lazy var powerUpTimers = PowerUpTimerHUD(anchorY: { [weak self] in
+        guard let self = self else { return 0 }
+        return self.size.height - self.currentTopMargin - 50
+    })
 
     // Performance optimization - cache active objects to avoid enumerateChildNodes every frame
     private var activeEnemies: [ObjectIdentifier: Enemy] = [:]
     private var activeCoins: [ObjectIdentifier: Coin] = [:]
     private var activeVortexEnemies: [ObjectIdentifier: Enemy] = [:]
-    private var coinCacheRefreshCounter: Int = 0
-    private var cachedEnemyCount: Int = 0
     private var lastSlowMotionUpdateTime: TimeInterval = 0
     private var lastMagnetUpdateTime: TimeInterval = 0
-    private var lastVortexUpdateTime: TimeInterval = 0
+    // No throttle stamp for the vortex: `applyVortexGravitationalPull()` deliberately
+    // runs every frame (see the note there), so the one that used to sit here was never
+    // read.
 
     // MARK: - Cache Management
+
+    /// Number of enemies currently held in the cache.
+    ///
+    /// Exposed so `jetshotTests` can assert that every despawn path unregisters. The
+    /// cache holds *strong* references, so a path that forgets is a silent node leak —
+    /// which is exactly the bug `Enemy.despawn()` was introduced to close.
+    var activeEnemyCount: Int {
+        return activeEnemies.count
+    }
 
     /// Register enemy in cache for optimized updates
     func registerEnemy(_ enemy: Enemy) {
@@ -143,14 +216,81 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
-    /// Register coin in cache for optimized magnet updates
+    /// Register coin in cache for optimized magnet updates.
+    ///
+    /// There is no matching unregister: coins are evicted by `pruneCoinCache()` once
+    /// they leave the scene, because a coin has no reliable moment at which to remove
+    /// itself (its deinit cannot run while the cache still holds it).
     func registerCoin(_ coin: Coin) {
         activeCoins[ObjectIdentifier(coin)] = coin
     }
 
-    /// Unregister coin from cache
-    func unregisterCoin(_ coin: Coin) {
-        activeCoins.removeValue(forKey: ObjectIdentifier(coin))
+    // MARK: - Gameplay Clock
+
+    /// Single switch for "is the gameplay clock advancing".
+    ///
+    /// Pauses the three things that must stop together: `gameContentNode` (gameplay
+    /// nodes and effects), the power-up countdown bars and the physics
+    /// world. `uiNode` itself deliberately keeps running so the pause menu stays live.
+    private func setGameplayPaused(_ paused: Bool) {
+        gameContentNode?.isPaused = paused
+        powerUpTimers.isPaused = paused
+        physicsWorld.speed = paused ? 0 : 1.0
+    }
+
+    private var isGameplayPaused: Bool {
+        return gameContentNode?.isPaused ?? false
+    }
+
+    /// Schedules a power-up expiry on the gameplay clock.
+    ///
+    /// These used to be scheduled on the scene, whose actions keep advancing while the
+    /// game is paused — only `gameContentNode` is paused — so opening the pause menu
+    /// with a shield up burned the shield. `gameContentNode` is the clock that actually
+    /// stops, which is the same reason `Enemy.freeze(duration:)` hosts its detonation
+    /// timer there. Cancelling has to go through `cancelPowerUpExpiry(key:)` so both
+    /// sides agree on the host node.
+    private func schedulePowerUpExpiry(after duration: TimeInterval, key: String, action: @escaping () -> Void) {
+        guard let host = gameContentNode else { return }
+        host.removeAction(forKey: key)
+        let wait = SKAction.wait(forDuration: duration)
+        let deactivate = SKAction.run(action)
+        host.run(SKAction.sequence([wait, deactivate]), withKey: key)
+    }
+
+    private func cancelPowerUpExpiry(key: String) {
+        gameContentNode?.removeAction(forKey: key)
+    }
+
+    /// Runs a gameplay-timed action on the clock that actually stops when paused.
+    ///
+    /// `run(_:)` on the scene does *not* respect the pause — `setGameplayPaused(_:)`
+    /// pauses `gameContentNode`, the power-up countdown bars and the physics world, never the
+    /// scene itself, precisely so the pause menu stays live. Several delayed gameplay
+    /// effects were scheduled straight onto the scene anyway (two of them carrying a
+    /// comment claiming the opposite), so they kept firing behind the pause menu: the
+    /// clearest case was grabbing a nuke and pausing immediately, which went on
+    /// destroying enemies and adding score while the game was supposedly frozen.
+    ///
+    /// Falls back to the scene only if teardown has already cleared the node, matching
+    /// `effectsParent`.
+    private func runOnGameplayClock(_ action: SKAction, withKey key: String? = nil) {
+        let host = effectsParent
+        if let key = key {
+            host.run(action, withKey: key)
+        } else {
+            host.run(action)
+        }
+    }
+
+    /// Parent for gameplay visual effects.
+    ///
+    /// Effects must hang off `gameContentNode` rather than the scene. The scene keeps
+    /// running while the game is paused, so explosions, floating score, hit sparks,
+    /// lightning and touch ripples all used to carry on animating behind the pause
+    /// menu. Falls back to the scene if teardown has already cleared the node.
+    private var effectsParent: SKNode {
+        return gameContentNode ?? self
     }
 
     // iPad optimization - reduce particle effects on larger screens
@@ -182,39 +322,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     override func didMove(to view: SKView) {
         // Load level configuration immediately (lightweight) - must be first!
+        //
+        // getLevelConfig(for:) returns a non-optional LevelConfig and covers all 50
+        // levels explicitly, so there is nothing to validate here. The nil check that
+        // used to guard this (plus its on-screen error panel and bounce back to level
+        // select) could never run — `levelConfig != nil` is always true once a
+        // non-optional has been assigned to an implicitly unwrapped property.
         levelConfig = LevelManager.shared.getLevelConfig(for: currentLevel)
-
-        // Validate level config
-        guard levelConfig != nil else {
-            #if DEBUG
-            print("[ERROR] Failed to load level configuration for level \(currentLevel)")
-            assertionFailure("Level configuration missing for level \(currentLevel)")
-            #endif
-
-            // Show error message to user
-            let errorLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-            errorLabel.text = "Level \(currentLevel) Error"
-            errorLabel.fontSize = 24
-            errorLabel.fontColor = UITheme.Colors.dangerRed
-            errorLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
-            addChild(errorLabel)
-
-            let detailLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-            detailLabel.text = "Failed to load level data"
-            detailLabel.fontSize = 16
-            detailLabel.fontColor = UITheme.Colors.textSecondary
-            detailLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 20)
-            addChild(detailLabel)
-
-            // Return to level select after showing error
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                guard let self = self else { return }
-                let levelSelectScene = LevelSelectScene(size: self.size)
-                levelSelectScene.scaleMode = self.scaleMode
-                self.view?.presentScene(levelSelectScene, transition: SKTransition.fade(withDuration: 0.5))
-            }
-            return
-        }
 
         // Setup physics
         physicsWorld.gravity = .zero
@@ -230,6 +344,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         uiNode.name = "uiNode"
         uiNode.zPosition = 100
         addChild(uiNode)
+
+        // Layer for the power-up countdown bars, paused in step with gameplay.
+        powerUpTimers.install(on: uiNode)
 
         // Register for app lifecycle notifications
         NotificationCenter.default.addObserver(
@@ -266,6 +383,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Setup critical components first - add to game content node
         setupPlayer(view: view)
 
+        // Vignette between the playfield and the HUD: darkens the corners so the
+        // neon in the centre reads as bright instead of washed out.
+        NeonFX.attachGrade(to: self)
+
         // Setup UI on UI node
         setupUI(view: view)
 
@@ -276,8 +397,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 return
             }
 
+            // Re-lay the HUD now that the view has been through a layout pass;
+            // `safeAreaInsets` is still zero back in didMove(to:).
+            self.setupUI(view: view)
+
             // Add starfield (particle effect) - to game content node
-            self.gameContentNode.addChild(StarfieldHelper.createStarfield(for: self))
+            StarfieldHelper.addDepthLayers(to: self, parentNode: self.gameContentNode)
+            self.gameContentNode.addChild(
+                StarfieldHelper.createStarfield(for: self, parentNode: self.gameContentNode)
+            )
 
             // Add shooting stars and meteors for visual variety - to game content node
             self.gameContentNode.addChild(StarfieldHelper.createShootingStars(for: self))
@@ -307,8 +435,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             #endif
 
             // Pause the game and show level intro after everything is ready
-            self.gameContentNode.isPaused = true
-            self.physicsWorld.speed = 0
+            self.setGameplayPaused(true)
             self.showLevelIntro()
 
             // Start background music for current level
@@ -323,32 +450,48 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Update camera position to center of new size
         camera?.position = CGPoint(x: size.width / 2, y: size.height / 2)
 
-        // Get safe area bottom inset
-        let safeAreaBottomInset: CGFloat
-        if let windowScene = view.window?.windowScene {
-            safeAreaBottomInset = windowScene.windows.first?.safeAreaInsets.bottom ?? 0
-        } else {
-            safeAreaBottomInset = 0
-        }
-        safeAreaBottom = safeAreaBottomInset
+        safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)
 
         // Update player bounds
         player.updateBounds(sceneSize: size, safeAreaBottom: safeAreaBottom)
 
+        // Re-render the vignette for the new size
+        NeonFX.attachGrade(to: self)
+
         // Reposition UI elements
         setupUI(view: view)
 
-        // Update starfield position and size
-        if let starfield = childNode(withName: "starfield") as? SKEmitterNode {
-            StarfieldHelper.updateStarfield(starfield, for: self)
-        }
+        // Re-stack any live power-up bars. Their slots are derived from `size.height`
+        // and `currentTopMargin`, and `setupUI(view:)` above is what refreshes the
+        // margin — but it does not own the bars, so without this they keep the
+        // positions they were given for the *old* screen height and drift out from
+        // under the HUD they are supposed to hang below.
+        powerUpTimers.layout(animated: false)
 
-        // Update shooting stars and meteors position
-        if let shootingStars = childNode(withName: "shootingStars") as? SKEmitterNode {
-            StarfieldHelper.updateShootingStars(shootingStars, for: self)
-        }
-        if let meteors = childNode(withName: "meteors") as? SKEmitterNode {
-            StarfieldHelper.updateMeteors(meteors, for: self)
+        // Same for a boss health bar mid-fight: it hangs below the HUD margin too, and it
+        // was the one element in here that kept its spawn-time placement.
+        bossManager?.getBoss()?.layoutHealthBar(in: self)
+
+        // Update starfield, shooting stars and meteors for the new size.
+        //
+        // Looked up inside `gameContentNode`, which is where didMove(to:) parents them.
+        // These three used to be `childNode(withName:)` on the *scene*, and a name with
+        // no `//` prefix only matches immediate children — so all three lookups always
+        // returned nil and the whole resize path was dead. Every emitter kept the old
+        // screen's width and spawn line after a rotation or an iPad Split View resize.
+        if let background = gameContentNode {
+            if let starfield = background.childNode(withName: "starfield") as? SKEmitterNode {
+                StarfieldHelper.updateStarfield(starfield, for: self)
+            }
+            if let shootingStars = background.childNode(withName: "shootingStars") as? SKEmitterNode {
+                StarfieldHelper.updateShootingStars(shootingStars, for: self)
+            }
+            if let meteors = background.childNode(withName: "meteors") as? SKEmitterNode {
+                StarfieldHelper.updateMeteors(meteors, for: self)
+            }
+            // The slower depth layers carry the same width and spawn line. Rebuilt
+            // rather than tweaked: addDepthLayers replaces them by name.
+            StarfieldHelper.addDepthLayers(to: self, parentNode: background)
         }
 
         // Update pause overlay if it exists (when view resizes)
@@ -380,11 +523,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         gameContentNode?.removeAllActions()
         uiNode?.removeAllActions()
 
-        // CRITICAL: Stop all repeatForever actions in child nodes before removing
-        gameContentNode?.enumerateChildNodes(withName: "//") { node, _ in
+        // CRITICAL: Stop all repeatForever actions in child nodes before removing.
+        //
+        // The search string must be "//*", not "//": SpriteKit needs a name pattern
+        // after the recursive-search prefix, and "//" on its own matches *nothing*.
+        // This block silently did no work at all, which left every node whose
+        // repeating action strongly captured itself alive for the life of the process.
+        //
+        // Note "//" searches from the *root* of the tree, not from the receiver, so
+        // both calls below sweep the entire scene. Harmless here — teardown wants
+        // everything stopped — but never use "//*" to mean "just my own subtree".
+        gameContentNode?.enumerateChildNodes(withName: "//*") { node, _ in
             node.removeAllActions()
         }
-        uiNode?.enumerateChildNodes(withName: "//") { node, _ in
+        uiNode?.enumerateChildNodes(withName: "//*") { node, _ in
             node.removeAllActions()
         }
 
@@ -393,6 +545,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         uiNode?.removeAllChildren()
         pauseOverlay?.removeAllChildren()
         pauseOverlay?.removeFromParent()
+
+        // Tear the boss down explicitly before dropping the manager. This used to be
+        // left to BossManager's deinit, which ran at an arbitrary moment and touched
+        // SKNode state from a nonisolated context; doing it here keeps it on the main
+        // actor at a known point in teardown.
+        bossManager?.cleanup()
 
         // Clear manager references
         enemyManager = nil
@@ -405,42 +563,53 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Clear active object caches
         activeEnemies.removeAll()
         activeCoins.removeAll()
+        activeVortexEnemies.removeAll()
 
         // Clear player reference
         player = nil
 
         // Reset game state
-        isBossActive = false
         bossSpawned = false
         isGameStarted = false
         isTouching = false
+        // Also clears the guard on didChangeSize, which dereferences `player` — that
+        // has just been torn down, so a late resize must not be allowed through.
+        isInitialized = false
     }
 
     // MARK: - App Lifecycle
 
     @objc private func appWillResignActive() {
         // When app goes to background, automatically pause if game is running
-        if !gameContentNode.isPaused && isGameStarted {
+        if !isGameplayPaused && isGameStarted {
             togglePause()
         }
     }
 
     @objc private func appDidBecomeActive() {
-        // When app returns from background, ensure physics world speed matches pause state
-        if gameContentNode.isPaused {
-            // If game is paused, ensure physics is also stopped
-            physicsWorld.speed = 0
-            // Show pause overlay if missing
-            if pauseOverlay == nil {
+        // When app returns from background, re-assert the whole gameplay clock so
+        // physics speed and the power-up timer layer can't drift out of step with
+        // gameContentNode.
+        if isGameplayPaused {
+            setGameplayPaused(true)
+            // Only restore the pause menu for a genuine player-initiated pause.
+            //
+            // The `isGameStarted` guard matters: the level intro also runs with
+            // gameplay paused, and backgrounding the app during it used to land here
+            // with no overlay present, so the pause menu was raised over the intro.
+            // The intro then finished and startGame() unpaused without hiding it,
+            // leaving a full-screen scrim and a PAUSED panel sitting on top of live
+            // gameplay — with dead buttons, because every handler in touchesBegan is
+            // gated on gameContentNode.isPaused.
+            if isGameStarted && pauseOverlay == nil {
                 showPauseOverlay()
             }
         } else if isGameStarted {
-            // If game is running, ensure physics is active
-            physicsWorld.speed = 1.0
+            setGameplayPaused(false)
         }
 
         // Hide overlay if game is not paused but overlay is showing (edge case)
-        if pauseOverlay != nil && !gameContentNode.isPaused {
+        if pauseOverlay != nil && !isGameplayPaused {
             hidePauseOverlay()
         }
     }
@@ -448,37 +617,58 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     @objc private func handleMemoryWarning() {
         // Clear texture caches to free up memory
         ParallaxBackgroundHelper.clearTextureCache()
-        Player.clearTextureCache()
+        ParticleTexture.clearCache()
+        NeonFX.clearCaches()
+        SurfaceFX.clearCaches()
+        UITheme.clearCaches()
 
         // Clean up off-screen objects immediately
         cleanupOffScreenBullets()
 
-        // Clear cached enemies and coins to force refresh
-        activeEnemies.removeAll()
-        activeCoins.removeAll()
-        activeVortexEnemies.removeAll()
+        // Rebuild the entity caches from the live node tree.
+        //
+        // These only ever cache nodes that are already children of gameContentNode, so
+        // emptying them frees nothing — and leaving them empty broke things: unlike the
+        // enemy and coin caches, `activeVortexEnemies` has no "rebuild when empty" path
+        // of its own, so a memory warning used to switch off vortex bullet attraction
+        // for the rest of the level.
+        rebuildEntityCaches()
 
         #if DEBUG
-        print("⚠️ Memory warning received - cleared caches and cleaned up off-screen objects")
+        print("⚠️ Memory warning received - cleared texture caches and rebuilt entity caches")
         #endif
+    }
+
+    /// Re-derives `activeEnemies`, `activeVortexEnemies` and `activeCoins` from the
+    /// nodes currently in the scene.
+    private func rebuildEntityCaches() {
+        activeEnemies.removeAll()
+        activeVortexEnemies.removeAll()
+        activeCoins.removeAll()
+
+        gameContentNode?.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
+            if let enemy = node as? Enemy {
+                self?.registerEnemy(enemy)
+            }
+        }
+        gameContentNode?.enumerateChildNodes(withName: "coin") { [weak self] node, _ in
+            if let coin = node as? Coin {
+                self?.registerCoin(coin)
+            }
+        }
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        PlanetHelper.stopPlanetGeneration()
+        // Planet generation needs no explicit stop: the repeating action is keyed on
+        // gameContentNode, so it dies with the scene. The old
+        // PlanetHelper.stopPlanetGeneration() call was an empty no-op anyway.
     }
 
     // MARK: - Setup Methods
 
     private func setupPlayer(view: SKView) {
-        // Get safe area bottom inset
-        let safeAreaBottomInset: CGFloat
-        if let windowScene = view.window?.windowScene {
-            safeAreaBottomInset = windowScene.windows.first?.safeAreaInsets.bottom ?? 0
-        } else {
-            safeAreaBottomInset = 0
-        }
-        safeAreaBottom = safeAreaBottomInset
+        safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)
 
         player = Player(sceneSize: size, safeAreaBottom: safeAreaBottom)
 
@@ -491,7 +681,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func setupEnemyManager() {
         guard let config = levelConfig else {
-            print("ERROR: Cannot setup EnemyManager - levelConfig is nil")
+            assertionFailure("Cannot setup EnemyManager - levelConfig is nil")
             return
         }
         enemyManager = EnemyManager(scene: self, waves: config.waves)
@@ -499,7 +689,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func setupObstacleManager() {
         guard let config = levelConfig else {
-            print("ERROR: Cannot setup ObstacleManager - levelConfig is nil")
+            assertionFailure("Cannot setup ObstacleManager - levelConfig is nil")
             return
         }
         obstacleManager = ObstacleManager(scene: self, waves: config.obstacleWaves)
@@ -507,7 +697,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func setupPowerUpManager() {
         guard let config = levelConfig else {
-            print("ERROR: Cannot setup PowerUpManager - levelConfig is nil")
+            assertionFailure("Cannot setup PowerUpManager - levelConfig is nil")
             return
         }
         powerUpManager = PowerUpManager(scene: self, config: config.powerUpConfig)
@@ -526,7 +716,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func setupAsteroidManager() {
         guard let config = levelConfig else {
-            print("ERROR: Cannot setup AsteroidManager - levelConfig is nil")
+            assertionFailure("Cannot setup AsteroidManager - levelConfig is nil")
             return
         }
         if !config.asteroidWaves.isEmpty {
@@ -542,36 +732,60 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func setupUI(view: SKView) {
         // Remove old UI elements if they exist
         scoreLabel?.removeFromParent()
+        uiNode.childNode(withName: "hudScrim")?.removeFromParent()
         pauseButton?.removeFromParent()
         livesNodes.forEach { $0.removeFromParent() }
         livesNodes.removeAll()
-        heatBar?.removeFromParent()
-        heatBarBackground?.removeFromParent()
-        heatBarLabel?.removeFromParent()
+        weaponHeat.removeHUD()
 
-        scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
+        scoreHUD?.removeFromParent()
+
+        // Calculate consistent top margin for all UI elements.
+        //
+        // `GameConfiguration.safeAreaTop(in:)` reads the inset from the view itself
+        // before falling back to its window: `view.window` is still nil while the scene
+        // is first presented, and falling back to 0 used to park the score at 40pt
+        // dead-centre — directly underneath the Dynamic Island, where it was completely
+        // invisible on every notched iPhone. `Boss` shared that bug until the same helper
+        // took over there too.
+        let topMargin = GameConfiguration.topMargin(in: view)
+
+        // Scrim behind the HUD. Planets and nebulae drift through the top of the
+        // playfield, and instrumentation has to stay readable over all of them.
+        let scrim = SKSpriteNode(
+            texture: UITheme.topScrimTexture(width: size.width, height: topMargin + 46),
+            size: CGSize(width: size.width, height: topMargin + 46)
+        )
+        scrim.name = "hudScrim"
+        scrim.position = CGPoint(x: size.width / 2, y: size.height - (topMargin + 46) / 2)
+        scrim.zPosition = -1
+        uiNode.addChild(scrim)
+
+        // Score sits in its own framed capsule so it reads as instrumentation
+        // rather than floating text, and is clear of the sensor housing.
+        let hud = SKNode()
+        hud.position = CGPoint(x: size.width / 2, y: size.height - topMargin)
+        hud.zPosition = 100
+        uiNode.addChild(hud)
+        scoreHUD = hud
+
+        scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontNumeric)
         scoreLabel.fontSize = UITheme.Typography.sizeRegular
-        scoreLabel.fontColor = UITheme.Colors.textPrimary
+        scoreLabel.fontColor = UITheme.Colors.primaryCyanLight
         scoreLabel.verticalAlignmentMode = .center
+        scoreLabel.horizontalAlignmentMode = .center
+        scoreLabel.text = "\(score)"
+        scoreLabel.zPosition = 2
+        hud.addChild(scoreLabel)
 
-        // Calculate safe area top inset
-        let safeAreaTop: CGFloat
-        if let windowScene = view.window?.windowScene {
-            safeAreaTop = windowScene.windows.first?.safeAreaInsets.top ?? 0
-        } else {
-            safeAreaTop = 0
-        }
-
-        // Calculate consistent top margin for all UI elements
-        // On iPhone with safe area (Dynamic Island), this will be safe area + 30
-        // On iPad/Mac with no/small safe area, this ensures minimum 50 points from top
-        let topMargin = max(safeAreaTop + 20, 40)
-
-        // Position label below safe area - centered vertically with hearts and button
-        scoreLabel.position = CGPoint(x: size.width / 2, y: size.height - topMargin)
-        scoreLabel.text = "Score: \(score)"
-        scoreLabel.zPosition = 100
-        uiNode.addChild(scoreLabel)
+        let scoreCaption = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        scoreCaption.text = "SCORE"
+        scoreCaption.fontSize = 9
+        scoreCaption.fontColor = UITheme.Colors.primaryCyan.withAlphaComponent(0.65)
+        scoreCaption.verticalAlignmentMode = .center
+        scoreCaption.position = CGPoint(x: 0, y: 19)
+        scoreCaption.zPosition = 2
+        hud.addChild(scoreCaption)
 
         // Setup lives display (same height as score)
         updateLivesDisplay(topMargin: topMargin)
@@ -580,7 +794,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         setupPauseButton(topMargin: topMargin)
 
         // Setup heat bar
-        setupHeatBar(topMargin: topMargin)
+        weaponHeat.installHUD(on: uiNode, sceneWidth: size.width)
     }
 
     private func updateLivesDisplay(topMargin: CGFloat) {
@@ -605,11 +819,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             uiNode.addChild(ship)
             livesNodes.append(ship)
         }
-    }
-
-    private func createPlayerShip(size: CGFloat) -> SKShapeNode {
-        // Simplified version for compatibility
-        return createDetailedPlayerShip(size: size)
     }
 
     private func createDetailedPlayerShip(size: CGFloat) -> SKShapeNode {
@@ -915,8 +1124,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func startGame() {
         isGameStarted = true
-        gameContentNode.isPaused = false
-        physicsWorld.speed = 1.0
+        setGameplayPaused(false)
+
+        // Never hand control back with a pause menu still on screen. Nothing should be
+        // able to put one there before the level starts, but the overlay's buttons are
+        // all gated on gameContentNode.isPaused, so an overlay that outlives the pause
+        // is unreachable dead UI covering the playfield — cheap to rule out here.
+        if pauseOverlay != nil {
+            hidePauseOverlay()
+        }
 
         // Play level start sound
         SoundManager.shared.playLevelStartSound(on: self)
@@ -962,10 +1178,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         self.pauseButton = pauseButton
     }
 
+    private static let pauseOverlayName = "pauseOverlay"
+
     private func showPauseOverlay() {
         guard pauseOverlay == nil else { return }
 
+        // Sweep away an overlay that is still playing its dismissal fade.
+        // `hidePauseOverlay()` clears `pauseOverlay` up front so the game can be
+        // re-paused immediately, but leaves the node in the tree for 0.4s to fade.
+        // Tapping RESUME and then the pause button straight away therefore stacked a
+        // fresh panel underneath a fading scrim.
+        uiNode?.childNode(withName: Self.pauseOverlayName)?.removeFromParent()
+
         let overlay = SKNode()
+        overlay.name = Self.pauseOverlayName
         overlay.zPosition = 10000
 
         // Semi-transparent background
@@ -977,9 +1203,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Fade in background
         background.run(SKAction.fadeAlpha(to: 0.7, duration: 0.3))
 
-        // Pause panel - increased height to accommodate retry button
+        // Pause panel - height accommodates retry and settings buttons
         let panelWidth: CGFloat = min(size.width - 60, 300)
-        let panelHeight: CGFloat = 350
+        let panelHeight: CGFloat = 410
         let panel = SKShapeNode(rectOf: CGSize(width: panelWidth, height: panelHeight), cornerRadius: 25)
         panel.fillColor = UIColor(red: 0.1, green: 0.15, blue: 0.25, alpha: 0.95)
         panel.strokeColor = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0) // Brighter cyan border
@@ -1048,7 +1274,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             width: 220,
             name: "resumeButton"
         )
-        resumeButton.position = CGPoint(x: 0, y: 24)
+        resumeButton.position = CGPoint(x: 0, y: 54)
         panel.addChild(resumeButton)
 
         // Retry button
@@ -1058,11 +1284,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             width: 220,
             name: "pauseRetryButton"
         )
-        retryButton.position = CGPoint(x: 0, y: -42)
+        retryButton.position = CGPoint(x: 0, y: -12)
         panel.addChild(retryButton)
 
+        // Settings, reachable mid-level: muting only from the main menu would mean
+        // abandoning a run to turn the music down.
+        let settingsButton = createPauseMenuButton(
+            text: "SETTINGS",
+            color: UIColor(red: 0.35, green: 0.6, blue: 0.75, alpha: 1.0),
+            width: 220,
+            name: "pauseSettingsButton"
+        )
+        settingsButton.position = CGPoint(x: 0, y: -78)
+        panel.addChild(settingsButton)
+
         // Secondary buttons container
-        let secondaryButtonY: CGFloat = -108
+        let secondaryButtonY: CGFloat = -144
 
         let levelsButton = createPauseMenuButton(
             text: "LEVELS",
@@ -1119,19 +1356,70 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func hidePauseOverlay() {
         guard let overlay = pauseOverlay else { return }
+        pauseOverlay = nil
+
+        // Strip the names off the outgoing overlay before it fades. Touch dispatch in
+        // this scene is name-based (`nodes(at:)` + name matching), so a scrim and six
+        // buttons that are still in the tree but no longer the live overlay must stop
+        // answering to those names.
+        overlay.name = nil
+        Self.clearNames(underDescendantsOf: overlay)
 
         // Animate panel exit - just fade out, no scaling to avoid position change
         overlay.run(SKAction.sequence([
             SKAction.fadeOut(withDuration: 0.4),
             SKAction.removeFromParent()
         ]))
+    }
 
-        pauseOverlay = nil
+    /// Clears `name` on every descendant of `node`, and nothing else.
+    ///
+    /// Hand-rolled on purpose. This used to be
+    /// `overlay.enumerateChildNodes(withName: "//*")`, but the `//` prefix makes
+    /// SpriteKit search from the *root* of the tree rather than from the receiver, so
+    /// the call walked the whole scene and wiped the name off every node in it — the
+    /// pause button first among them. Touch dispatch is name-based, so dismissing the
+    /// pause menu once left the button unable to pause ever again (and broke every
+    /// other name lookup in the scene: `player`, `enemy`, `starfield`, the settings
+    /// panel).
+    private static func clearNames(underDescendantsOf node: SKNode) {
+        for child in node.children {
+            child.name = nil
+            clearNames(underDescendantsOf: child)
+        }
+    }
+
+    /// The live pause menu's button with this name, or nil if the menu is not up.
+    private func pauseMenuButton(named name: String) -> SKShapeNode? {
+        guard let overlay = pauseOverlay else { return nil }
+        return Self.descendant(of: overlay, named: name)
+    }
+
+    /// First descendant of `node` — depth-first, `node` itself excluded — named `name`
+    /// and of type `T`.
+    ///
+    /// Hand-rolled for the same reason `clearNames(underDescendantsOf:)` is: neither
+    /// spelling of `childNode(withName:)` scopes a search to a subtree. A bare name
+    /// matches *only immediate children*, and the pause buttons are grandchildren of the
+    /// overlay (overlay → panel → button), so `overlay.childNode(withName: "resumeButton")`
+    /// returns nil. Prefixing `//` finds them, but by searching from the root of the whole
+    /// tree — it only happened to be right because these names are unique to the live
+    /// overlay and `hidePauseOverlay()` strips them off dismissed ones. That is a lot of
+    /// weight for an accident to carry, so search the subtree properly instead.
+    ///
+    /// The type filter is load-bearing, not decoration: `createPauseMenuButton` puts the
+    /// same name on the button *and* on its label, and the callers all want the shape.
+    private static func descendant<T: SKNode>(of node: SKNode, named name: String) -> T? {
+        for child in node.children {
+            if child.name == name, let match = child as? T { return match }
+            if let match: T = descendant(of: child, named: name) { return match }
+        }
+        return nil
     }
 
     private func handleResumeButton() {
         // Button press animation
-        if let resumeButton = pauseOverlay?.childNode(withName: "//resumeButton") as? SKShapeNode {
+        if let resumeButton = pauseMenuButton(named: "resumeButton") {
             let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
             let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
             resumeButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
@@ -1142,7 +1430,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func handlePauseRetryButton() {
         // Button press animation
-        if let retryButton = pauseOverlay?.childNode(withName: "//pauseRetryButton") as? SKShapeNode {
+        if let retryButton = pauseMenuButton(named: "pauseRetryButton") {
             let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
             let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
             retryButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
@@ -1153,7 +1441,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func handlePauseLevelsButton() {
         // Button press animation
-        if let levelsButton = pauseOverlay?.childNode(withName: "//pauseLevelsButton") as? SKShapeNode {
+        if let levelsButton = pauseMenuButton(named: "pauseLevelsButton") {
             let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
             let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
             levelsButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
@@ -1164,13 +1452,34 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func handlePauseMenuButton() {
         // Button press animation
-        if let menuButton = pauseOverlay?.childNode(withName: "//pauseMenuButton") as? SKShapeNode {
+        if let menuButton = pauseMenuButton(named: "pauseMenuButton") {
             let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
             let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
             menuButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
                 self?.goToMenu()
             }
         }
+    }
+
+    private func handlePauseSettingsButton() {
+        // Button press animation
+        if let settingsButton = pauseMenuButton(named: "pauseSettingsButton") {
+            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
+            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
+            settingsButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
+                self?.showSettingsOverlay()
+            }
+        }
+    }
+
+    /// Presents the settings panel over the pause menu.
+    ///
+    /// Hosted on `uiNode`, which is deliberately never paused — the panel has to stay
+    /// interactive while gameplay is frozen.
+    private func showSettingsOverlay() {
+        guard let uiNode = uiNode,
+              uiNode.childNode(withName: SettingsOverlay.nodeName) == nil else { return }
+        uiNode.addChild(SettingsOverlay(sceneSize: size))
     }
 
     private func goToMenu() {
@@ -1186,23 +1495,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let gameScene = GameScene(size: view.bounds.size)
         gameScene.scaleMode = scaleMode
         gameScene.currentLevel = currentLevel
+
+        // Carry the arsenal over, the same way every other route into GameScene does
+        // (GameOverScene, LevelSelectScene, LevelCompleteScene, StoryScene). Without
+        // this, retrying from the pause menu silently dropped the player back to one
+        // bullet and no side missiles, while retrying after dying kept them.
+        gameScene.startingBulletCount = startingBulletCount
+        gameScene.startingSideMissileCount = startingSideMissileCount
+
         let transition = SKTransition.fade(withDuration: 0.5)
         view.presentScene(gameScene, transition: transition)
     }
 
     private func togglePause() {
-        // Toggle pause state on game content node
-        gameContentNode.isPaused.toggle()
+        let willPause = !isGameplayPaused
+        setGameplayPaused(willPause)
 
-        if gameContentNode.isPaused {
-            // Pause physics world to stop all physics-based movement
-            physicsWorld.speed = 0
-            // Show pause overlay when paused
+        if willPause {
             showPauseOverlay()
         } else {
-            // Resume physics world
-            physicsWorld.speed = 1.0
-            // Hide pause overlay when resumed
             hidePauseOverlay()
         }
     }
@@ -1215,6 +1526,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Check if pause button was tapped (only when game has started)
         let nodesAtPoint = nodes(at: location)
+
+        // The settings panel is modal, so it takes every tap while it is up — before
+        // the pause-menu handlers below, and before any gameplay touch.
+        if let settings = uiNode?.childNode(withName: SettingsOverlay.nodeName) as? SettingsOverlay {
+            let topName = nodesAtPoint.first(where: { $0.name != nil })?.name
+            settings.handleTap(named: topName)
+            return
+        }
 
         // First check for interactive elements (buttons)
         for node in nodesAtPoint {
@@ -1249,6 +1568,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     HapticManager.shared.lightTap()
                     SoundManager.shared.playButtonClickSound(on: self)
                     handlePauseMenuButton()
+                    return
+                }
+                if node.name == "pauseSettingsButton" || node.parent?.name == "pauseSettingsButton" {
+                    HapticManager.shared.lightTap()
+                    SoundManager.shared.playButtonClickSound(on: self)
+                    handlePauseSettingsButton()
                     return
                 }
             }
@@ -1300,10 +1625,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isTouching = false
     }
 
-    private var lastRippleTime: TimeInterval = 0
+    // Negative sentinel so the very first tap of a level still gets a ripple:
+    // `gameTime` starts at 0, so a 0 here would swallow it.
+    private var lastRippleTime: TimeInterval = -1
 
     private func spawnTouchRipple(at position: CGPoint) {
-        let now = lastUpdateTime
+        let now = gameTime
         // Throttle to avoid spawning too many rings during drag
         guard now - lastRippleTime > 0.08 else { return }
         lastRippleTime = now
@@ -1314,7 +1641,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ring.fillColor = UIColor(white: 1.0, alpha: 0.05)
         ring.lineWidth = 1.2
         ring.zPosition = 1000
-        addChild(ring)
+        effectsParent.addChild(ring)
 
         let expand = SKAction.scale(to: 2.5, duration: 0.35)
         let fade   = SKAction.fadeOut(withDuration: 0.35)
@@ -1331,30 +1658,49 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func shoot() {
         // Check if weapons are overheated
-        if isOverheated {
+        if weaponHeat.isOverheated {
             return
         }
 
-        // If lightning weapon is active, use lightning attack
+        // If lightning weapon is active, use lightning attack.
+        //
+        // Returns before `registerShot`, so lightning is deliberately exempt from the
+        // overheat rule — the one weapon that is. It is a short-lived power-up that clears
+        // the screen and lands 15 boss hits per trigger-pull, and its whole point is that
+        // it is not rationed; the gauge exists to ration *sustained* fire from the
+        // default guns. Left where the lockout check above still covers it, so a
+        // pre-existing overheat is not cancelled by picking one up.
+        //
+        // Note the gauge freezes rather than drains while lightning fires: `isFiring` in
+        // update(_:) is true, so `WeaponHeatSystem.update` skips cooling. Any heat carried
+        // in resumes cooling the moment the trigger is released.
         if player.hasLightningWeapon {
             shootLightning()
             return
         }
 
-        // Add heat from shooting
-        weaponHeat += heatPerShot
-        if weaponHeat >= maxHeat {
-            weaponHeat = maxHeat
-            triggerOverheat(currentTime: lastUpdateTime)
-            return
-        }
-
-        updateHeatBar()
+        // Add heat from shooting. The shot that tips the gauge over still fires — see
+        // `WeaponHeatSystem.registerShot(currentTime:)`.
+        weaponHeat.registerShot(currentTime: gameTime)
 
         let bullets = player.shoot()
 
         // Play shoot sound
         SoundManager.shared.playShootSound(on: self)
+
+        // Muzzle flash and a short recoil dip: firing should be felt, not just
+        // observed. Both are extremely short so rapid fire doesn't turn strobey.
+        let muzzle = NeonFX.flashPoint(
+            at: CGPoint(x: player.position.x, y: player.position.y + 20),
+            radius: 13,
+            color: UIColor(red: 0.7, green: 1.0, blue: 0.95, alpha: 1.0),
+            duration: 0.1,
+            growTo: 1.5
+        )
+        muzzle.zPosition = 12
+        gameContentNode.addChild(muzzle)
+
+        player.applyRecoil()
 
         for bullet in bullets {
             gameContentNode.addChild(bullet)
@@ -1404,7 +1750,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             sceneSize: size,
             count: Int.random(in: 4...6)
         )
-        addChild(lightning)
+        effectsParent.addChild(lightning)
 
         // Damage all enemies on screen
         gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
@@ -1437,12 +1783,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     // Boss defeated
                     self.addScore(result.points)
 
-                    // Wait for boss defeat animation using SKAction (respects pause)
+                    // Same audio cue as a bullet kill — this path was silent.
+                    SoundManager.shared.playBossDefeatSound(on: self)
+
+                    // Wait for the boss defeat animation, on the gameplay clock so a
+                    // pause actually holds it.
                     let wait = SKAction.wait(forDuration: 2.2)
                     let startExit = SKAction.run { [weak self] in
                         self?.startPlayerExitAnimation()
                     }
-                    run(SKAction.sequence([wait, startExit]), withKey: "bossDefeatTransition")
+                    runOnGameplayClock(SKAction.sequence([wait, startExit]), withKey: "bossDefeatTransition")
                     break
                 }
             }
@@ -1565,15 +1915,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         // Barrier hit enemy
-        if firstBody.categoryBitMask == PhysicsCategory.barrier &&
-           secondBody.categoryBitMask == PhysicsCategory.enemy {
-            barrierDidCollideWithEnemy(enemy: secondBody.node as? Enemy)
+        //
+        // `barrier` (256) outranks every other category, so the sort above always puts
+        // it in `secondBody` — never in `firstBody`. Testing it as `firstBody` (the
+        // previous shape of these two branches) could not match, which left the whole
+        // barrier power-up as decoration: four rotating segments that destroyed nothing
+        // and blocked nothing, despite the physics bodies being wired up correctly.
+        if firstBody.categoryBitMask == PhysicsCategory.enemy &&
+           secondBody.categoryBitMask == PhysicsCategory.barrier {
+            // A Boss also carries the `enemy` category but is not an `Enemy`, so the
+            // cast fails and a boss shrugs the barrier off instead of dying to it.
+            barrierDidCollideWithEnemy(enemy: firstBody.node as? Enemy)
         }
 
         // Barrier hit enemy bullet
-        if firstBody.categoryBitMask == PhysicsCategory.barrier &&
-           secondBody.categoryBitMask == PhysicsCategory.enemyBullet {
-            barrierDidCollideWithEnemyBullet(bullet: secondBody.node as? SKShapeNode)
+        if firstBody.categoryBitMask == PhysicsCategory.enemyBullet &&
+           secondBody.categoryBitMask == PhysicsCategory.barrier {
+            barrierDidCollideWithEnemyBullet(bullet: firstBody.node as? SKShapeNode)
         }
     }
 
@@ -1695,12 +2053,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             createHitEffect(at: enemy.position)
             HapticManager.shared.lightTap()
 
-            // Flash effect to show damage
-            let flash = SKAction.sequence([
-                SKAction.fadeAlpha(to: 0.3, duration: 0.1),
-                SKAction.fadeAlpha(to: 1.0, duration: 0.1)
-            ])
-            enemy.run(flash)
+            enemy.flashDamage()
         }
     }
 
@@ -1722,20 +2075,26 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // Boss defeated - add points
             addScore(result.points)
 
-            // Show floating score
-            let scoreText = "+\(result.points)"
+            // Show floating score.
+            //
+            // Multiplied, like every other score popup: `addScore` awards
+            // `points * scoreMultiplier`, and this line used to print the raw points.
+            // Power-ups keep spawning during a boss fight, so with SCORE x2 up the
+            // kill that ended the level reported half of what it actually paid.
+            let scoreText = "+\(result.points * scoreMultiplier)"
             showFloatingText(scoreText, at: boss.position, color: UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0), fontSize: 32)
 
             // Play boss defeat sound
             SoundManager.shared.playBossDefeatSound(on: self)
 
-            // Wait for boss defeat animation to complete using SKAction (respects pause)
+            // Wait for the boss defeat animation to complete, on the gameplay clock so
+            // a pause actually holds it.
             // (8 explosions * 0.2s + final explosion fade 0.5s = 2.1s)
             let wait = SKAction.wait(forDuration: 2.2)
             let startExit = SKAction.run { [weak self] in
                 self?.startPlayerExitAnimation()
             }
-            run(SKAction.sequence([wait, startExit]), withKey: "bossDefeatToExit")
+            runOnGameplayClock(SKAction.sequence([wait, startExit]), withKey: "bossDefeatToExit")
         } else {
             // Boss took damage but still alive
             createHitEffect(at: boss.position)
@@ -1833,29 +2192,38 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func cancelRemovedPowerUpTimers() {
-        // Cancel powerup timers only for powerups that were removed
+        // Cancel the pending expiry AND drop the HUD bar for every power-up that is
+        // no longer active. Previously only the action was cancelled, so a bar for a
+        // power-up lost to degradePowerUps() kept counting down on screen.
         if !player.hasShield {
-            removeAction(forKey: "shieldDeactivation")
+            cancelPowerUpExpiry(key: "shieldDeactivation")
+            removePowerUpTimer(named: "shield")
         }
         if !player.hasLightningWeapon {
-            removeAction(forKey: "lightningDeactivation")
+            cancelPowerUpExpiry(key: "lightningDeactivation")
+            removePowerUpTimer(named: "lightning")
         }
         if !player.hasRapidFire {
-            removeAction(forKey: "rapidFireDeactivation")
+            cancelPowerUpExpiry(key: "rapidFireDeactivation")
+            removePowerUpTimer(named: "rapidFire")
         }
         if !player.hasMagnet {
-            removeAction(forKey: "magnetDeactivation")
+            cancelPowerUpExpiry(key: "magnetDeactivation")
+            removePowerUpTimer(named: "magnet")
         }
         if !player.hasSlowMotion {
-            removeAction(forKey: "slowMotionDeactivation")
+            cancelPowerUpExpiry(key: "slowMotionDeactivation")
+            removePowerUpTimer(named: "slowMotion")
             resetEntitySpeeds()
         }
         if !player.hasScoreMultiplier {
-            removeAction(forKey: "scoreMultiplierDeactivation")
+            cancelPowerUpExpiry(key: "scoreMultiplierDeactivation")
+            removePowerUpTimer(named: "scoreMultiplier")
             scoreMultiplier = 1
         }
         if !player.hasBarrier {
-            removeAction(forKey: "barrierDeactivation")
+            cancelPowerUpExpiry(key: "barrierDeactivation")
+            removePowerUpTimer(named: "barrier")
         }
     }
 
@@ -1878,8 +2246,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
         }
 
-        // Play hit animation and activate invulnerability
-        player.playHitAnimation()
+        // Activate invulnerability. The separate `player.playHitAnimation()` call that
+        // used to sit here ran a second, unkeyed blink over the same `alpha` as the
+        // invulnerability blink below, so the two fought for the first 0.6s.
         activateInvulnerability()
     }
 
@@ -1901,13 +2270,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         HapticManager.shared.heavyTap()
 
         handlePlayerDamage()
-    }
-
-    private func bulletDidCollideWithObstacle(bullet: SKShapeNode?) {
-        guard let bullet = bullet else { return }
-
-        // Simply remove the bullet - no explosion for bullet hitting obstacle
-        bullet.removeFromParent()
     }
 
     private func barrierDidCollideWithEnemy(enemy: Enemy?) {
@@ -1964,28 +2326,29 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         bullet.removeFromParent()
     }    // Helper method for small hit effect (less intense than enemy explosion)
     private func createSmallHitEffect(at position: CGPoint) {
-        // Create small particles
-        for _ in 0..<3 {
-            let particle = SKShapeNode(circleOfRadius: 2)
-            particle.fillColor = UIColor(red: 1.0, green: 0.9, blue: 0.6, alpha: 1.0)
-            particle.strokeColor = .clear
-            particle.position = position
-            particle.zPosition = 100
+        // Sparks fan back toward the shooter, which is what a deflected round
+        // actually does and reads far better than particles going every way.
+        let spark = NeonFX.sparks(
+            at: position,
+            count: Int(6 * particleMultiplier),
+            color: UIColor(red: 1.0, green: 0.88, blue: 0.5, alpha: 1.0),
+            speed: 26,
+            spreadAngle: .pi * 1.1,
+            baseAngle: -.pi / 2,
+            length: 5,
+            lifetime: 0.22
+        )
+        spark.zPosition = 100
+        effectsParent.addChild(spark)
 
-            addChild(particle)
-
-            let angle = CGFloat.random(in: 0...(2 * .pi))
-            let distance = CGFloat.random(in: 10...20)
-            let dx = cos(angle) * distance
-            let dy = sin(angle) * distance
-
-            let move = SKAction.moveBy(x: dx, y: dy, duration: 0.2)
-            let fadeOut = SKAction.fadeOut(withDuration: 0.2)
-            let group = SKAction.group([move, fadeOut])
-            let remove = SKAction.removeFromParent()
-
-            particle.run(SKAction.sequence([group, remove]))
-        }
+        let flash = NeonFX.flashPoint(
+            at: position,
+            radius: 7,
+            color: UIColor(red: 1.0, green: 0.95, blue: 0.75, alpha: 1.0),
+            duration: 0.13
+        )
+        flash.zPosition = 100
+        effectsParent.addChild(flash)
     }
 
     // MARK: - PowerUp System
@@ -2007,12 +2370,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Apply powerup effect based on type
         switch powerUp.powerUpType {
+        // The three stacking power-ups below can be picked up while already maxed out.
+        // They used to be swallowed in complete silence, which reads as the pickup
+        // having failed to register; `showMaxedOutFeedback` says "MAX" instead so the
+        // player knows the cap — not a dropped input — is what happened.
         case .extraLife:
             if lives < GameConfiguration.maxLives {
                 lives += 1
                 SoundManager.shared.playExtraLifeSound(on: self)
                 HapticManager.shared.heavyTap()
                 showFloatingText("+1 LIFE", at: powerUp.position, color: UIColor(red: 0.0, green: 1.0, blue: 0.3, alpha: 1.0), fontSize: 18)
+            } else {
+                showMaxedOutFeedback("LIVES MAX", at: powerUp.position)
             }
 
         case .multiShot:
@@ -2021,14 +2390,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 SoundManager.shared.playMultiShotActivateSound(on: self)
                 HapticManager.shared.lightTap()
                 showFloatingText("MULTI SHOT", at: powerUp.position, color: UIColor(red: 0.2, green: 1.0, blue: 0.8, alpha: 1.0), fontSize: 18)
+            } else {
+                showMaxedOutFeedback("GUNS MAX", at: powerUp.position)
             }
 
         case .sideMissiles:
-            if player.sideMissileCount < 2 {
+            // Was a hardcoded 2 while every other cap reads from GameConfiguration —
+            // changing maxSideMissileCount silently had no effect here.
+            if player.sideMissileCount < GameConfiguration.maxSideMissileCount {
                 player.sideMissileCount += 1
                 SoundManager.shared.playMissileSound(on: self)
                 HapticManager.shared.lightTap()
                 showFloatingText("SIDE MISSILES", at: powerUp.position, color: UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0), fontSize: 18)
+            } else {
+                showMaxedOutFeedback("MISSILES MAX", at: powerUp.position)
             }
 
         case .shield:
@@ -2096,7 +2471,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             color: powerUp.powerUpType.color,
             particleCount: 50
         )
-        addChild(burstEffect)
+        effectsParent.addChild(burstEffect)
 
         // Animate powerup collection
         powerUp.collect()
@@ -2129,7 +2504,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         HapticManager.shared.lightTap()
 
         // Animate coin flying to score label
-        coin.collect(scorePosition: scoreLabel.position)
+        coin.collect(scorePosition: scoreHUD?.position ?? CGPoint(x: size.width / 2, y: size.height - currentTopMargin))
     }
 
     private func bulletDidCollideWithAsteroid(bullet: SKShapeNode?, asteroid: Asteroid?) {
@@ -2167,8 +2542,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Check if player is invulnerable or has shield
         if isInvulnerable || player.hasShield {
             if player.hasShield {
-                // Shield absorbs the hit
-                player.hasShield = false
+                // Shield absorbs the hit, but an asteroid strike consumes it outright
+                // (unlike enemy contact, which the shield simply shrugs off).
+                deactivateShield()
                 HapticManager.shared.mediumTap()
             }
 
@@ -2205,20 +2581,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "shield", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), icon: "SHIELD")
 
-        // Cancel any previous shield deactivation
-        removeAction(forKey: "shieldDeactivation")
-
-        // Deactivate shield after duration using SKAction (respects pause)
-        let wait = SKAction.wait(forDuration: duration)
-        let deactivate = SKAction.run { [weak self] in
-            guard let self = self else { return }
-            if self.player.hasShield {
-                self.player.hasShield = false
-                // Play shield deactivate sound
-                SoundManager.shared.playShieldDeactivateSound(on: self)
-            }
+        schedulePowerUpExpiry(after: duration, key: "shieldDeactivation") { [weak self] in
+            self?.deactivateShield()
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "shieldDeactivation")
+    }
+
+    /// Single exit point for the shield, so every path that drops it also cancels the
+    /// pending expiry and clears its HUD bar. Asteroid collisions used to flip
+    /// `player.hasShield` directly, which left the countdown bar ticking down on a
+    /// shield that no longer existed and let the stale expiry action fire later.
+    private func deactivateShield() {
+        guard player.hasShield else { return }
+
+        player.hasShield = false
+        cancelPowerUpExpiry(key: "shieldDeactivation")
+        removePowerUpTimer(named: "shield")
+        SoundManager.shared.playShieldDeactivateSound(on: self)
     }
 
     private func activateLightningWeapon() {
@@ -2228,18 +2606,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "lightning", duration: duration, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), icon: "LIGHTNING")
 
-        // Cancel any previous lightning weapon deactivation
-        removeAction(forKey: "lightningDeactivation")
-
-        // Deactivate lightning weapon after duration (7 seconds) using SKAction (respects pause)
-        let wait = SKAction.wait(forDuration: duration)
-        let deactivate = SKAction.run { [weak self] in
-            guard let self = self else { return }
-            if self.player.hasLightningWeapon {
-                self.player.hasLightningWeapon = false
-            }
+        schedulePowerUpExpiry(after: duration, key: "lightningDeactivation") { [weak self] in
+            guard let player = self?.player, player.hasLightningWeapon else { return }
+            player.hasLightningWeapon = false
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "lightningDeactivation")
     }
 
     private func activateRapidFire() {
@@ -2249,15 +2619,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "rapidFire", duration: duration, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), icon: "RAPID FIRE")
 
-        // Cancel any previous rapid fire deactivation
-        removeAction(forKey: "rapidFireDeactivation")
-
-        // Deactivate after 8 seconds
-        let wait = SKAction.wait(forDuration: duration)
-        let deactivate = SKAction.run { [weak self] in
-            self?.player.hasRapidFire = false
+        schedulePowerUpExpiry(after: duration, key: "rapidFireDeactivation") { [weak self] in
+            self?.player?.hasRapidFire = false
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "rapidFireDeactivation")
     }
 
     private func activateMagnet() {
@@ -2267,16 +2631,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "magnet", duration: duration, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), icon: "MAGNET")
 
-        // Cancel any previous magnet deactivation
-        removeAction(forKey: "magnetDeactivation")
-
-        // Deactivate after 10 seconds
-        let wait = SKAction.wait(forDuration: duration)
-        let deactivate = SKAction.run { [weak self] in
-            self?.player.hasMagnet = false
-            self?.activeCoins.removeAll()  // Clear cache when magnet deactivates
+        schedulePowerUpExpiry(after: duration, key: "magnetDeactivation") { [weak self] in
+            self?.player?.hasMagnet = false
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "magnetDeactivation")
     }
 
     private func activateSlowMotion() {
@@ -2286,39 +2643,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "slowMotion", duration: duration, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), icon: "SLOW MO")
 
-        // Cancel any previous slow motion deactivation
-        removeAction(forKey: "slowMotionDeactivation")
-
-        // Deactivate after 6 seconds
-        let wait = SKAction.wait(forDuration: duration)
-        let deactivate = SKAction.run { [weak self] in
+        schedulePowerUpExpiry(after: duration, key: "slowMotionDeactivation") { [weak self] in
             guard let self = self else { return }
-            self.player.hasSlowMotion = false
-
-            // Reset speed for all cached enemies
-            for (_, enemy) in self.activeEnemies {
-                if enemy.parent != nil {
-                    enemy.speed = 1.0
-                }
-            }
-            self.activeEnemies.removeAll()  // Clear cache when slow motion deactivates
-
-            // Reset speed for asteroids and bullets (still need enumerate for these)
-            self.gameContentNode.enumerateChildNodes(withName: "asteroid") { node, _ in
-                node.speed = 1.0
-            }
-            self.gameContentNode.enumerateChildNodes(withName: "enemyBullet") { node, _ in
-                node.speed = 1.0
-            }
+            self.player?.hasSlowMotion = false
+            // `resetEntitySpeeds()` already restores enemies, asteroids and bullets.
+            // The old inline copy of it also cleared `activeEnemies`, which left every
+            // enemy already on screen missing from the cache until the next rebuild.
+            self.resetEntitySpeeds()
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "slowMotionDeactivation")
     }
 
     private func activateFreezeBomb() {
         // Freeze all enemies for 2.5 seconds, then they explode
         let duration = GameConfiguration.freezeBombDuration
-        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
-            guard self != nil else { return }
+        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
             if let enemy = node as? Enemy {
                 enemy.freeze(duration: duration)
             }
@@ -2342,8 +2680,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Find up to 6 closest enemies
         var enemies: [Enemy] = []
-        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
-            guard self != nil else { return }
+        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
             if let enemy = node as? Enemy {
                 enemies.append(enemy)
             }
@@ -2376,7 +2713,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 let launch = SKAction.run { [weak self] in
                     self?.createSeekingMissile()
                 }
-                run(SKAction.sequence([delay, launch]))
+                runOnGameplayClock(SKAction.sequence([delay, launch]))
             }
             return
         }
@@ -2391,7 +2728,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     self?.createHomingMissileForBoss(boss: boss)
                 }
             }
-            run(SKAction.sequence([delay, launch]))
+            runOnGameplayClock(SKAction.sequence([delay, launch]))
         }
     }
 
@@ -2529,8 +2866,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             var closestDistance: CGFloat = .infinity
 
             // Check enemies
-            self.gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] enemyNode, _ in
-                guard self != nil else { return }
+            self.gameContentNode.enumerateChildNodes(withName: "enemy") { enemyNode, _ in
                 if let enemy = enemyNode as? Enemy {
                     let distance = hypot(enemy.position.x - missile.position.x,
                                        enemy.position.y - missile.position.y)
@@ -2582,16 +2918,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "scoreMultiplier", duration: duration, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), icon: "SCORE x2")
 
-        // Cancel any previous multiplier deactivation
-        removeAction(forKey: "scoreMultiplierDeactivation")
-
-        // Deactivate after duration
-        let wait = SKAction.wait(forDuration: duration)
-        let deactivate = SKAction.run { [weak self] in
+        schedulePowerUpExpiry(after: duration, key: "scoreMultiplierDeactivation") { [weak self] in
             self?.scoreMultiplier = 1
-            self?.player.hasScoreMultiplier = false
+            self?.player?.hasScoreMultiplier = false
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "scoreMultiplierDeactivation")
     }
 
     private func activateBarrier() {
@@ -2601,41 +2931,32 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Show timer
         showPowerUpTimer(name: "barrier", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), icon: "BARRIER")
 
-        // Cancel any previous barrier deactivation
-        removeAction(forKey: "barrierDeactivation")
-
-        // Wait a frame for barrier visuals to be created, then setup physics
-        let waitForVisuals = SKAction.wait(forDuration: 0.01)
-        let setupPhysics = SKAction.run { [weak self] in
-            guard let self = self else { return }
-
-            // Setup physics for barrier segments
-            // Barrier blocks both enemies and enemy bullets
-            self.player.enumerateChildNodes(withName: "barrierSegment") { node, _ in
-                if node.physicsBody == nil {
-                    node.physicsBody = SKPhysicsBody(circleOfRadius: 8)
-                    node.physicsBody?.isDynamic = false
-                    node.physicsBody?.categoryBitMask = PhysicsCategory.barrier
-                    node.physicsBody?.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.enemyBullet
-                    node.physicsBody?.collisionBitMask = PhysicsCategory.none
-                }
+        // Give the segments their physics bodies. `player.hasBarrier = true` above runs
+        // updateBarrierVisuals() synchronously through its didSet, so the segments
+        // already exist by this point — no need to wait a frame for them.
+        // Barrier blocks both enemies and enemy bullets.
+        player.enumerateChildNodes(withName: "barrierSegment") { node, _ in
+            if node.physicsBody == nil {
+                node.physicsBody = SKPhysicsBody(circleOfRadius: 8)
+                node.physicsBody?.isDynamic = false
+                node.physicsBody?.categoryBitMask = PhysicsCategory.barrier
+                node.physicsBody?.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.enemyBullet
+                node.physicsBody?.collisionBitMask = PhysicsCategory.none
             }
         }
-        run(SKAction.sequence([waitForVisuals, setupPhysics]), withKey: "barrierPhysicsSetup")
 
-        // Deactivate after 8 seconds
-        let wait = SKAction.wait(forDuration: 8.0)
-        let deactivate = SKAction.run { [weak self] in
-            self?.player.hasBarrier = false
+        // Deactivate after the configured duration. This used to be a hardcoded 8.0
+        // while the timer bar above used the config value, so the two would drift
+        // apart the moment barrierDuration changed.
+        schedulePowerUpExpiry(after: duration, key: "barrierDeactivation") { [weak self] in
+            self?.player?.hasBarrier = false
         }
-        run(SKAction.sequence([wait, deactivate]), withKey: "barrierDeactivation")
     }
 
     private func activateNuke() {
         // Destroy all enemies except bosses
         var enemiesToDestroy: [Enemy] = []
-        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
-            guard self != nil else { return }
+        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
             if let enemy = node as? Enemy {
                 enemiesToDestroy.append(enemy)
             }
@@ -2653,7 +2974,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     enemy.removeFromParent()
                 }
             ])
-            run(destroyAction)
+            runOnGameplayClock(destroyAction)
         }
 
         // Destroy all asteroids
@@ -2675,7 +2996,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     asteroid.removeFromParent()
                 }
             ])
-            run(destroyAction)
+            runOnGameplayClock(destroyAction)
         }
 
         // Visual effect - big flash
@@ -2720,7 +3041,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         shadow.zPosition = -1
         label.addChild(shadow)
 
-        addChild(label)
+        effectsParent.addChild(label)
 
         // Animate: fade in, move up, fade out
         let fadeIn = SKAction.fadeAlpha(to: 1.0, duration: 0.1)
@@ -2736,93 +3057,41 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         label.run(SKAction.sequence([fadeIn, moveAndFade, remove]))
     }
 
-    private func showPowerUpTimer(name: String, duration: TimeInterval, color: UIColor, icon: String) {
-        // Don't show timers during boss fight
-        if isBossActive {
-            return
-        }
-
-        // Remove existing timer for this powerup if any
-        powerUpTimerBars[name]?.removeFromParent()
-
-        // Calculate position based on number of active timers (smaller, more compact)
-        let timerHeight: CGFloat = 28
-        let timerSpacing: CGFloat = 6
-        let existingTimers = powerUpTimerBars.count
-        let yPosition = size.height - currentTopMargin - 50 - CGFloat(existingTimers) * (timerHeight + timerSpacing)
-
-        // Create container for timer
-        let container = SKNode()
-        container.position = CGPoint(x: 12, y: yPosition)
-        container.zPosition = 100
-        container.alpha = 0.7 // More subtle
-        uiNode.addChild(container)
-        powerUpTimerBars[name] = container
-
-        // Background - minimal and subtle
-        let bgWidth: CGFloat = 150
-        let background = SKShapeNode(rectOf: CGSize(width: bgWidth, height: timerHeight), cornerRadius: 7)
-        background.fillColor = UIColor(white: 0.05, alpha: 0.6)
-        background.strokeColor = UIColor(white: 0.4, alpha: 0.3)
-        background.lineWidth = 1
-        background.position = CGPoint(x: bgWidth / 2, y: 0)
-        container.addChild(background)
-
-        // Icon label - smaller and more subtle
-        let iconLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        iconLabel.text = icon
-        iconLabel.fontSize = 12
-        iconLabel.fontColor = UIColor(white: 0.9, alpha: 0.9)
-        iconLabel.verticalAlignmentMode = .center
-        iconLabel.horizontalAlignmentMode = .left
-        iconLabel.position = CGPoint(x: 7, y: 0.5)
-        container.addChild(iconLabel)
-
-        // Progress bar container (on the right side) - smaller
-        let barWidth: CGFloat = 55
-        let barHeight: CGFloat = 7
-        let barX: CGFloat = bgWidth - barWidth - 6
-
-        // Progress bar background
-        let barBackground = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 3)
-        barBackground.fillColor = UIColor(white: 0.2, alpha: 0.5)
-        barBackground.strokeColor = .clear
-        barBackground.position = CGPoint(x: barX + barWidth / 2, y: 0)
-        container.addChild(barBackground)
-
-        // Progress bar fill (anchor at left edge for proper scaling)
-        let barFillContainer = SKNode()
-        barFillContainer.position = CGPoint(x: barX, y: 0)
-        container.addChild(barFillContainer)
-
-        let barFill = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 3)
-        barFill.fillColor = color.withAlphaComponent(0.8)
-        barFill.strokeColor = .clear
-        barFill.position = CGPoint(x: barWidth / 2, y: 0)
-        barFill.name = "progressFill"
-        barFillContainer.addChild(barFill)
-
-        // Animate progress bar from full to empty
-        let scaleDown = SKAction.scaleX(to: 0.0, duration: duration)
-        let remove = SKAction.run { [weak self] in
-            self?.powerUpTimerBars.removeValue(forKey: name)
-            container.removeFromParent()
-        }
-        barFillContainer.run(SKAction.sequence([scaleDown, remove]))
-
-        // Fade out near the end
-        let waitBeforeFade = SKAction.wait(forDuration: max(0, duration - 1.0))
-        let fadeOut = SKAction.fadeAlpha(to: 0.25, duration: 1.0)
-        container.run(SKAction.sequence([waitBeforeFade, fadeOut]))
+    /// Acknowledges a pickup that could not be applied because it is already at its cap.
+    private func showMaxedOutFeedback(_ text: String, at position: CGPoint) {
+        SoundManager.shared.playCoinSound(on: self)
+        HapticManager.shared.lightTap()
+        showFloatingText(text, at: position, color: UIColor(white: 0.75, alpha: 1.0), fontSize: 15)
     }
 
-    private func hideAllPowerUpTimers() {
-        // Immediately remove all powerup timer bars without animation
-        for (_, timerNode) in powerUpTimerBars {
-            timerNode.removeAllActions()
-            timerNode.removeFromParent()
-        }
-        powerUpTimerBars.removeAll()
+    /// Whether the boss health bar owns the top-left corner the countdown bars want.
+    ///
+    /// Both halves are derived from live state rather than a cached flag, so bars work
+    /// again in the window between the boss dying and the level ending — the bug the note
+    /// on `bossSpawned` records.
+    ///
+    /// The warning half closes a 2.8 s gap. `spawnBoss()` hides the live bars, but the
+    /// boss itself is not created until `showBossWarning`'s completion runs, so
+    /// `isBossActive()` stays false for the whole warning — and `powerUpManager` keeps
+    /// spawning through it. A power-up grabbed in that window used to raise a fresh bar
+    /// that then sat under the boss health bar for its entire duration.
+    private var bossOwnsHUDCorner: Bool {
+        if bossManager?.isBossActive() == true { return true }
+        return effectsParent.childNode(withName: "bossWarning") != nil
+    }
+
+    /// Shows a countdown bar for a power-up, unless a boss owns that corner.
+    ///
+    /// The bars themselves live in `PowerUpTimerHUD`. This wrapper keeps the one piece of
+    /// the rule that is the scene's business: no bars while a boss owns the corner,
+    /// because the boss health bar sits there.
+    private func showPowerUpTimer(name: String, duration: TimeInterval, color: UIColor, icon: String) {
+        if bossOwnsHUDCorner { return }
+        powerUpTimers.show(name: name, duration: duration, color: color, icon: icon)
+    }
+
+    private func removePowerUpTimer(named name: String) {
+        powerUpTimers.remove(named: name)
     }
 
     private func resetEntitySpeeds() {
@@ -2855,15 +3124,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
         }
 
-        // Remove destroyed coins from cache and update positions
-        var toRemove: [ObjectIdentifier] = []
-        for (id, coin) in activeCoins {
-            // Validate coin still exists in scene hierarchy
-            guard coin.parent != nil, coin.scene != nil else {
-                toRemove.append(id)
-                continue
-            }
+        pruneCoinCache()
 
+        for (_, coin) in activeCoins {
             let dx = self.player.position.x - coin.position.x
             let dy = self.player.position.y - coin.position.y
             let distance = sqrt(dx * dx + dy * dy)
@@ -2877,8 +3140,39 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 coin.position.y += moveY
             }
         }
+    }
 
-        // Clean up destroyed coins
+    /// Drops enemies that have left the scene from the cache.
+    ///
+    /// `Enemy.despawn()` unregisters at the source, so this should normally find
+    /// nothing. It runs on the periodic cleanup tick anyway because `activeEnemies`
+    /// holds *strong* references: any despawn path that forgets to go through
+    /// `markAsDestroyed()` turns into a silent node leak that lasts until the wave
+    /// list is exhausted. Cheap insurance against exactly the bug this replaced.
+    private func pruneEnemyCache() {
+        guard !activeEnemies.isEmpty else { return }
+        var toRemove: [ObjectIdentifier] = []
+        for (id, enemy) in activeEnemies where enemy.parent == nil {
+            toRemove.append(id)
+        }
+        for id in toRemove {
+            activeEnemies.removeValue(forKey: id)
+        }
+    }
+
+    /// Drops coins that have left the scene from the cache.
+    ///
+    /// `activeCoins` holds strong references, so a coin cannot deallocate while it is
+    /// still listed — which is also why `Coin` cannot unregister itself from its own
+    /// deinit. This used to run only from `attractCoins()`, i.e. only while the magnet
+    /// power-up was active, so on a magnet-free level every coin ever spawned was held
+    /// alive until the scene tore down. Now it runs on the periodic cleanup tick too.
+    private func pruneCoinCache() {
+        guard !activeCoins.isEmpty else { return }
+        var toRemove: [ObjectIdentifier] = []
+        for (id, coin) in activeCoins where coin.parent == nil || coin.scene == nil {
+            toRemove.append(id)
+        }
         for id in toRemove {
             activeCoins.removeValue(forKey: id)
         }
@@ -2889,6 +3183,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func applyVortexGravitationalPull() {
         // Use cached vortex enemies for better performance
         // Clean up destroyed vortex enemies from cache
+        //
+        // There is deliberately no "rebuild when empty" fallback here, unlike the enemy
+        // and coin caches: this runs every frame, and on the majority of levels — which
+        // contain no vortex at all — that fallback would mean enumerating every enemy
+        // node every frame for nothing. The cache is kept correct at the source instead,
+        // by registerEnemy/unregisterEnemy plus rebuildEntityCaches().
         var toRemove: [ObjectIdentifier] = []
         for (id, vortex) in activeVortexEnemies {
             if vortex.parent == nil {
@@ -2907,11 +3207,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let vortexGravityRadius = GameConfiguration.vortexGravityRadius
         let pullStrength = GameConfiguration.vortexPullStrength
 
-        // Apply gravitational pull to all player bullets
+        // Deflect player bullets by moving them directly, the same way attractCoins()
+        // moves coins.
+        //
+        // This used to call `bulletBody.applyImpulse(...)`, which had no visible
+        // effect: player bullets are flown by an SKAction (`moveTo`/`moveBy` from
+        // shoot()) and their physics bodies exist only for contact tests, so the
+        // action re-drove the position every frame and overwrote whatever the impulse
+        // had integrated. Nudging the position is the only thing that survives
+        // alongside the move action, so the pull is now actually felt.
         gameContentNode.enumerateChildNodes(withName: "bullet") { [weak self] node, _ in
-            guard self != nil else { return }
-            guard let bullet = node as? SKShapeNode,
-                  let bulletBody = bullet.physicsBody else { return }
+            guard let self = self else { return }
+            guard let bullet = node as? SKShapeNode else { return }
 
             // Check each vortex
             for vortex in vortexEnemies {
@@ -2921,13 +3228,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
                 // Apply pull if bullet is within gravity radius
                 if distance < vortexGravityRadius && distance > 0 {
-                    // Calculate pull force inversely proportional to distance
+                    // Pull strength falls off linearly towards the edge of the radius.
                     let pullForce = pullStrength * (1.0 - distance / vortexGravityRadius)
-                    let forceX = (dx / distance) * pullForce * 100
-                    let forceY = (dy / distance) * pullForce * 100
-
-                    // Apply impulse to bullet
-                    bulletBody.applyImpulse(CGVector(dx: forceX, dy: forceY))
+                    // Scaled by delta time so the deflection is frame-rate independent.
+                    let step = pullForce * 30 * CGFloat(self.deltaTime)
+                    bullet.position.x += (dx / distance) * step
+                    bullet.position.y += (dy / distance) * step
                 }
             }
         }
@@ -2978,35 +3284,40 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Play invulnerability sound
         SoundManager.shared.playInvulnerabilitySound(on: self)
 
-        // Blinking animation during invulnerability
+        // Blinking animation during invulnerability.
+        //
+        // Keyed, and the flag is cleared by the sequence itself rather than by a
+        // completion handler: `player.removeAllActions()` (playerDestroyed) discards
+        // completion blocks, which would leave `isInvulnerable` stuck true, and a keyed
+        // action can't be stacked on top of itself by a second activation.
         let blink = SKAction.sequence([
             SKAction.fadeAlpha(to: 0.3, duration: 0.1),
             SKAction.fadeAlpha(to: 1.0, duration: 0.1)
         ])
         let blinkTimes = SKAction.repeat(blink, count: Int(invulnerabilityDuration / 0.2))
-
-        player.run(blinkTimes) { [weak self] in
+        let clearFlag = SKAction.run { [weak self] in
             self?.isInvulnerable = false
         }
+        // Alpha is restored explicitly: if the sequence is ever cut short the ship
+        // must not be left semi-transparent.
+        let restoreAlpha = SKAction.fadeAlpha(to: 1.0, duration: 0)
+
+        player.run(SKAction.sequence([blinkTimes, restoreAlpha, clearFlag]),
+                   withKey: "invulnerability")
     }
 
     private func stopGameplayAndTransition(to newScene: SKScene, transitionDuration: TimeInterval = 0.5) {
         // Pause gameplay immediately
-        gameContentNode.isPaused = true
-        physicsWorld.speed = 0
+        setGameplayPaused(true)
 
         // Transition to new scene
         newScene.scaleMode = scaleMode
         let transition = SKTransition.fade(withDuration: transitionDuration)
         view?.presentScene(newScene, transition: transition)
 
-        // Clean up after transition completes using SKAction with weak self
-        let wait = SKAction.wait(forDuration: transitionDuration + 0.1)
-        let cleanup = SKAction.run { [weak self] in
-            guard let self = self else { return }
-            self.removeAllChildren()
-        }
-        run(SKAction.sequence([wait, cleanup]), withKey: "transitionCleanup")
+        // No post-transition cleanup action here: a scene's actions stop advancing once
+        // it is no longer the presented scene, so the "transitionCleanup" sequence that
+        // used to live here could never fire. willMove(from:) does the real teardown.
     }
 
     private func playerDestroyed() {
@@ -3065,8 +3376,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         explosionActions.append(gameOverWait)
         explosionActions.append(callGameOver)
 
-        // Run the entire sequence
-        run(SKAction.sequence(explosionActions), withKey: "playerDestruction")
+        // Run the entire sequence on the gameplay clock, like every other delayed
+        // gameplay effect. Nothing can pause during the death animation today
+        // (playerDestroyed() clears isGameStarted, which gates both the pause button
+        // and the auto-pause on resign-active), but hosting it here keeps the timeline
+        // consistent if that ever changes.
+        runOnGameplayClock(SKAction.sequence(explosionActions), withKey: "playerDestruction")
     }
 
     private func gameOver() {
@@ -3082,7 +3397,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let hitContainer = SKNode()
         hitContainer.position = position
         hitContainer.zPosition = 500
-        addChild(hitContainer)
+        effectsParent.addChild(hitContainer)
 
         // Small flash
         let flash = SKShapeNode(circleOfRadius: 6)
@@ -3157,105 +3472,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         SoundManager.shared.playExplosionSound(on: self)
 
         // Camera shake based on explosion size (reduced on iPad)
-        let shakeMultiplier: CGFloat = isIPad ? GameConfiguration.iPadShakeMultiplier : 1.0
-        switch size {
-        case .small:
-            shakeCamera(intensity: GameConfiguration.shakeIntensitySmall * shakeMultiplier, duration: 0.15)
-        case .normal:
-            shakeCamera(intensity: GameConfiguration.shakeIntensityNormal * shakeMultiplier, duration: 0.25)
-        case .large:
-            shakeCamera(intensity: GameConfiguration.shakeIntensityLarge * shakeMultiplier, duration: 0.35)
-        case .huge:
-            shakeCamera(intensity: GameConfiguration.shakeIntensityHuge * shakeMultiplier, duration: 0.45)
-        }
+        let shake = ExplosionFX.cameraShake(for: size, isIPad: isIPad)
+        shakeCamera(intensity: shake.intensity, duration: shake.duration)
 
-        // Enhanced multi-layered explosion effect
-        let explosionContainer = SKNode()
-        explosionContainer.position = position
-        explosionContainer.zPosition = 500
-        addChild(explosionContainer)
+        // The burst itself. Parented to `effectsParent`, not the scene, so it freezes
+        // with the gameplay clock — see `effectsParent`.
+        let burst = ExplosionFX.burst(size: size, particleMultiplier: particleMultiplier)
+        burst.position = position
+        effectsParent.addChild(burst)
 
-        // Scale factors based on size
-        let sizeMultiplier: CGFloat
-        switch size {
-        case .small:
-            sizeMultiplier = 0.6
-        case .normal:
-            sizeMultiplier = 1.0
-        case .large:
-            sizeMultiplier = 1.4
-        case .huge:
-            sizeMultiplier = 2.0
-        }
-
-        // Core flash
-        let coreFlash = SKShapeNode(circleOfRadius: 8 * sizeMultiplier)
-        coreFlash.fillColor = UIColor(red: 1.0, green: 1.0, blue: 0.9, alpha: 1.0)
-        coreFlash.strokeColor = .clear
-        explosionContainer.addChild(coreFlash)
-
-        let coreScale = SKAction.scale(to: 2.5, duration: 0.15)
-        let coreFade = SKAction.fadeOut(withDuration: 0.15)
-        coreFlash.run(SKAction.group([coreScale, coreFade]))
-
-        // Main explosion ring
-        let mainExplosion = SKShapeNode(circleOfRadius: 10 * sizeMultiplier)
-        mainExplosion.fillColor = UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 0.9)
-        mainExplosion.strokeColor = UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)
-        mainExplosion.lineWidth = 3
-        explosionContainer.addChild(mainExplosion)
-
-        let mainScale = SKAction.scale(to: 4.0, duration: 0.4)
-        let mainFade = SKAction.fadeOut(withDuration: 0.4)
-        mainExplosion.run(SKAction.group([mainScale, mainFade]))
-
-        // Outer shockwave
-        let shockwave = SKShapeNode(circleOfRadius: 15 * sizeMultiplier)
-        shockwave.fillColor = .clear
-        shockwave.strokeColor = UIColor(red: 1.0, green: 0.6, blue: 0.0, alpha: 0.7)
-        shockwave.lineWidth = 4
-        explosionContainer.addChild(shockwave)
-
-        let shockScale = SKAction.scale(to: 5.0, duration: 0.5)
-        let shockFade = SKAction.fadeOut(withDuration: 0.5)
-        shockwave.run(SKAction.group([shockScale, shockFade]))
-
-        // Add explosion particles (debris) - reduced count on iPad for performance
-        let baseParticleCount = Int(8 * sizeMultiplier)
-        let particleCount = Int(CGFloat(baseParticleCount) * particleMultiplier)
-        for i in 0..<particleCount {
-            let angle = CGFloat(i) * .pi * 2 / CGFloat(particleCount)
-            let particle = SKShapeNode(circleOfRadius: 3 * sizeMultiplier)
-            particle.fillColor = UIColor(red: 1.0, green: CGFloat.random(in: 0.3...0.8), blue: 0.0, alpha: 1.0)
-            particle.strokeColor = .clear
-            explosionContainer.addChild(particle)
-
-            let distance: CGFloat = 40 * sizeMultiplier
-            let targetX = cos(angle) * distance
-            let targetY = sin(angle) * distance
-
-            let move = SKAction.moveBy(x: targetX, y: targetY, duration: 0.4)
-            let particleFade = SKAction.fadeOut(withDuration: 0.4)
-            let particleScale = SKAction.scale(to: 0.3, duration: 0.4)
-            particle.run(SKAction.group([move, particleFade, particleScale]))
-        }
-
-        // Glow effect (skip on iPad for better performance)
-        if !isIPad {
-            GlowHelper.addEnhancedGlow(to: mainExplosion, color: UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0), intensity: 1.5)
-        }
-
-        // Remove container after animation
-        let removeAction = SKAction.removeFromParent()
-        explosionContainer.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.6),
-            removeAction
-        ]))
+        ExplosionFX.screenFlash(for: size, in: self)
     }
 
     // MARK: - Game Update Loop
 
     override func update(_ currentTime: TimeInterval) {
+        // Advance the frame reference on every tick, including paused ones, so the
+        // first running frame after a resume sees one ordinary frame's worth of
+        // elapsed time rather than the whole pause.
+        let rawDelta = lastFrameTime == 0 ? 0 : currentTime - lastFrameTime
+        lastFrameTime = currentTime
+
         // Check if player is exiting and off screen (must be before pause/start checks)
         if isPlayerExiting && player.position.y > size.height + 50 {
             isPlayerExiting = false
@@ -3266,65 +3503,70 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Don't update game logic when paused or game hasn't started yet
         if gameContentNode.isPaused || !isGameStarted { return }
 
-        if lastUpdateTime == 0 {
-            lastUpdateTime = currentTime
-        }
-
-        // Calculate delta time for smooth animations
-        deltaTime = currentTime - lastUpdateTime
+        // Clamped delta drives both per-frame motion and the game clock, so a
+        // dropped frame or a resumed pause can never translate into a huge step.
+        deltaTime = min(max(rawDelta, 0), GameConfiguration.maxFrameDelta)
+        gameTime += deltaTime
 
         // Magnet effect - attract coins (limited to 30 FPS for performance)
-        if player.hasMagnet && currentTime - lastMagnetUpdateTime >= 0.033 {
-            lastMagnetUpdateTime = currentTime
+        if player.hasMagnet && gameTime - lastMagnetUpdateTime >= GameConfiguration.magnetUpdateInterval {
+            lastMagnetUpdateTime = gameTime
             attractCoins()
         }
 
         // Vortex gravitational pull on player bullets
         applyVortexGravitationalPull()
 
-        // Update weapon cooling
-        updateWeaponCooling(deltaTime: deltaTime, currentTime: currentTime)
+        // Update weapon cooling.
+        //
+        // `isFiring` has to mirror the firing condition below rather than just
+        // `isTouching`: heat used to freeze while the player held a drag outside firing
+        // range — not shooting, but not cooling either.
+        let isFiring = isTouching && abs(player.position.x - touchLocation.x) <= shootDistanceThreshold
+        weaponHeat.update(deltaTime: deltaTime, currentTime: gameTime, isFiring: isFiring)
 
         // Shoot only when touching and player is near touch location
-        if isTouching && currentTime - lastShootTime > currentShootInterval {
+        if isTouching && gameTime - lastShootTime > currentShootInterval {
             let distance = abs(player.position.x - touchLocation.x)
             if distance <= shootDistanceThreshold {
                 shoot()
-                lastShootTime = currentTime
+                lastShootTime = gameTime
             }
         }
 
         // Update enemy spawning (with slow motion modifier)
-        enemyManager.update(currentTime: currentTime)
+        enemyManager.update(currentTime: gameTime)
 
         // Update obstacle spawning
-        obstacleManager.update(currentTime: currentTime)
+        obstacleManager.update(currentTime: gameTime)
 
         // Update powerup spawning
-        powerUpManager.update(currentTime: currentTime)
+        powerUpManager.update(currentTime: gameTime)
 
         // Update coin spawning
-        coinManager.update(currentTime: currentTime)
+        coinManager.update(currentTime: gameTime)
 
         // Update asteroid spawning
-        asteroidManager?.update(currentTime: currentTime)
+        asteroidManager?.update(currentTime: gameTime)
 
         // Apply slow motion to enemies, asteroids, and bullets if active
         if player.hasSlowMotion {
-            applySlowMotion(currentTime: currentTime)
+            applySlowMotion(currentTime: gameTime)
         }
 
         // Clean up off-screen bullets to prevent memory buildup (but not every frame)
-        let cleanupInterval: TimeInterval = isIPad ? 0.3 : 0.5  // More frequent cleanup on iPad
-        if currentTime - lastCleanupTime >= cleanupInterval {
+        let cleanupInterval: TimeInterval = isIPad
+            ? GameConfiguration.cleanupIntervalPad
+            : GameConfiguration.cleanupIntervalPhone
+        if gameTime - lastCleanupTime >= cleanupInterval {
             cleanupOffScreenBullets()
-            lastCleanupTime = currentTime
+            pruneCoinCache()
+            pruneEnemyCache()
+            lastCleanupTime = gameTime
         }
 
         // Check level completion - simple approach
-        checkLevelCompletion(currentTime: currentTime)
-
-        lastUpdateTime = currentTime
+        checkLevelCompletion(currentTime: gameTime)
     }
 
     /// Removes bullets that are off-screen to prevent memory buildup
@@ -3338,8 +3580,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let minX = -margin
         let maxX = size.width + margin
 
-        gameContentNode.enumerateChildNodes(withName: "enemyBullet") { [weak self] node, _ in
-            guard self != nil else { return }
+        gameContentNode.enumerateChildNodes(withName: "enemyBullet") { node, _ in
             let pos = node.position
             if pos.y < minY || pos.y > maxY || pos.x < minX || pos.x > maxX {
                 node.removeFromParent()
@@ -3347,8 +3588,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         // Also clean up player bullets that are off-screen
-        gameContentNode.enumerateChildNodes(withName: "bullet") { [weak self] node, _ in
-            guard self != nil else { return }
+        gameContentNode.enumerateChildNodes(withName: "bullet") { node, _ in
             let pos = node.position
             if pos.y > maxY || pos.x < minX || pos.x > maxX {
                 node.removeFromParent()
@@ -3360,9 +3600,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// Uses cached enemy count to avoid expensive enumeration every frame
     /// Note: Performance-critical - called every frame
     private func checkLevelCompletion(currentTime: TimeInterval) {
-        // If boss is active, don't check for level completion
-        // (level completes when boss is defeated)
-        if isBossActive || bossSpawned {
+        // Once the boss has spawned, completion is driven by its defeat rather than
+        // by the enemy count, so there is nothing to check here.
+        if bossSpawned {
             return
         }
 
@@ -3379,16 +3619,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 }
             }
         } else {
-            // Clean up destroyed enemies from cache
-            var toRemove: [ObjectIdentifier] = []
-            for (id, enemy) in activeEnemies {
-                if enemy.parent == nil {
-                    toRemove.append(id)
-                }
-            }
-            for id in toRemove {
-                activeEnemies.removeValue(forKey: id)
-            }
+            pruneEnemyCache()
         }
 
         let enemyCount = activeEnemies.count
@@ -3422,7 +3653,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         bossSpawned = true
-        isBossActive = true
 
         // Stop spawning regular enemies, obstacles, and coins
         enemyManager.stopSpawning()
@@ -3430,10 +3660,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         coinManager.setBossFight(true)
 
         // Hide all powerup timers during boss fight
-        hideAllPowerUpTimers()
+        powerUpTimers.hideAll()
 
         // Show warning before boss appears
-        showBossWarning {
+        showBossWarning { [weak self] in
+            guard let self = self else { return }
             // Play boss appear sound
             SoundManager.shared.playBossAppearSound(on: self)
             // Spawn the boss after warning
@@ -3475,7 +3706,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         approachingLabel.alpha = 0
         warningNode.addChild(approachingLabel)
 
-        addChild(warningNode)
+        // Warning and its dismissal timer both live on gameContentNode so a pause
+        // freezes them together; on the scene the countdown kept running and the boss
+        // could spawn while the pause menu was up.
+        effectsParent.addChild(warningNode)
 
         // Haptic feedback for drama
         HapticManager.shared.heavyTap()
@@ -3512,7 +3746,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             completion()
         }
 
-        run(SKAction.sequence([
+        effectsParent.run(SKAction.sequence([
             SKAction.wait(forDuration: 2.8),
             cleanup
         ]))
@@ -3568,15 +3802,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let particles = SKEmitterNode()
         particles.position = position
 
-        // Create circular particle texture programmatically
-        let particleSize = CGSize(width: 8, height: 8)
-        let particleRenderer = UIGraphicsImageRenderer(size: particleSize)
-        let particleImage = particleRenderer.image { context in
-            let rect = CGRect(origin: .zero, size: particleSize)
-            UIColor.white.setFill()
-            context.cgContext.fillEllipse(in: rect)
-        }
-        particles.particleTexture = SKTexture(image: particleImage)
+        particles.particleTexture = ParticleTexture.solidCircle(diameter: 8)
 
         particles.particleBirthRate = 50
         particles.numParticlesToEmit = 20
@@ -3591,7 +3817,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         particles.particleAlphaSpeed = -1.6
         particles.particleColor = .purple
         particles.particleColorBlendFactor = 1.0
-        addChild(particles)
+        effectsParent.addChild(particles)
 
         // Move particles toward vortex center
         let moveToVortex = SKAction.move(to: vortex.position, duration: 0.3)
@@ -3604,18 +3830,54 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func reflectBullet(_ bullet: SKShapeNode, from mirror: Enemy) {
-        // Change bullet to enemy bullet
+        // Cancel the outbound flight first.
+        //
+        // Player bullets are driven by an SKAction (`moveTo(y: size.height + 20)` in
+        // shoot()), not by physics velocity — their bodies exist purely for contact
+        // tests. So setting `velocity` alone changed nothing: the move action kept
+        // dragging the bullet up the screen and simply overrode the physics each
+        // frame. The bullet turned red, swapped category, and then flew away from the
+        // player exactly as before, which made the Mirror's signature ability a
+        // no-op. Reflection has to take the position back under physics control.
+        bullet.removeAllActions()
+
+        // Change bullet to enemy bullet. The name has to change too, or the reflected
+        // bullet stays outside every "enemyBullet" sweep (slow motion, speed reset)
+        // and gets treated as a player bullet by the off-screen cleanup — which only
+        // checks the top edge, never the bottom, so a bullet heading down at the
+        // player would never be collected.
+        bullet.name = "enemyBullet"
         bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
         bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
+        bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
+        bullet.physicsBody?.linearDamping = 0
         bullet.fillColor = .red
 
-        // Reverse velocity - if no velocity, apply default reflected velocity
-        if let velocity = bullet.physicsBody?.velocity, (velocity.dx != 0 || velocity.dy != 0) {
-            bullet.physicsBody?.velocity = CGVector(dx: -velocity.dx, dy: -velocity.dy * 1.2)
+        // Aim back at the player rather than just negating the outbound vector: the
+        // bullet had no meaningful velocity to negate (see above), and a mirror that
+        // returns fire at whoever shot it is what the enemy is for.
+        let dx = player.position.x - bullet.position.x
+        let dy = player.position.y - bullet.position.y
+        let distance = hypot(dx, dy)
+        let reflectSpeed: CGFloat = 320
+
+        if distance > 0 {
+            bullet.physicsBody?.velocity = CGVector(
+                dx: dx / distance * reflectSpeed,
+                dy: dy / distance * reflectSpeed
+            )
+            bullet.zRotation = atan2(dy, dx) - .pi / 2
         } else {
-            // Fallback: shoot downward at player if velocity is zero
-            bullet.physicsBody?.velocity = CGVector(dx: 0, dy: -300)
+            // Degenerate case only: bullet is exactly on the player.
+            bullet.physicsBody?.velocity = CGVector(dx: 0, dy: -reflectSpeed)
         }
+
+        // Give it a lifetime, since removeAllActions() above threw away the sequence
+        // that used to remove it.
+        bullet.run(SKAction.sequence([
+            SKAction.wait(forDuration: 6.0),
+            SKAction.removeFromParent()
+        ]), withKey: "bulletLifetime")
 
         // Flash effect on mirror
         let flash = SKAction.sequence([
@@ -3628,27 +3890,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func isHittingShield(bullet: SKShapeNode, enemy: Enemy) -> Bool {
-        // Get shield rotation angle (shield rotates around enemy)
+        // The shield sweeps around the enemy, so what matters is where it is pointing
+        // at the moment of impact.
         guard let shieldNode = enemy.childNode(withName: "shield") else { return false }
 
-        // Calculate angle from enemy to bullet
         let dx = bullet.position.x - enemy.position.x
         let dy = bullet.position.y - enemy.position.y
-        let bulletAngle = atan2(dy, dx)
 
-        // Get current shield rotation (normalized to 0-2π)
-        var shieldAngle = shieldNode.zRotation
-        while shieldAngle < 0 { shieldAngle += .pi * 2 }
-        while shieldAngle >= .pi * 2 { shieldAngle -= .pi * 2 }
-
-        // Shield covers 120 degrees (π/3 radians on each side)
-        let shieldCoverage: CGFloat = .pi / 1.5
-
-        // Calculate angle difference
-        var angleDiff = abs(bulletAngle - shieldAngle)
-        if angleDiff > .pi { angleDiff = .pi * 2 - angleDiff }
-
-        return angleDiff < shieldCoverage / 2
+        return ShieldArc.isBlocking(
+            bulletAngle: atan2(dy, dx),
+            shieldAngle: shieldNode.zRotation
+        )
     }
 
     private func createSplitterFragments(at position: CGPoint) {
@@ -3657,7 +3909,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let fragment = Enemy(sceneSize: size, scene: self, type: .basic)
             fragment.position = position
             fragment.setScale(0.6) // Smaller than original
-            addChild(fragment)
+
+            // Must live in gameContentNode, not on the scene: fragments parented to
+            // the scene root kept flying and shooting through a pause, were invisible
+            // to every `gameContentNode` enemy sweep (nuke, freeze bomb, lightning,
+            // homing missiles, slow motion) and never counted towards level completion.
+            gameContentNode.addChild(fragment)
+            registerEnemy(fragment)
 
             // Launch fragments in opposite directions
             let angle: CGFloat = i == 0 ? -.pi/4 : .pi/4
@@ -3666,8 +3924,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             let launch = SKAction.moveBy(x: dx, y: dy, duration: 0.8)
             let fall = SKAction.moveTo(y: -20, duration: 3.0)
+            let despawn = SKAction.run { [weak fragment] in
+                // Unregister via the normal destruction path so the fragment leaves
+                // the activeEnemies cache instead of waiting to be swept out.
+                // markAsDestroyed() clears this very sequence, so the removal has to
+                // happen here rather than as a following action.
+                fragment?.markAsDestroyed()
+                fragment?.removeFromParent()
+            }
 
-            fragment.run(SKAction.sequence([launch, fall, SKAction.removeFromParent()]))
+            fragment.run(SKAction.sequence([launch, fall, despawn]))
 
             // Make fragments shoot
             fragment.startShooting()
@@ -3681,7 +3947,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             spark.strokeColor = .yellow
             spark.position = position
             spark.alpha = 1.0
-            addChild(spark)
+            effectsParent.addChild(spark)
 
             let angle = CGFloat.random(in: 0...(.pi * 2))
             let distance = CGFloat.random(in: 10...30)
@@ -3694,159 +3960,5 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 spark.removeFromParent()
             }
         }
-    }
-
-    // MARK: - Weapon Overheat System
-
-    private func setupHeatBar(topMargin: CGFloat) {
-        let barWidth: CGFloat = 120
-        let barHeight: CGFloat = 8
-        let bottomMargin: CGFloat = 30 // Moved lower to avoid player starting position
-
-        // Background bar
-        let background = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 4)
-        background.fillColor = UIColor(white: 0.2, alpha: 0.6)
-        background.strokeColor = UIColor(white: 0.4, alpha: 0.8)
-        background.lineWidth = 1
-        background.position = CGPoint(x: size.width / 2, y: bottomMargin)
-        background.zPosition = 100
-        background.alpha = 0.0 // Hidden initially
-        uiNode.addChild(background)
-        heatBarBackground = background
-
-        // Heat bar (foreground) - using full width, will scale down
-        let heat = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight - 2), cornerRadius: 3)
-        heat.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.8, alpha: 0.9)
-        heat.strokeColor = .clear
-        heat.position = CGPoint(x: size.width / 2, y: bottomMargin)
-        heat.xScale = 0.0  // Start with zero width
-        heat.zPosition = 101
-        uiNode.addChild(heat)
-        heatBar = heat
-
-        // Label
-        let label = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        label.fontSize = 11
-        label.fontColor = UIColor(white: 0.8, alpha: 0.9)
-        label.text = "HEAT"
-        label.position = CGPoint(x: size.width / 2, y: bottomMargin + 14)
-        label.zPosition = 100
-        label.alpha = 0.0 // Hidden initially
-        uiNode.addChild(label)
-        heatBarLabel = label
-    }
-
-    private func updateHeatBar() {
-        guard let heatBar = heatBar, let background = heatBarBackground, let label = heatBarLabel else { return }
-
-        // Hide heat bar when heat is low (below 15%)
-        let shouldShow = weaponHeat > 0.15
-        background.alpha = shouldShow ? 1.0 : 0.0
-        label.alpha = shouldShow ? 1.0 : 0.0
-
-        // Update bar width using xScale (much more efficient than recreating)
-        heatBar.xScale = weaponHeat
-
-        // Color changes based on heat level
-        if weaponHeat < 0.5 {
-            // Green to yellow
-            let green = 1.0 - (weaponHeat * 2)
-            heatBar.fillColor = UIColor(red: weaponHeat * 2, green: green, blue: 0.0, alpha: 0.9)
-        } else if weaponHeat < 0.8 {
-            // Yellow to orange
-            let progress = (weaponHeat - 0.5) / 0.3
-            heatBar.fillColor = UIColor(red: 1.0, green: 1.0 - (progress * 0.5), blue: 0.0, alpha: 0.9)
-        } else {
-            // Orange to red
-            let progress = (weaponHeat - 0.8) / 0.2
-            heatBar.fillColor = UIColor(red: 1.0, green: 0.5 - (progress * 0.5), blue: 0.0, alpha: 0.9)
-        }
-
-        // Pulse effect when near overheating
-        if weaponHeat > 0.85 && !isOverheated {
-            let pulse = SKAction.sequence([
-                SKAction.scale(to: 1.15, duration: 0.15),
-                SKAction.scale(to: 1.0, duration: 0.15)
-            ])
-            background.run(pulse)
-        }
-    }
-
-    private func updateWeaponCooling(deltaTime: TimeInterval, currentTime: TimeInterval) {
-        // If overheated, check if cooldown period is over
-        if isOverheated {
-            if currentTime - overheatStartTime >= overheatCooldownTime {
-                isOverheated = false
-                weaponHeat = 0.0
-                updateHeatBar()
-
-                // Visual feedback - flash green
-                if let background = heatBarBackground {
-                    let flash = SKAction.sequence([
-                        SKAction.run { [weak self] in
-                            guard self != nil else { return }
-                            background.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.0, alpha: 0.8)
-                        },
-                        SKAction.wait(forDuration: 0.2),
-                        SKAction.run { [weak self] in
-                            guard self != nil else { return }
-                            background.fillColor = UIColor(white: 0.2, alpha: 0.6)
-                        }
-                    ])
-                    background.run(flash)
-                }
-
-                SoundManager.shared.playPowerUpSound(on: self)
-            }
-            return
-        }
-
-        // Cool down when not shooting
-        if !isTouching && weaponHeat > 0 {
-            weaponHeat -= cooldownRate * CGFloat(deltaTime)
-            if weaponHeat < 0 {
-                weaponHeat = 0
-            }
-            updateHeatBar()
-        }
-    }
-
-    private func triggerOverheat(currentTime: TimeInterval) {
-        isOverheated = true
-        overheatStartTime = currentTime
-
-        // Visual feedback
-        if let background = heatBarBackground, let label = heatBarLabel {
-            // Flash red
-            let flash = SKAction.sequence([
-                SKAction.run { [weak self] in
-                    guard self != nil else { return }
-                    background.fillColor = UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 0.9)
-                    label.text = "OVERHEATED!"
-                    label.fontColor = UIColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
-                },
-                SKAction.wait(forDuration: 0.3),
-                SKAction.run { [weak self] in
-                    guard self != nil else { return }
-                    background.fillColor = UIColor(white: 0.2, alpha: 0.6)
-                },
-                SKAction.wait(forDuration: 0.3)
-            ])
-
-            let flashSequence = SKAction.repeat(flash, count: 3)
-            let reset = SKAction.run { [weak self] in
-                guard self != nil else { return }
-                label.text = "HEAT"
-                label.fontColor = UIColor(white: 0.8, alpha: 0.9)
-            }
-
-            background.run(SKAction.sequence([flashSequence, reset]))
-        }
-
-        // Haptic feedback
-        HapticManager.shared.heavyTap()
-
-        // Sound effect
-        SoundManager.shared.playExplosionSound(on: self)
     }
 }

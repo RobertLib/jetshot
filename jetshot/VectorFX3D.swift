@@ -129,7 +129,11 @@ class VectorFX3D {
         let scaleUp = SKAction.scale(to: tan(angle / 2) * length / 3, duration: 1.5)
         let fade = SKAction.fadeOut(withDuration: 1.5)
         let group = SKAction.group([moveDown, scaleUp, fade])
-        let reset = SKAction.run {
+        // [weak wave]: the node runs this action forever, so a strong capture would
+        // close the loop node -> action -> closure -> node and the wave could never
+        // be deallocated, not even once its parent is torn down.
+        let reset = SKAction.run { [weak wave] in
+            guard let wave = wave else { return }
             wave.position = .zero
             wave.setScale(1.0)
             wave.alpha = 0.8
@@ -290,99 +294,6 @@ class VectorFX3D {
                 container.addChild(dot)
             }
         }
-
-        return container
-    }
-
-    // MARK: - Grid Wave Effect
-
-    /// Creates a wave grid effect (like water ripples in 3D)
-    /// - Parameters:
-    ///   - size: Size of the grid
-    ///   - color: Color of grid lines
-    ///   - position: Position of effect
-    /// - Returns: Animated grid node
-    static func createGridWave(size: CGFloat, color: UIColor, at position: CGPoint) -> SKNode {
-        let container = SKNode()
-        container.position = position
-        container.name = "gridWave"
-
-        let gridSize = 6
-        let spacing = size / CGFloat(gridSize)
-
-        // Create grid points
-        var points: [[SKShapeNode]] = []
-        for i in 0...gridSize {
-            var row: [SKShapeNode] = []
-            for j in 0...gridSize {
-                let x = CGFloat(i - gridSize / 2) * spacing
-                let y = CGFloat(j - gridSize / 2) * spacing
-
-                let point = SKShapeNode(circleOfRadius: 1.5)
-                point.fillColor = color
-                point.strokeColor = .clear
-                point.position = CGPoint(x: x, y: y)
-                point.alpha = 0.5
-
-                container.addChild(point)
-                row.append(point)
-            }
-            points.append(row)
-        }
-
-        // Animate wave
-        let waveSpeed = 0.15
-        for i in 0...gridSize {
-            for j in 0...gridSize {
-                let point = points[i][j]
-                let delay = Double(i + j) * waveSpeed
-
-                let wave = SKAction.sequence([
-                    SKAction.wait(forDuration: delay),
-                    SKAction.moveBy(x: 0, y: 8, duration: 0.3),
-                    SKAction.moveBy(x: 0, y: -8, duration: 0.3)
-                ])
-
-                point.run(SKAction.repeatForever(wave))
-            }
-        }
-
-        // Connect points with lines
-        for i in 0..<gridSize {
-            for j in 0..<gridSize {
-                // Horizontal line
-                if i < gridSize {
-                    let line = createLine(
-                        from: points[i][j].position,
-                        to: points[i + 1][j].position,
-                        color: color,
-                        width: 0.5
-                    )
-                    line.alpha = 0.3
-                    container.addChild(line)
-                }
-                // Vertical line
-                if j < gridSize {
-                    let line = createLine(
-                        from: points[i][j].position,
-                        to: points[i][j + 1].position,
-                        color: color,
-                        width: 0.5
-                    )
-                    line.alpha = 0.3
-                    container.addChild(line)
-                }
-            }
-        }
-
-        // Fade out and remove
-        let fadeOut = SKAction.fadeOut(withDuration: 1.5)
-        let remove = SKAction.removeFromParent()
-        container.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.0),
-            fadeOut,
-            remove
-        ]))
 
         return container
     }
@@ -816,9 +727,11 @@ class VectorFX3D {
                 SKAction.wait(forDuration: Double(i) * 0.3),
                 SKAction.scale(to: 1.2, duration: 0.5),
                 SKAction.fadeOut(withDuration: 0.5),
-                SKAction.run {
-                    ring.setScale(1.0)
-                    ring.alpha = 0.3
+                // [weak ring] — see the note in createScanCone: `ring` runs this
+                // sequence forever, so capturing it strongly would leak it.
+                SKAction.run { [weak ring] in
+                    ring?.setScale(1.0)
+                    ring?.alpha = 0.3
                 }
             ])
             ring.run(SKAction.repeatForever(pulse))
@@ -859,9 +772,10 @@ class VectorFX3D {
 
             let move = SKAction.moveTo(y: -length, duration: 0.5)
             let fade = SKAction.fadeOut(withDuration: 0.5)
-            let reset = SKAction.run {
-                particle.position.y = 0
-                particle.alpha = 1.0
+            // [weak particle] — runs forever; a strong capture would leak the node.
+            let reset = SKAction.run { [weak particle] in
+                particle?.position.y = 0
+                particle?.alpha = 1.0
             }
             let sequence = SKAction.sequence([
                 SKAction.group([move, fade]),

@@ -248,6 +248,14 @@ class Enemy: SKShapeNode {
     // Shooting properties (optimized to use SKAction instead of Timer)
     private let shootInterval: TimeInterval
     weak var gameScene: GameScene?
+
+    /// Stable per-instance id, used to key actions this enemy schedules on other
+    /// nodes. Address-derived identifiers are unsafe for that: addresses get reused.
+    private static var nextInstanceID: UInt64 = 0
+    private let instanceID: UInt64 = {
+        nextInstanceID += 1
+        return nextInstanceID
+    }()
     private var movementDuration: TimeInterval = 4.0 // Will be set in startMovement
     let enemyType: EnemyType
     private var sceneSize: CGSize
@@ -256,18 +264,12 @@ class Enemy: SKShapeNode {
     var health: Int
     var maxHealth: Int
 
-    // Movement properties for zigzag
-    private var zigzagAmplitude: CGFloat = 80
-    private var zigzagFrequency: CGFloat = 2.0
-
-    // Movement properties for striker (horizontal)
-    private var horizontalAmplitude: CGFloat = 120
-    private var horizontalFrequency: CGFloat = 3.0
+    // Zigzag and striker sweep constants live in `GameConfiguration`; they used to be
+    // `private var`s here that nothing ever assigned to.
 
     // Formation properties
     var formationPosition: CGPoint?
     var isInFormation: Bool = false
-    private var customMovementCompletion: (() -> Void)?
     private var hasCompletedMovement: Bool = false
 
     // Sniper properties
@@ -285,23 +287,21 @@ class Enemy: SKShapeNode {
     private let mineCountdown: TimeInterval = 3.0 // Countdown before explosion
 
     // Ghost properties
-    private var isGhostVisible: Bool = true
     private var ghostPhaseInterval: TimeInterval = 2.0
-
-    // Shield properties
-    private var shieldNode: SKShapeNode?
-    private var shieldRotation: CGFloat = 0
 
     // Laser properties
     private var isChargingLaser: Bool = false
-    private var laserBeam: SKShapeNode?
-
-    // Bouncer properties
-    private var bouncerVelocity: CGVector = CGVector(dx: 0, dy: 0)
 
     // Teleporter properties
     private var teleportInterval: TimeInterval = 3.0
-    private var lastTeleportTime: TimeInterval = 0
+
+    // No stored state for the shield, laser beam, bouncer velocity, ghost visibility or
+    // last teleport time. Every one of those was write-only or never touched at all: the
+    // shield and the beam are named children that retire with the enemy, and the three
+    // scalars were read by nothing. The behaviours themselves run off SKActions.
+
+    // Freeze properties
+    private weak var freezeOverlay: SKShapeNode?
 
     init(sceneSize: CGSize, scene: SKScene, type: EnemyType = .basic) {
         self.enemyType = type
@@ -316,9 +316,22 @@ class Enemy: SKShapeNode {
 
         setupEnemy(sceneSize: sceneSize)
         // Don't start shooting immediately for special types
-        if type != .kamikaze && type != .turret && type != .turretSpiral && type != .mine &&
-           type != .meteorSwarm && type != .vortex && type != .mirror {
+        if firesOnATimer {
             startShooting()
+        }
+    }
+
+    /// Whether this type shoots on the plain repeating timer set up by `startShooting()`.
+    ///
+    /// The types excluded here drive their own fire from their movement routine instead
+    /// (turrets while docked, mines on detonation, and so on). Kept as one expression
+    /// because `attackFromFormation` has to know the same thing to put the timer back.
+    private var firesOnATimer: Bool {
+        switch enemyType {
+        case .kamikaze, .turret, .turretSpiral, .mine, .meteorSwarm, .vortex, .mirror:
+            return false
+        default:
+            return true
         }
     }
 
@@ -331,21 +344,80 @@ class Enemy: SKShapeNode {
     }
 
     // Mark enemy as destroyed (prevents completion callback from firing)
+    /// Bright hit flash plus a squash, for damage that doesn't kill.
+    ///
+    /// Fading the enemy *down* on a hit (the previous behaviour) reads as a
+    /// rendering glitch. Armour that takes a round should momentarily go white
+    /// hot, which is the convention players already understand.
+    func flashDamage() {
+        guard let path = self.path else { return }
+
+        let overlayName = "damageFlash"
+        childNode(withName: overlayName)?.removeFromParent()
+
+        let overlay = SKShapeNode(path: path)
+        overlay.name = overlayName
+        overlay.fillColor = .white
+        overlay.strokeColor = .white
+        overlay.lineWidth = 2
+        overlay.blendMode = .add
+        overlay.alpha = 0
+        overlay.zPosition = 20
+        addChild(overlay)
+
+        overlay.run(.sequence([
+            .fadeAlpha(to: 0.85, duration: 0.04),
+            .fadeOut(withDuration: 0.16),
+            .removeFromParent()
+        ]))
+
+        // Recoil: a brief squash sells the transfer of momentum.
+        removeAction(forKey: "hitSquash")
+        let squash = SKAction.sequence([
+            .group([.scaleX(to: 1.16, duration: 0.05), .scaleY(to: 0.86, duration: 0.05)]),
+            .group([.scaleX(to: 1.0, duration: 0.12), .scaleY(to: 1.0, duration: 0.12)])
+        ])
+        run(squash, withKey: "hitSquash")
+    }
+
+    /// Retires an enemy that left the playfield under its own steam.
+    ///
+    /// Every off-screen despawn used to latch `hasCompletedMovement` by hand and call
+    /// `removeFromParent()` directly, never touching `markAsDestroyed()` — which is
+    /// the only place `gameScene.unregisterEnemy(self)` lives. `GameScene.activeEnemies`
+    /// holds *strong* references, so each escaped enemy (with its shape paths, glow
+    /// children and emitters) stayed alive until something else happened to sweep the
+    /// cache: `checkLevelCompletion()` once every wave had spawned, a memory warning,
+    /// or slow motion being active. On a long level that is tens of retained nodes for
+    /// no reason. Routing every despawn through one method also means the freeze
+    /// detonation scheduled on the *parent* node gets cancelled, which a bare
+    /// `removeFromParent()` left armed.
+    ///
+    /// `markAsDestroyed()` clears the action sequence that called this, so the removal
+    /// has to happen here rather than as a following action — the same reason
+    /// `GameScene.createSplitterFragments` pairs them in one block.
+    func despawn() {
+        markAsDestroyed()
+        removeFromParent()
+    }
+
     func markAsDestroyed() {
         hasCompletedMovement = true
 
-        // Remove all named repeating actions
-        removeAction(forKey: "vortexRotation")
-        removeAction(forKey: "vortexPulse")
-        removeAction(forKey: "mirrorShimmer")
-        removeAction(forKey: "mirrorWobble")
-        removeAction(forKey: "ghostPhase")
-        removeAction(forKey: "shieldRotation")
-        removeAction(forKey: "bouncerMovement")
-        removeAction(forKey: "teleporterBlink")
-
+        // `removeAllActions()` covers every repeating action this node runs, keyed or
+        // not. It used to be preceded by eight `removeAction(forKey:)` calls that added
+        // nothing — and half of them named keys that never existed: the real keys are
+        // "ghostFade", "bouncing" and "teleporting", not "ghostPhase",
+        // "bouncerMovement" and "teleporterBlink", and "shieldRotation" was never a key
+        // at all (the shield's spin is unkeyed and runs on a *child*, which neither the
+        // removal nor this call reaches — harmless, because the enemy is detached
+        // immediately afterwards and a rotate action captures nothing to leak).
         removeAllActions()
         pauseShooting()
+
+        // Drop any freeze detonation still scheduled on the parent node, otherwise it
+        // fires later and pays out this enemy's points a second time.
+        cancelPendingFreezeExplosion()
 
         // Unregister from GameScene cache
         if let gameScene = gameScene {
@@ -974,7 +1046,18 @@ class Enemy: SKShapeNode {
         if enemyType == .ghost {
             // Add ethereal glow
             self.alpha = 0.7
+
+            // Cue the phase-out. `SoundManager.playGhostPhaseSound` and its preloaded
+            // effect already existed but had no caller, so ghosts went transparent —
+            // the moment they become hard to hit — in complete silence. Only the
+            // fade-out is voiced: cueing both ends as well would double the rate for
+            // no extra information, and several ghosts are alive at once.
+            let phaseCue = SKAction.run { [weak self] in
+                guard let self = self else { return }
+                SoundManager.shared.playGhostPhaseSound(on: self)
+            }
             let fadeAction = SKAction.sequence([
+                phaseCue,
                 SKAction.fadeAlpha(to: 0.3, duration: ghostPhaseInterval),
                 SKAction.fadeAlpha(to: 0.7, duration: ghostPhaseInterval)
             ])
@@ -995,7 +1078,6 @@ class Enemy: SKShapeNode {
             shield.zPosition = 5
             shield.name = "shield"
             addChild(shield)
-            shieldNode = shield
 
             // Rotate shield
             let rotateAction = SKAction.rotate(byAngle: .pi * 2, duration: 2.0)
@@ -1492,7 +1574,10 @@ class Enemy: SKShapeNode {
     }
 
     func startMovement(completion: @escaping () -> Void) {
-        customMovementCompletion = completion
+        // `completion` is not stashed in a property: every branch below captures it
+        // directly in the SKAction that fires it. The property that used to hold it was
+        // never read, and it kept the closure — and whatever it captured — alive for as
+        // long as the enemy was.
         movementDuration = TimeInterval.random(in: enemyType.movementDurationRange)
 
         switch enemyType {
@@ -1501,8 +1586,7 @@ class Enemy: SKShapeNode {
             let moveAction = SKAction.moveTo(y: -20, duration: movementDuration)
             let removeAction = SKAction.run { [weak self] in
                 guard let self = self, !self.hasCompletedMovement else { return }
-                self.hasCompletedMovement = true
-                self.removeFromParent()
+                self.despawn()
                 completion()
             }
             run(SKAction.sequence([moveAction, removeAction]))
@@ -1520,8 +1604,7 @@ class Enemy: SKShapeNode {
             let moveAction = SKAction.moveTo(y: -20, duration: movementDuration)
             let removeAction = SKAction.run { [weak self] in
                 guard let self = self, !self.hasCompletedMovement else { return }
-                self.hasCompletedMovement = true
-                self.removeFromParent()
+                self.despawn()
                 completion()
             }
             run(SKAction.sequence([moveAction, removeAction]))
@@ -1611,8 +1694,7 @@ class Enemy: SKShapeNode {
         let followPath = SKAction.follow(cgPath, asOffset: false, orientToPath: false, duration: duration)
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -1635,6 +1717,15 @@ class Enemy: SKShapeNode {
 
         // CRITICAL: Stop all running actions to prevent "tearing" effect
         removeAllActions()
+
+        // ...but put the fire timer back. `removeAllActions()` also clears the keyed
+        // action `startShooting()` installs, and SpriteKit has no "remove everything
+        // except this key", so the six formation types (.formation, .scout, .eliteGuard,
+        // .bomber, .spinner, .commander) all went permanently silent the moment they
+        // began their attack run — the one phase where they are closest to the player.
+        if firesOnATimer {
+            startShooting()
+        }
 
         moveAlongPath(path, duration: duration, completion: completion)
     }
@@ -1659,8 +1750,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -1680,7 +1770,8 @@ class Enemy: SKShapeNode {
             let progress = CGFloat(i) / CGFloat(steps)
             let y = startY - (totalDistance * progress)
             // Stronger horizontal movement
-            let x = startX + sin(progress * .pi * horizontalFrequency) * horizontalAmplitude
+            let x = startX + sin(progress * .pi * GameConfiguration.strikerFrequency)
+                * GameConfiguration.strikerAmplitude
             let clampedX = max(30, min(sceneSize.width - 30, x))
             pathPoints.append(CGPoint(x: clampedX, y: y))
         }
@@ -1694,8 +1785,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -1732,8 +1822,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -1778,8 +1867,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -2173,10 +2261,14 @@ class Enemy: SKShapeNode {
             shootShrapnel(scene: scene, angle: angle, speed: isFullExplosion ? 300 : 200)
         }
 
-        // Force remove mine immediately to prevent it from staying on screen
+        // Force remove mine immediately to prevent it from staying on screen.
+        // Goes through the shared teardown so the mine leaves activeEnemies rather
+        // than lingering there; `hasCompletedMovement` is already latched above, so
+        // markAsDestroyed() is just doing the unregister and action cleanup here.
         let wait = SKAction.wait(forDuration: 0.05)
         let remove = SKAction.run { [weak self] in
             guard let self = self else { return }
+            self.markAsDestroyed()
             self.removeFromParent()
             completion()
         }
@@ -2189,15 +2281,7 @@ class Enemy: SKShapeNode {
         // Create particle explosion
         let explosion = SKEmitterNode()
 
-        // Create circular particle texture programmatically
-        let particleSize = CGSize(width: 8, height: 8)
-        let particleRenderer = UIGraphicsImageRenderer(size: particleSize)
-        let particleImage = particleRenderer.image { context in
-            let rect = CGRect(origin: .zero, size: particleSize)
-            UIColor.white.setFill()
-            context.cgContext.fillEllipse(in: rect)
-        }
-        explosion.particleTexture = SKTexture(image: particleImage)
+        explosion.particleTexture = ParticleTexture.solidCircle(diameter: 8)
 
         explosion.particleBirthRate = 600
         explosion.numParticlesToEmit = 120
@@ -2312,8 +2396,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -2345,15 +2428,7 @@ class Enemy: SKShapeNode {
         trail.zPosition = -1
         trail.name = "meteorTrail"
 
-        // Create simple particle texture
-        let size = CGSize(width: 4, height: 4)
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
-        let context = UIGraphicsGetCurrentContext()!
-        context.setFillColor(UIColor.white.cgColor)
-        context.fillEllipse(in: CGRect(origin: .zero, size: size))
-        let image = UIGraphicsGetImageFromCurrentImageContext()!
-        UIGraphicsEndImageContext()
-        trail.particleTexture = SKTexture(image: image)
+        trail.particleTexture = ParticleTexture.solidCircle(diameter: 4)
 
         addChild(trail)
     }
@@ -2387,8 +2462,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -2421,15 +2495,7 @@ class Enemy: SKShapeNode {
         trail.zPosition = -1
         trail.name = "flankerTrail"
 
-        // Create simple particle texture
-        let size = CGSize(width: 4, height: 4)
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
-        let context = UIGraphicsGetCurrentContext()!
-        context.setFillColor(UIColor.white.cgColor)
-        context.fillEllipse(in: CGRect(origin: .zero, size: size))
-        let image = UIGraphicsGetImageFromCurrentImageContext()!
-        UIGraphicsEndImageContext()
-        trail.particleTexture = SKTexture(image: image)
+        trail.particleTexture = ParticleTexture.solidCircle(diameter: 4)
 
         addChild(trail)
     }
@@ -2445,7 +2511,8 @@ class Enemy: SKShapeNode {
         for i in 0...steps {
             let progress = CGFloat(i) / CGFloat(steps)
             let y = startY - (totalDistance * progress)
-            let x = startX + sin(progress * .pi * zigzagFrequency) * zigzagAmplitude
+            let x = startX + sin(progress * .pi * GameConfiguration.zigzagFrequency)
+                * GameConfiguration.zigzagAmplitude
             // Keep within screen bounds
             let clampedX = max(30, min(sceneSize.width - 30, x))
             pathPoints.append(CGPoint(x: clampedX, y: y))
@@ -2461,8 +2528,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -2700,40 +2766,104 @@ class Enemy: SKShapeNode {
     }
 
     func freeze(duration: TimeInterval) {
+        // Re-freezing shouldn't stack overlays.
+        removeFreezeOverlay()
+
         // Pause all actions
         isPaused = true
 
-        // Visual effect - add blue tint
-        let freezeOverlay = SKShapeNode(rectOf: CGSize(width: 50, height: 50))
-        freezeOverlay.fillColor = UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 0.4)
-        freezeOverlay.strokeColor = .clear
-        freezeOverlay.name = "freezeOverlay"
-        freezeOverlay.zPosition = 10
-        addChild(freezeOverlay)
+        // Visual effect - add blue tint, sized to the enemy rather than a fixed
+        // 50x50 box (which overhung small enemies and under-covered large ones).
+        let bounds = path?.boundingBoxOfPath.size ?? CGSize(width: 30, height: 30)
+        let overlay = SKShapeNode(
+            rectOf: CGSize(width: max(bounds.width, 8), height: max(bounds.height, 8)),
+            cornerRadius: 2
+        )
+        overlay.fillColor = UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 0.4)
+        overlay.strokeColor = .clear
+        overlay.name = "freezeOverlay"
+
+        // The overlay is a sibling of the enemy, not a child of it.
+        //
+        // `isPaused = true` above stops the node's whole subtree, so an overlay parented
+        // to the enemy could never animate — the pulse below was dead on arrival. It goes
+        // on the same node that hosts the freeze timer, for the same reason: that clock
+        // keeps running during the freeze but still stops with the pause menu. A frozen
+        // enemy doesn't move, so a fixed position stays aligned with it.
+        let host: SKNode = freezeTimerHost ?? self
+        if host === self {
+            addChild(overlay)
+        } else {
+            overlay.position = position
+            overlay.zPosition = zPosition + 20
+            host.addChild(overlay)
+        }
+        freezeOverlay = overlay
 
         // Add pulsing effect before explosion
         let scaleUp = SKAction.scale(to: 1.2, duration: 0.3)
         let scaleDown = SKAction.scale(to: 1.0, duration: 0.3)
         let pulse = SKAction.sequence([scaleUp, scaleDown])
-        freezeOverlay.run(SKAction.repeatForever(pulse))
+        overlay.run(SKAction.repeatForever(pulse))
 
-        // After duration, explode the enemy
-        // IMPORTANT: Run this on the SCENE not on the enemy, because enemy is paused!
+        // After duration, explode the enemy.
+        //
+        // The timer can't live on the enemy — it is paused. It also can't live on the
+        // scene: the scene keeps running while the game is paused, so frozen enemies
+        // used to detonate behind the pause menu. gameContentNode is the node the
+        // pause actually applies to, which is exactly the clock this needs.
+        let timerHost: SKNode = freezeTimerHost ?? self
         let wait = SKAction.wait(forDuration: duration)
         let explode = SKAction.run { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.parent != nil else { return }
 
             // Use standard explosion effect from GameScene
-            if let gameScene = self.scene as? GameScene {
+            if let gameScene = self.gameScene {
                 gameScene.createExplosionForFrozenEnemy(at: self.position)
                 gameScene.addScore(self.enemyType.points)
             }
 
-            // Remove enemy
+            // Go through the normal destruction path so the enemy leaves the
+            // GameScene cache instead of lingering in it until the next sweep.
+            self.markAsDestroyed()
             self.removeFromParent()
         }
-        // Run on scene instead of on self, because self is paused!
-        scene?.run(SKAction.sequence([wait, explode]), withKey: "freezeExplosion_\(self.hash)")
+        timerHost.run(SKAction.sequence([wait, explode]), withKey: freezeActionKey)
+    }
+
+    /// Node that owns this enemy's freeze timer.
+    ///
+    /// Resolved from the cached `gameScene` rather than from `scene`, so it still
+    /// works after the enemy has been detached from the node tree — which is exactly
+    /// when the timer needs cancelling.
+    private var freezeTimerHost: SKNode? {
+        return gameScene?.gameContentNode ?? scene
+    }
+
+    /// Key for the pending freeze detonation.
+    ///
+    /// Uses a monotonically increasing instance id, not the object address: `hash`
+    /// (the previous key) is the instance pointer for an NSObject, and the allocator
+    /// reuses addresses, so a newly spawned enemy could collide with a dead one's key.
+    private var freezeActionKey: String {
+        return "freezeExplosion_\(instanceID)"
+    }
+
+    /// Cancels a pending freeze detonation, if any.
+    ///
+    /// Without this, shooting a frozen enemy left the timer scheduled and it could
+    /// still fire — awarding the enemy's points a second time.
+    private func cancelPendingFreezeExplosion() {
+        freezeTimerHost?.removeAction(forKey: freezeActionKey)
+        // The overlay now lives outside the enemy, so it no longer disappears for free
+        // when the enemy does.
+        removeFreezeOverlay()
+    }
+
+    private func removeFreezeOverlay() {
+        freezeOverlay?.removeAllActions()
+        freezeOverlay?.removeFromParent()
+        freezeOverlay = nil
     }
 
     private func performGhostMovement(completion: @escaping () -> Void) {
@@ -2748,8 +2878,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -2787,8 +2916,7 @@ class Enemy: SKShapeNode {
             // Check if off screen
             if self.position.y < -20 {
                 if !self.hasCompletedMovement {
-                    self.hasCompletedMovement = true
-                    self.removeFromParent()
+                    self.despawn()
                     completion()
                 }
             }
@@ -2831,8 +2959,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
 
@@ -2897,10 +3024,16 @@ class Enemy: SKShapeNode {
                 beamCharger.run(SKAction.fadeAlpha(to: 0, duration: 0.3))
             }
 
-            // Reset after cooldown
+            // Reset after cooldown.
+            //
+            // Weak, like every other action closure in this file: SpriteKit holds the
+            // action on this node, so a strong capture makes node -> action -> closure ->
+            // node. `markAsDestroyed()` calls `removeAllActions()` and would break it on
+            // every despawn path, but relying on that made this the one closure here that
+            // could not survive someone adding a path that skips it.
             let cooldown = SKAction.wait(forDuration: 2.0)
-            let reset = SKAction.run {
-                self.isChargingLaser = false
+            let reset = SKAction.run { [weak self] in
+                self?.isChargingLaser = false
             }
             self.run(SKAction.sequence([cooldown, reset]))
         }
@@ -2983,8 +3116,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -3019,8 +3151,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -3072,8 +3203,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -3113,8 +3243,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)
@@ -3160,8 +3289,7 @@ class Enemy: SKShapeNode {
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
-            self.hasCompletedMovement = true
-            self.removeFromParent()
+            self.despawn()
             completion()
         }
         actions.append(removeAction)

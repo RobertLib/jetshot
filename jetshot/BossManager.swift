@@ -34,9 +34,12 @@ class BossManager {
         scene.gameContentNode.addChild(newBoss)
         newBoss.addHealthBarToScene(scene)
 
-        // Wait for entrance animation
-        newBoss.enterScene {
-            self.startAttacking()
+        // Wait for entrance animation.
+        // Weak capture: the closure is retained by an action on the boss, which this
+        // manager owns — capturing self strongly closed a manager → boss → closure →
+        // manager cycle for the length of the fight.
+        newBoss.enterScene { [weak self] in
+            self?.startAttacking()
             completion()
         }
     }
@@ -62,10 +65,9 @@ class BossManager {
     }
 
     private func performAttack() {
-        guard let boss = boss,
-              scene != nil,
-              boss.isAlive(),
-              let bossPosition = boss.position as CGPoint? else { return }
+        guard let boss = boss, scene != nil, boss.isAlive() else { return }
+
+        let bossPosition = boss.position
 
         let patterns = boss.getAttackPatterns()
         guard let pattern = patterns.randomElement() else { return }
@@ -597,7 +599,14 @@ class BossManager {
         bullet.lineWidth = 2
         bullet.position = position
         bullet.zPosition = 5
-        bullet.name = "enemybullet"
+        // Must match the spelling every other producer and every sweep uses.
+        // SpriteKit name matching is case-sensitive, and this used to read
+        // "enemybullet": since boss bullets carry no lifetime action of their own,
+        // cleanupOffScreenBullets() was their only route out of the scene and it could
+        // never match them. Every shot a boss fired stayed alive — physics body and
+        // glow child included — for the rest of the level, and was also invisible to
+        // slow motion and resetEntitySpeeds().
+        bullet.name = "enemyBullet"
 
         // Add glow using GlowHelper
         let bulletColor = isHoming ? UIColor.yellow : UIColor.red
@@ -630,6 +639,17 @@ class BossManager {
 
         scene.gameContentNode.addChild(bullet)
 
+        // Hard lifetime cap, so a boss bullet can never outlive the fight even if it
+        // somehow stalls on screen. Enemy bullets already carry one of these; these
+        // ones are driven by physics velocity rather than a move action, so this is a
+        // plain wait rather than a move+remove sequence — a move action would fight
+        // the velocity. The off-screen sweep still does the routine cleanup; this is
+        // only the backstop.
+        bullet.run(SKAction.sequence([
+            SKAction.wait(forDuration: 8.0),
+            SKAction.removeFromParent()
+        ]), withKey: "bulletLifetime")
+
         return bullet
     }
 
@@ -650,11 +670,13 @@ class BossManager {
 
             var shakeActions: [SKAction] = []
 
-            // Small shakes for each explosion
+            // Small shakes for each explosion. Weak captures: the sequence is retained
+            // by the host node, and a strong `self` would keep this manager alive
+            // through the whole defeat animation.
             for i in 0..<8 {
                 let wait = SKAction.wait(forDuration: 0.2)
-                let shake = SKAction.run {
-                    self.scene?.shakeCamera(intensity: 8.0, duration: 0.2)
+                let shake = SKAction.run { [weak self] in
+                    self?.scene?.shakeCamera(intensity: 8.0, duration: 0.2)
                 }
 
                 if i > 0 {
@@ -665,13 +687,16 @@ class BossManager {
 
             // Big shake for final explosion
             let finalWait = SKAction.wait(forDuration: 0.2)
-            let finalShake = SKAction.run {
-                self.scene?.shakeCamera(intensity: 20.0, duration: 0.5)
+            let finalShake = SKAction.run { [weak self] in
+                self?.scene?.shakeCamera(intensity: 20.0, duration: 0.5)
             }
             shakeActions.append(finalWait)
             shakeActions.append(finalShake)
 
-            scene.run(SKAction.sequence(shakeActions), withKey: "bossCameraShakes")
+            // Hosted on gameContentNode, not the scene: the scene keeps ticking while
+            // the game is paused, so this shake timeline used to run on behind the
+            // pause menu, out of step with the explosions it is meant to accompany.
+            scene.gameContentNode.run(SKAction.sequence(shakeActions), withKey: "bossCameraShakes")
 
             return (true, points)
         }
@@ -699,7 +724,13 @@ class BossManager {
         boss = nil
     }
 
-    deinit {
-        cleanup()
-    }
+    // No deinit here on purpose.
+    //
+    // It used to call `cleanup()`, which is the one genuine actor-isolation violation
+    // in the project: with SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor this type is
+    // MainActor-isolated, but `deinit` is not, so touching SKNode state from it is
+    // unsound — and a hard error under the Swift 6 language mode. Deallocation is also
+    // the wrong moment for it: it happens whenever the last reference happens to drop.
+    // GameScene.willMove(from:) now calls `cleanup()` explicitly, on the main actor, at
+    // a point where teardown order is actually known.
 }

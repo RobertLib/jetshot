@@ -2,7 +2,43 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleIconFile</key>
-	<string>JetshotIcon</string>
+	<!--
+	  Only the scene manifest lives here. GENERATE_INFOPLIST_FILE stays on, so Xcode
+	  merges every INFOPLIST_KEY_* build setting (display name, orientations, status
+	  bar, launch storyboard, category) into this file at build time — this is a base,
+	  not a replacement, and duplicating those keys here would just create two places
+	  to change them.
+
+	  The manifest is what opts the app into the UIScene life cycle. Without it UIKit
+	  runs the legacy UIApplication life cycle and logs a runtime fault on iOS 26:
+	  "`UIScene` lifecycle will soon be required. Failure to adopt will result in an
+	  assert in the future." Apps that have not adopted it will eventually fail to
+	  launch outright.
+	-->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<!-- A game with one playfield; there is nothing to put in a second window. -->
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<!--
+					  Supersedes UIMainStoryboardFile, which UIKit ignores once a scene
+					  manifest is present. Main.storyboard still hosts GameViewController,
+					  so the scene has to be told where to find it.
+					-->
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 </dict>
 </plist>

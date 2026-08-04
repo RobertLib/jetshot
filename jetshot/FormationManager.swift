@@ -284,26 +284,61 @@ class FormationManager {
 
     private weak var scene: SKScene?
     private var formations: [Formation] = []
-    private var lastUpdateTime: TimeInterval = 0
 
     init(scene: SKScene) {
         self.scene = scene
     }
 
-    // Spawn a new formation
-    func spawnFormation(pattern: FormationPattern, count: Int, attackDelay: TimeInterval, onEnemyComplete: @escaping () -> Void) {
-        guard let scene = scene else { return }
+    /// Squeezes a formation's horizontal spread so every slot stays on screen.
+    ///
+    /// The patterns lay out from a centre with a fixed 50pt spacing, which the larger
+    /// waves outgrow badly — a 26-slot line spans 1250pt against a ~390pt phone, so
+    /// most of it sat outside the playfield. Every attack path runs straight down from
+    /// the slot it starts in, so those enemies dived past off-screen: unshootable, their
+    /// points unearnable, and the wave effectively far smaller than configured. Scaling
+    /// about the screen centre keeps each pattern's shape and ordering; the cost is that
+    /// the biggest waves now overlap, which beats being invisible.
+    private func fitHorizontally(_ positions: [CGPoint], sceneWidth: CGFloat) -> [CGPoint] {
+        let margin: CGFloat = 30
+        guard let minX = positions.map(\.x).min(),
+              let maxX = positions.map(\.x).max() else { return positions }
+
+        let extent = maxX - minX
+        let available = sceneWidth - margin * 2
+        guard extent > available, extent > 0, available > 0 else { return positions }
+
+        let scale = available / extent
+        let centre = sceneWidth / 2
+        return positions.map { CGPoint(x: centre + ($0.x - centre) * scale, y: $0.y) }
+    }
+
+    /// Spawns a formation made up of `types`, one enemy per entry.
+    ///
+    /// The type list matters: this used to take only a `count` and hardcode
+    /// `type: .formation`, silently discarding the enemy types the level configuration
+    /// asked for. 70 of the 79 formation waves in LevelManager specify something else
+    /// (.bomber, .eliteGuard, .commander, .spinner, .scout), so late-game formations
+    /// were spawning the same basic enemy as the early ones and paying out its 25
+    /// points instead of the intended value.
+    func spawnFormation(pattern: FormationPattern, types: [EnemyType], attackDelay: TimeInterval, onEnemyComplete: @escaping () -> Void) {
+        guard let scene = scene, !types.isEmpty else { return }
 
         let centerX = scene.size.width / 2
         let startY = scene.size.height - 150  // Lower position - visible on screen
         let spacing: CGFloat = 50
 
-        let positions = pattern.positions(count: count, centerX: centerX, startY: startY, spacing: spacing)
+        let positions = fitHorizontally(
+            pattern.positions(count: types.count, centerX: centerX, startY: startY, spacing: spacing),
+            sceneWidth: scene.size.width
+        )
 
         var enemies: [Enemy] = []
 
         for (index, _) in positions.enumerated() {
-            let enemy = Enemy(sceneSize: scene.size, scene: scene, type: .formation)
+            // `positions` is derived from types.count, but patterns are free to round
+            // their layout, so index defensively rather than trusting the counts match.
+            let type = index < types.count ? types[index] : types[types.count - 1]
+            let enemy = Enemy(sceneSize: scene.size, scene: scene, type: type)
 
             // Spawn from top with curved entry path
             let spawnX = centerX + CGFloat.random(in: -150...150)
@@ -380,10 +415,6 @@ class FormationManager {
     }
 
     func update(currentTime: TimeInterval) {
-        if lastUpdateTime == 0 {
-            lastUpdateTime = currentTime
-        }
-
         // Update all formations
         for formation in formations {
             formation.update(currentTime: currentTime)
@@ -391,8 +422,6 @@ class FormationManager {
 
         // Remove destroyed formations
         formations.removeAll { $0.isDestroyed }
-
-        lastUpdateTime = currentTime
     }
 }
 

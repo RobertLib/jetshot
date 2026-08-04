@@ -41,9 +41,6 @@ class AsteroidManager {
     private(set) var totalAsteroidsSpawned: Int = 0
     private(set) var totalAsteroidsToSpawn: Int = 0
 
-    // Active asteroids tracking (for split pieces)
-    var activeAsteroids: Set<ObjectIdentifier> = []
-
     init(scene: SKScene, waves: [AsteroidWave]) {
         self.scene = scene
         self.waves = waves
@@ -115,13 +112,9 @@ class AsteroidManager {
 
         parentNode.addChild(asteroid)
 
-        // Track this asteroid
-        activeAsteroids.insert(ObjectIdentifier(asteroid))
-
         // Start asteroid movement
-        asteroid.startMovement { [weak self] in
-            // Asteroid left the screen
-            self?.activeAsteroids.remove(ObjectIdentifier(asteroid))
+        asteroid.startMovement {
+            // Asteroid left the screen - no action needed
         }
     }
 
@@ -131,10 +124,8 @@ class AsteroidManager {
 
         let splitPieces = asteroid.split()
 
-        // Track new split pieces, add to scene, and start their movement
+        // Add split pieces to the scene and start their movement
         for (index, piece) in splitPieces.enumerated() {
-            activeAsteroids.insert(ObjectIdentifier(piece))
-
             // Get GameScene to access gameContentNode
             let parentNode: SKNode
             if let gameScene = scene as? GameScene {
@@ -155,10 +146,11 @@ class AsteroidManager {
             let randomOffset = CGFloat.random(in: -0.3...0.3)
             let angle = baseAngle + randomOffset
 
-            // Calculate split velocity with stronger downward component
+            // Calculate split velocity. Only the horizontal component is used: the
+            // downward travel comes from the fall below, which is deliberately
+            // stronger than the split impulse would be.
             let splitSpeed: CGFloat = CGFloat.random(in: 40...80) // Reduced horizontal speed
             let splitVelocityX = cos(angle) * splitSpeed
-            _ = sin(angle) * splitSpeed // Negative = downward (currently unused in final calculation)
 
             // Calculate falling movement parameters with enhanced downward speed
             let pieceSpeed = piece.asteroidSize.speed * 1.3 // 30% faster falling for threat
@@ -184,13 +176,6 @@ class AsteroidManager {
             // Combine movement and rotation
             let movement = SKAction.group([combinedMove, rotate])
 
-            // Set up completion callback
-            piece.movementCompletion = { [weak self, weak piece] in
-                if let piece = piece {
-                    self?.activeAsteroids.remove(ObjectIdentifier(piece))
-                }
-            }
-
             // Start the combined movement
             let sequence = SKAction.sequence([
                 movement,
@@ -206,21 +191,6 @@ class AsteroidManager {
 
             piece.run(sequence, withKey: "asteroidMovement")
         }
-
-        // Remove original asteroid from tracking
-        activeAsteroids.remove(ObjectIdentifier(asteroid))
     }
 
-    // Check if all asteroids are cleared
-    var allAsteroidsCleared: Bool {
-        return currentWaveIndex >= waves.count && activeAsteroids.isEmpty
-    }
-
-    func reset() {
-        currentWaveIndex = 0
-        asteroidsSpawnedInWave = 0
-        totalAsteroidsSpawned = 0
-        hasStarted = false
-        activeAsteroids.removeAll()
-    }
 }

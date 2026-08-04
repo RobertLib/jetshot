@@ -26,8 +26,40 @@ struct BackgroundSegment {
 class ParallaxBackgroundHelper {
 
     private static var activeSegments: [SKNode] = []
+
+    /// Texture cache. Main-queue only, like everything else that touches SpriteKit
+    /// here — see `addParallaxBackground` for why.
     private static var prerenderedTextures: [String: SKTexture] = [:]
-    private static let maxCachedTextures = 10  // Limit cache size to prevent memory issues
+    private static let maxCachedTextures = GameConfiguration.maxCachedTextures
+
+    /// Height of a single background tile.
+    private static let tileHeight: CGFloat = 512
+
+    /// The one cache key used by both the pre-render pass and the consumer.
+    ///
+    /// These two used to disagree: the pre-render wrote
+    /// `"<level>_<type>_<unix-seconds>"` while `createBackgroundSegment` read
+    /// `"<type>_<width>_<height>"`. Nothing ever hit, so every pre-rendered texture
+    /// was thrown away and the main thread re-rendered it anyway.
+    private static func cacheKey(for type: ParallaxBackgroundType, tileSize: CGSize) -> String {
+        return "\(type)_\(Int(tileSize.width))_\(Int(tileSize.height))"
+    }
+
+    /// Deterministic seed for a tile pattern.
+    ///
+    /// Must depend only on what the cache key depends on. Seeding from the wall clock
+    /// (the previous behaviour) meant one key could stand for arbitrarily many
+    /// different images, so which one you got depended on render order.
+    ///
+    /// Hand-rolled FNV-1a rather than `Hasher`, whose output is seeded per process and
+    /// so would give a different pattern on every launch.
+    private static func textureSeed(for type: ParallaxBackgroundType, tileSize: CGSize) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325 // FNV-1a 64-bit offset basis
+        for byte in cacheKey(for: type, tileSize: tileSize).utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01b3 // FNV prime
+        }
+        return hash
+    }
 
     /// Adds parallax background segments to scene based on level
     static func addParallaxBackground(to scene: SKScene, parentNode: SKNode, levelNumber: Int) {
@@ -43,47 +75,64 @@ class ParallaxBackgroundHelper {
         // Get segments for this level (deterministic)
         let segments = getBackgroundSegments(for: levelNumber)
 
-        // Pre-render textures asynchronously in background
-        DispatchQueue.global(qos: .userInitiated).async { [weak scene, weak parentNode] in
-            // Check if scene still exists before processing
-            guard scene != nil, parentNode != nil else { return }
+        // Pre-render whatever isn't cached yet.
+        //
+        // Deferred to a later main-queue turn, NOT moved to a background queue.
+        // `createBackgroundTexture` builds throwaway SKShapeNodes and walks them to
+        // rasterise the tile, and SpriteKit's types are `@MainActor` in the SDK — so
+        // although the nodes never touch the scene graph and the drawing itself is
+        // plain Core Graphics, doing this off the main thread is outside what SpriteKit
+        // sanctions. It used to run on `DispatchQueue.global(qos: .userInitiated)`,
+        // which the Swift 6 language mode flags on essentially every line of the render
+        // chain. Hopping to the back of the main queue still keeps the work off the
+        // scene-setup path — which is all the original optimisation was after — without
+        // touching SpriteKit from another thread.
+        //
+        // The cache stays main-queue-only throughout, so there is no longer any
+        // cross-thread access to the dictionary to reason about.
+        let tileSize = CGSize(width: scene.size.width, height: tileHeight)
 
-            for segment in segments {
-                let cacheKey = "\(levelNumber)_\(segment.type)_\(Int(Date().timeIntervalSince1970))"
-                if prerenderedTextures[cacheKey] == nil {
-                    // Pre-render texture in background thread
-                    var generator = SeededRandomGenerator(seed: UInt64(levelNumber * 1000 + Int(segment.startDelay)))
-                    let tempNode = SKNode()
-                    let tileSize = CGSize(width: scene?.size.width ?? 375, height: 512)
+        // Deduplicate on the cache key rather than on the enum.
+        var collectedTypes: [ParallaxBackgroundType] = []
+        var pendingKeys: Set<String> = []
+        for segment in segments {
+            let key = cacheKey(for: segment.type, tileSize: tileSize)
+            guard prerenderedTextures[key] == nil, pendingKeys.insert(key).inserted else { continue }
+            collectedTypes.append(segment.type)
+        }
 
-                    switch segment.type {
-                    case .grid:
-                        addGridPattern(to: tempNode, size: tileSize, generator: &generator)
-                    case .shipPanels:
-                        addShipPanels(to: tempNode, size: tileSize, generator: &generator)
-                    case .techPlates:
-                        addTechPlates(to: tempNode, size: tileSize, generator: &generator)
-                    case .circuitBoard:
-                        addCircuitBoard(to: tempNode, size: tileSize, generator: &generator)
-                    }
+        let missingTypes = collectedTypes
 
-                    let texture = renderNodeToTexture(node: tempNode, size: tileSize)
+        if !missingTypes.isEmpty {
+            DispatchQueue.main.async { [weak scene, weak parentNode] in
+                // Bail out if the scene went away while this was queued.
+                guard scene != nil, parentNode != nil else { return }
 
-                    DispatchQueue.main.async { [weak scene, weak parentNode] in
-                        // Double-check scene and parentNode still exist before caching
-                        guard scene != nil, parentNode != nil else { return }
-                        prerenderedTextures[cacheKey] = texture
-                    }
+                for type in missingTypes {
+                    let key = cacheKey(for: type, tileSize: tileSize)
+                    guard prerenderedTextures[key] == nil else { continue }
+                    var generator = SeededRandomGenerator(seed: textureSeed(for: type, tileSize: tileSize))
+                    prerenderedTextures[key] = createBackgroundTexture(
+                        type: type,
+                        size: tileSize,
+                        generator: &generator
+                    )
                 }
             }
         }
 
-        // Schedule each segment using SKAction to respect pause state
+        // Schedule each segment on `parentNode`, not on the scene.
+        //
+        // These used to be scheduled on the scene with a comment claiming it respected
+        // the pause state — it does not. GameScene pauses `gameContentNode` (which is
+        // what it passes as `parentNode`), never the scene itself, so background
+        // segments went on appearing and expiring behind the pause menu while the rest
+        // of the playfield was frozen.
         for segment in segments {
             let waitAction = SKAction.wait(forDuration: segment.startDelay)
             let spawnAction = SKAction.run { [weak scene, weak parentNode] in
                 guard let scene = scene, let parentNode = parentNode else { return }
-                let segmentNode = createBackgroundSegment(type: segment.type, scene: scene, parentNode: parentNode, levelNumber: levelNumber)
+                let segmentNode = createBackgroundSegment(type: segment.type, scene: scene, parentNode: parentNode)
                 activeSegments.append(segmentNode)
 
                 // Schedule removal after duration
@@ -93,9 +142,9 @@ class ParallaxBackgroundHelper {
                     fadeOutAndRemove(node: segmentNode)
                     activeSegments.removeAll { $0 == segmentNode }
                 }
-                scene.run(SKAction.sequence([removeWait, removeAction]))
+                parentNode.run(SKAction.sequence([removeWait, removeAction]))
             }
-            scene.run(SKAction.sequence([waitAction, spawnAction]))
+            parentNode.run(SKAction.sequence([waitAction, spawnAction]))
         }
     }
 
@@ -132,29 +181,31 @@ class ParallaxBackgroundHelper {
     }
 
     /// Creates a background segment with parallax layers
-    private static func createBackgroundSegment(type: ParallaxBackgroundType, scene: SKScene, parentNode: SKNode, levelNumber: Int) -> SKNode {
+    private static func createBackgroundSegment(type: ParallaxBackgroundType, scene: SKScene, parentNode: SKNode) -> SKNode {
         let segmentContainer = SKNode()
         segmentContainer.name = "backgroundSegment"
         segmentContainer.alpha = 0
 
-        var generator = SeededRandomGenerator(seed: UInt64(levelNumber * 1000 + Int(Date().timeIntervalSince1970)))
-
         // Create 2-3 layers with different speeds for parallax effect
         let layerSpeeds: [CGFloat] = [20, 35, 50]
-        let layerAlphas: [CGFloat] = [0.12, 0.18, 0.25]
+        // Held back deliberately: at higher opacity the tech plating competed
+        // with enemies and bullets for attention, which hurts readability in a
+        // game where you have to track small fast objects.
+        let layerAlphas: [CGFloat] = [0.08, 0.12, 0.17]
 
         // Create or get cached texture ONCE for all tiles
-        let tileHeight: CGFloat = 512
+        let tileHeight = Self.tileHeight
         let tileSize = CGSize(width: scene.size.width, height: tileHeight)
-        let cacheKey = "\(type)_\(Int(scene.size.width))_\(Int(tileHeight))"
+        let key = cacheKey(for: type, tileSize: tileSize)
 
         let sharedTexture: SKTexture
-        if let cachedTexture = prerenderedTextures[cacheKey] {
+        if let cachedTexture = prerenderedTextures[key] {
             sharedTexture = cachedTexture
         } else {
-            // Create texture only once
+            // Not pre-rendered in time (or evicted) — render inline as a fallback.
+            var generator = SeededRandomGenerator(seed: textureSeed(for: type, tileSize: tileSize))
             sharedTexture = createBackgroundTexture(type: type, size: tileSize, generator: &generator)
-            prerenderedTextures[cacheKey] = sharedTexture
+            prerenderedTextures[key] = sharedTexture
         }
 
         for (index, speed) in layerSpeeds.enumerated() {
@@ -602,7 +653,11 @@ class ParallaxBackgroundHelper {
     private static func animateParallaxLayer(_ layer: SKNode, speed: CGFloat, tileHeight: CGFloat, scene: SKScene) {
         let moveDown = SKAction.moveBy(x: 0, y: -tileHeight, duration: TimeInterval(tileHeight / speed))
 
-        let resetPosition = SKAction.run {
+        // [weak layer]: this action repeats forever on `layer` itself, so a strong
+        // capture would form the cycle layer -> action -> closure -> layer and keep
+        // every parallax layer (and its tiles) alive for the life of the process.
+        let resetPosition = SKAction.run { [weak layer] in
+            guard let layer = layer else { return }
             // When tile moves by its height, reset position
             for tile in layer.children {
                 if tile.position.y < -tileHeight {

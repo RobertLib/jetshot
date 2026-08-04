@@ -90,9 +90,4 @@ class PowerUpManager {
         // Fallback (should never reach here)
         return .multiShot
     }
-
-    func reset() {
-        lastSpawnTime = 0
-        nextSpawnDelay = spawnConfig.spawnInterval
-    }
 }

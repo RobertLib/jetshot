@@ -28,14 +28,18 @@ class Coin: SKNode {
     }
 
     deinit {
-        // Stop all animations before deallocation
-        shape?.removeAllActions()
-        removeAllActions()
+        // Deliberately does not stop actions.
+        //
+        // `shape?.removeAllActions()` / `removeAllActions()` used to run here, which was
+        // both pointless and unsound: a node owns its action list, so deallocating it
+        // discards those actions anyway, and `deinit` is nonisolated while SKNode's
+        // methods are main-actor isolated under this project's default isolation —
+        // an error in the Swift 6 language mode.
 
-        // Unregister from cache when coin is deallocated
-        if let scene = self.scene as? GameScene {
-            scene.unregisterCoin(self)
-        }
+        // No cache unregistration here either. It was unreachable twice over: GameScene's
+        // activeCoins holds a strong reference, so deinit cannot run while the coin is
+        // still listed, and by the time it does run the node is already detached, making
+        // `self.scene` nil. GameScene.pruneCoinCache() does the eviction instead.
     }
 
     private func setupVisuals() {
@@ -66,36 +70,54 @@ class Coin: SKNode {
         }
         starPath.closeSubpath()
 
+        // Warm halo behind the star, so a pickup reads as valuable at a glance
+        // even against the brightest nebula.
+        let halo = NeonFX.radialGlow(radius: radius * 2.2, color: UIColor(red: 1.0, green: 0.78, blue: 0.15, alpha: 1.0))
+        halo.alpha = 0.55
+        halo.zPosition = -2
+        addChild(halo)
+        let haloUp = SKAction.scale(to: 1.2, duration: 0.6)
+        haloUp.timingMode = .easeInEaseOut
+        let haloDown = SKAction.scale(to: 0.92, duration: 0.6)
+        haloDown.timingMode = .easeInEaseOut
+        halo.run(.repeatForever(.sequence([haloUp, haloDown])))
+
         // Main star
         let mainStar = SKShapeNode(path: starPath)
         mainStar.fillColor = starColor
         mainStar.strokeColor = starBorder
-        mainStar.lineWidth = 2.5
+        mainStar.lineWidth = 1.6
         shape.addChild(mainStar)
 
-        // Inner star for depth
-        let innerStarPath = CGMutablePath()
-        let innerStarRadius: CGFloat = radius * 0.6
-        let innerStarInnerRadius: CGFloat = innerStarRadius * 0.4
+        // Facets: a lit and a shaded triangle per arm. Because the star spins,
+        // the alternating wedges catch the eye as turning metal rather than a
+        // flat sticker — the cheapest way to make a 2D pickup look solid.
+        let litFacet = UIColor(red: 1.0, green: 0.98, blue: 0.72, alpha: 0.85)
+        let darkFacet = UIColor(red: 0.72, green: 0.46, blue: 0.02, alpha: 0.75)
 
         for i in 0..<points * 2 {
-            let angle = CGFloat(i) * .pi / CGFloat(points) - .pi / 2
-            let currentRadius = i % 2 == 0 ? innerStarRadius : innerStarInnerRadius
-            let x = currentRadius * cos(angle)
-            let y = currentRadius * sin(angle)
+            let a1 = CGFloat(i) * .pi / CGFloat(points) - .pi / 2
+            let a2 = CGFloat(i + 1) * .pi / CGFloat(points) - .pi / 2
+            let r1 = i % 2 == 0 ? radius : innerRadius
+            let r2 = i % 2 == 0 ? innerRadius : radius
 
-            if i == 0 {
-                innerStarPath.move(to: CGPoint(x: x, y: y))
-            } else {
-                innerStarPath.addLine(to: CGPoint(x: x, y: y))
-            }
+            let facetPath = CGMutablePath()
+            facetPath.move(to: .zero)
+            facetPath.addLine(to: CGPoint(x: r1 * cos(a1), y: r1 * sin(a1)))
+            facetPath.addLine(to: CGPoint(x: r2 * cos(a2), y: r2 * sin(a2)))
+            facetPath.closeSubpath()
+
+            let facet = SKShapeNode(path: facetPath)
+            facet.fillColor = i % 2 == 0 ? litFacet : darkFacet
+            facet.strokeColor = .clear
+            facet.zPosition = 1
+            shape.addChild(facet)
         }
-        innerStarPath.closeSubpath()
 
-        let innerStar = SKShapeNode(path: innerStarPath)
-        innerStar.fillColor = UIColor(red: 1.0, green: 0.9, blue: 0.2, alpha: 0.5)
-        innerStar.strokeColor = .clear
-        shape.addChild(innerStar)
+        // White-hot centre, which reads as a gemstone catching the light.
+        let core = NeonFX.radialGlow(radius: radius * 0.55, color: UIColor(red: 1.0, green: 1.0, blue: 0.92, alpha: 1.0))
+        core.zPosition = 2
+        shape.addChild(core)
 
         addChild(shape)
 
@@ -107,6 +129,35 @@ class Coin: SKNode {
             maxIntensity: 1.2,
             duration: 1.0
         )
+
+        addGlint(radius: radius)
+    }
+
+    /// Occasional four-ray glint. Non-periodic-looking sparkle is what makes a
+    /// row of identical pickups feel alive instead of stamped.
+    private func addGlint(radius: CGFloat) {
+        let glint = SKNode()
+        glint.zPosition = 3
+        glint.alpha = 0
+        addChild(glint)
+
+        for i in 0..<2 {
+            let ray = SKShapeNode(rectOf: CGSize(width: 1.6, height: radius * 3.4), cornerRadius: 0.8)
+            ray.fillColor = .white
+            ray.strokeColor = .clear
+            ray.blendMode = .add
+            ray.zRotation = CGFloat(i) * .pi / 2
+            glint.addChild(ray)
+        }
+
+        let flash = SKAction.sequence([
+            .wait(forDuration: Double.random(in: 0.4...2.6)),
+            .group([.fadeAlpha(to: 0.9, duration: 0.09), .scale(to: 1.25, duration: 0.09)]),
+            .group([.fadeOut(withDuration: 0.24), .scale(to: 0.7, duration: 0.24)]),
+            .run { glint.setScale(1.0) },
+            .wait(forDuration: Double.random(in: 1.4...3.4))
+        ])
+        glint.run(.repeatForever(flash))
     }
 
     private func setupPhysics() {
@@ -176,15 +227,7 @@ class Coin: SKNode {
         // Create sparkle particles
         let sparkle = SKEmitterNode()
 
-        // Create small circle texture for sparkles
-        let sparkleSize = CGSize(width: 8, height: 8)
-        let sparkleRenderer = UIGraphicsImageRenderer(size: sparkleSize)
-        let sparkleImage = sparkleRenderer.image { context in
-            UIColor.white.setFill()
-            let rect = CGRect(origin: .zero, size: sparkleSize)
-            context.cgContext.fillEllipse(in: rect)
-        }
-        sparkle.particleTexture = SKTexture(image: sparkleImage)
+        sparkle.particleTexture = ParticleTexture.solidCircle(diameter: 8)
 
         sparkle.particleBirthRate = 30
         sparkle.numParticlesToEmit = 20

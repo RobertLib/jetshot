@@ -124,26 +124,33 @@ class Asteroid: SKShapeNode {
 
         self.path = path
 
-        // Set colors based on size (very dark gray tones - pure monochrome)
+        // Warm stone rather than neutral charcoal: against a blue-black sky the
+        // old dark greys read as holes punched in the starfield.
         let baseColor: UIColor
         let strokeColor: UIColor
 
         switch asteroidSize {
         case .large:
-            baseColor = UIColor(red: 0.20, green: 0.20, blue: 0.20, alpha: 1.0) // Very dark gray
-            strokeColor = UIColor(red: 0.38, green: 0.38, blue: 0.38, alpha: 1.0) // Dark gray
+            baseColor = UIColor(red: 0.34, green: 0.30, blue: 0.27, alpha: 1.0)
+            strokeColor = UIColor(red: 0.62, green: 0.56, blue: 0.48, alpha: 1.0)
         case .medium:
-            baseColor = UIColor(red: 0.22, green: 0.22, blue: 0.22, alpha: 1.0) // Very dark gray
-            strokeColor = UIColor(red: 0.40, green: 0.40, blue: 0.40, alpha: 1.0) // Dark gray
+            baseColor = UIColor(red: 0.36, green: 0.32, blue: 0.29, alpha: 1.0)
+            strokeColor = UIColor(red: 0.65, green: 0.58, blue: 0.50, alpha: 1.0)
         case .small:
-            baseColor = UIColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0) // Dark gray
-            strokeColor = UIColor(red: 0.43, green: 0.43, blue: 0.43, alpha: 1.0) // Medium gray
+            baseColor = UIColor(red: 0.39, green: 0.35, blue: 0.31, alpha: 1.0)
+            strokeColor = UIColor(red: 0.68, green: 0.61, blue: 0.53, alpha: 1.0)
         }
 
         self.fillColor = baseColor
         self.strokeColor = strokeColor
-        self.lineWidth = 2.0
+        self.lineWidth = 1.6
         self.glowWidth = 0
+
+        // Shaded stone surface. The ramp tumbles with the rock rather than
+        // staying fixed to the sun — at this size and spin rate it reads as
+        // albedo variation, and it avoids a per-asteroid crop/render pass.
+        SurfaceFX.applyMetal(to: self, tint: baseColor, specular: 0.25)
+        addSurfaceDetail(baseRadius: baseRadius, base: baseColor, rim: strokeColor)
 
         // Position at top or specific position
         if let startPos = startPosition {
@@ -169,11 +176,43 @@ class Asteroid: SKShapeNode {
         )
         self.run(SKAction.repeatForever(rotateAction))
 
-        // Add sharp glow effect using GlowHelper
-        GlowHelper.addEnhancedGlow(to: self, color: strokeColor, intensity: 0.6)
+        // Only a faint halo: rock is not a light source, and the old strong glow
+        // was what made asteroids look like glowing voids.
+        GlowHelper.addEnhancedGlow(to: self, color: strokeColor, intensity: 0.22)
 
         self.name = "asteroid"
         self.zPosition = 10
+    }
+
+    /// Craters and a lit edge, so the silhouette reads as stone with volume.
+    private func addSurfaceDetail(baseRadius: CGFloat, base: UIColor, rim: UIColor) {
+        let craterCount = asteroidSize == .small ? 2 : Int.random(in: 3...5)
+
+        for _ in 0..<craterCount {
+            let craterRadius = baseRadius * CGFloat.random(in: 0.11...0.24)
+            let angle = CGFloat.random(in: 0...(.pi * 2))
+            let distance = CGFloat.random(in: 0...(baseRadius * 0.52))
+            let centre = CGPoint(x: cos(angle) * distance, y: sin(angle) * distance)
+
+            let pit = SKShapeNode(circleOfRadius: craterRadius)
+            pit.fillColor = (base.darker(by: 0.10) ?? base).withAlphaComponent(0.85)
+            pit.strokeColor = .clear
+            pit.position = centre
+            pit.zPosition = 1
+            addChild(pit)
+
+            // Lit lip on the sun-facing side of the rim.
+            let lip = SKShapeNode(circleOfRadius: craterRadius)
+            lip.fillColor = .clear
+            lip.strokeColor = rim.withAlphaComponent(0.38)
+            lip.lineWidth = max(0.7, craterRadius * 0.22)
+            lip.position = CGPoint(
+                x: centre.x + cos(SurfaceFX.lightAngle) * craterRadius * 0.22,
+                y: centre.y + sin(SurfaceFX.lightAngle) * craterRadius * 0.22
+            )
+            lip.zPosition = 2
+            addChild(lip)
+        }
     }
 
     func startMovement(completion: @escaping () -> Void) {

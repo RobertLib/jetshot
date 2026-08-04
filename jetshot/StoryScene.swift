@@ -19,7 +19,9 @@ class StoryScene: SKScene {
     private var scrollContainer: SKNode!
     private var isSkipped = false
     private var skipLabel: SKLabelNode!
-    private var safeAreaTop: CGFloat = 0
+    /// Only the bottom inset is kept: the crawl scrolls in from above `size.height`
+    /// rather than being pinned near the notch, so nothing in this scene has a top
+    /// margin to honour. The top inset used to be stored here and never read.
     private var safeAreaBottom: CGFloat = 0
 
     // Touch tracking for tap vs swipe detection
@@ -39,14 +41,13 @@ class StoryScene: SKScene {
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
 
-        // Get safe area insets
-        if let windowScene = view.window?.windowScene {
-            safeAreaTop = windowScene.windows.first?.safeAreaInsets.top ?? 0
-            safeAreaBottom = windowScene.windows.first?.safeAreaInsets.bottom ?? 0
-        }
+        // Get safe area inset for the skip label
+        safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)
 
         // Add starfield background
+        StarfieldHelper.addDepthLayers(to: self)
         addChild(StarfieldHelper.createStarfield(for: self))
+        NeonFX.attachGrade(to: self, zPosition: -5)
         addChild(StarfieldHelper.createShootingStars(for: self))
         addChild(StarfieldHelper.createMeteors(for: self))
 
@@ -54,7 +55,7 @@ class StoryScene: SKScene {
         setupSkipButton()
 
         // Start story music
-        SoundManager.shared.playSpecificMusic(filename: "music-story.mp3")
+        SoundManager.shared.playSpecificMusic(named: SoundManager.storyMusicTrack)
     }
 
     override func willMove(from view: SKView) {
@@ -268,6 +269,11 @@ class StoryScene: SKScene {
 
         switch storyType {
         case .opening:
+            // Record that the intro has been seen, so replaying level 1 goes straight
+            // into the game. This is the single exit point for both the natural end of
+            // the crawl and the tap-to-skip, so it covers both.
+            LevelManager.shared.hasSeenOpeningStory = true
+
             // Start the game
             if let level = targetLevel {
                 let gameScene = GameScene(size: view.bounds.size)
@@ -285,10 +291,15 @@ class StoryScene: SKScene {
                 view.presentScene(gameScene, transition: transition)
             }
         case .ending:
-            // Return to level select
-            let levelSelectScene = LevelSelectScene(size: view.bounds.size)
-            levelSelectScene.scaleMode = .resizeFill
-            view.presentScene(levelSelectScene, transition: transition)
+            // Hand off to the victory screen, which owns the total score and the
+            // play-again / levels / menu choices. This used to bounce straight to the
+            // level select, which is why GameCompletionScene never appeared.
+            let completionScene = GameCompletionScene(
+                size: view.bounds.size,
+                totalScore: LevelManager.shared.getTotalScore()
+            )
+            completionScene.scaleMode = .resizeFill
+            view.presentScene(completionScene, transition: transition)
         }
     }
 }

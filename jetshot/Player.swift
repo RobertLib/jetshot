@@ -50,6 +50,14 @@ class Player: SKShapeNode {
     private var lightningIndicators: [SKShapeNode] = []
     private var barrierNodes: [SKShapeNode] = []
 
+    // Flight feel
+    private var previousX: CGFloat = 0
+    private var bankAngle: CGFloat = 0
+    private var enginePlumes: [SKSpriteNode] = []
+    /// Frames since the last movement command, so the roll can level out when
+    /// the player stops dragging (touchesMoved simply stops firing).
+    private var framesSinceMove: Int = 0
+
     init(sceneSize: CGSize, safeAreaBottom: CGFloat = 0) {
         super.init()
 
@@ -61,15 +69,23 @@ class Player: SKShapeNode {
     }
 
     deinit {
-        // Stop all repeating actions before deallocation
-        removeAllActions()
-        enumerateChildNodes(withName: "//") { node, _ in
-            node.removeAllActions()
-        }
+        // Deliberately does not stop actions.
+        //
+        // This used to walk the subtree calling `removeAllActions()`. Both pointless and
+        // unsound: the player and its children are being deallocated, so SpriteKit
+        // discards their action lists regardless, and `deinit` is nonisolated while
+        // SKNode's methods are main-actor isolated under this project's default
+        // isolation — an error in the Swift 6 language mode. GameScene.willMove(from:)
+        // already sweeps the live tree before teardown, which is the point where
+        // stopping repeating actions actually matters.
 
-        // Clean up cache when player is deallocated
-        // Note: This only clears if this is the last Player instance
-        Player.clearTextureCache()
+        // The shared particle texture is deliberately *not* dropped here. It used to
+        // be, with a comment claiming it only happened for the last Player instance —
+        // which the code never checked. During a scene transition the outgoing
+        // player's deinit runs after the incoming scene has built its own player, so
+        // clearing the cache just threw away a texture that was needed again
+        // immediately. Memory pressure is handled by handleMemoryWarning() instead,
+        // which now clears `ParticleTexture` — the one cache every emitter shares.
     }
 
     private func setupPlayer(sceneSize: CGSize, safeAreaBottom: CGFloat) {
@@ -116,7 +132,7 @@ class Player: SKShapeNode {
         self.lineWidth = 2.5
 
         // Position above safe area (home indicator) with padding
-        let playerHeight = safeAreaBottom + 60
+        let playerHeight = safeAreaBottom + GameConfiguration.playerBottomOffset
         self.position = CGPoint(x: sceneSize.width / 2, y: playerHeight)
         self.name = "player"
 
@@ -152,9 +168,43 @@ class Player: SKShapeNode {
         leftEngine.run(SKAction.repeatForever(engineFlicker))
         rightEngine.run(SKAction.repeatForever(engineFlicker))
 
+        // Soft additive plumes underneath the particle thrusters. The particles
+        // alone are sparse dots; the plume is the bright column of light that
+        // makes the ship look like it is under power.
+        for x in [-4.5, 4.5] as [CGFloat] {
+            let plume = NeonFX.radialGlow(radius: 11, color: UIColor(red: 0.25, green: 0.85, blue: 1.0, alpha: 1.0))
+            plume.position = CGPoint(x: x, y: -21)
+            plume.yScale = 1.9
+            plume.xScale = 0.62
+            plume.zPosition = -3
+            addChild(plume)
+            enginePlumes.append(plume)
+
+            let flare = SKAction.sequence([
+                .group([.scaleY(to: 2.25, duration: 0.09), .fadeAlpha(to: 1.0, duration: 0.09)]),
+                .group([.scaleY(to: 1.7, duration: 0.11), .fadeAlpha(to: 0.72, duration: 0.11)])
+            ])
+            plume.run(.repeatForever(flare))
+        }
+
         // Add particle effects for engine thrusters
         addEngineThrusterParticles(at: CGPoint(x: -4.5, y: -18))
         addEngineThrusterParticles(at: CGPoint(x: 4.5, y: -18))
+
+        previousX = position.x
+
+        // Levels the wings out once the player stops steering: touchesMoved just
+        // stops firing, so without this the ship would stay locked in a tilt.
+        run(.repeatForever(.customAction(withDuration: 1.0) { [weak self] _, _ in
+            guard let self = self else { return }
+            self.framesSinceMove += 1
+            guard self.framesSinceMove > 2 else { return }
+            self.bankAngle *= 0.86
+            self.zRotation = self.bankAngle
+            for plume in self.enginePlumes {
+                plume.zRotation = -self.bankAngle * 0.55
+            }
+        }), withKey: "bankLevelling")
 
         // Setup physics body
         self.physicsBody = SKPhysicsBody(polygonFrom: path)
@@ -168,35 +218,13 @@ class Player: SKShapeNode {
         GlowHelper.addPulsingEnhancedGlow(to: self, color: UIColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 1.0), minIntensity: 0.6, maxIntensity: 0.9, duration: 1.2)
     }
 
-    // Cached particle texture for better performance
-    // Note: SpriteKit runs on main thread, so @MainActor ensures thread safety
-    private static var cachedParticleTexture: SKTexture?
-
-    /// Clear cached texture (call when memory is low or player is deallocated)
-    static func clearTextureCache() {
-        // Ensure we're on main thread for SpriteKit texture operations
-        if Thread.isMainThread {
-            cachedParticleTexture = nil
-        } else {
-            DispatchQueue.main.async {
-                cachedParticleTexture = nil
-            }
-        }
-    }
-
     private func addEngineThrusterParticles(at position: CGPoint) {
         // Create particle emitter for engine thruster effect
         let thrusterEmitter = SKEmitterNode()
         thrusterEmitter.position = position
         thrusterEmitter.zPosition = -2
 
-        // Use cached texture or create if needed (main thread only)
-        if Player.cachedParticleTexture == nil {
-            Player.cachedParticleTexture = createParticleTexture()
-        }
-        let texture = Player.cachedParticleTexture
-
-        thrusterEmitter.particleTexture = texture
+        thrusterEmitter.particleTexture = ParticleTexture.glowCircle(diameter: 32)
 
         // Particle properties (optimized from 150 to 80 for better performance)
         thrusterEmitter.particleBirthRate = 80
@@ -246,37 +274,6 @@ class Player: SKShapeNode {
         addChild(thrusterEmitter)
     }
 
-    private func createParticleTexture() -> SKTexture {
-        // Create a simple circular gradient texture for particles
-        let size = CGSize(width: 32, height: 32)
-        let renderer = UIGraphicsImageRenderer(size: size)
-
-        let image = renderer.image { context in
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-
-            // Create radial gradient
-            let colors = [
-                UIColor.white.cgColor,
-                UIColor.white.withAlphaComponent(0.5).cgColor,
-                UIColor.clear.cgColor
-            ] as CFArray
-
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 0.5, 1]) {
-                context.cgContext.drawRadialGradient(
-                    gradient,
-                    startCenter: center,
-                    startRadius: 0,
-                    endCenter: center,
-                    endRadius: size.width / 2,
-                    options: []
-                )
-            }
-        }
-
-        return SKTexture(image: image)
-    }
-
     func moveTo(x: CGFloat, y: CGFloat, sceneWidth: CGFloat, sceneHeight: CGFloat, safeAreaBottom: CGFloat) {
         // Clamp X position to screen bounds
         let targetX = max(10, min(sceneWidth - 10, x))
@@ -289,8 +286,17 @@ class Player: SKShapeNode {
         let maxY = minY + (sceneHeight * 0.5)  // Can move up by 50% of screen height
         let targetY = max(minY, min(maxY, y + touchYOffset))
 
+        // Bank into the jump. Tap-to-move animates the position, so there are no
+        // per-frame deltas for `updateBanking` to read; kick the roll here and
+        // let the levelling action ease it back out.
+        let dx = targetX - position.x
+        bankAngle = max(-0.38, min(0.38, -dx * 0.012))
+        zRotation = bankAngle
+        framesSinceMove = 0
+
         let moveAction = SKAction.move(to: CGPoint(x: targetX, y: targetY), duration: moveSpeed)
         run(moveAction)
+        previousX = targetX
     }
 
     func moveToInstant(x: CGFloat, y: CGFloat, sceneWidth: CGFloat, sceneHeight: CGFloat, safeAreaBottom: CGFloat) {
@@ -308,6 +314,41 @@ class Player: SKShapeNode {
         // Direct position update for smooth dragging
         position.x = targetX
         position.y = targetY
+
+        updateBanking()
+    }
+
+    /// Rolls the hull into the turn and leans the engine plumes the other way.
+    ///
+    /// A fighter that slides sideways without banking is the clearest tell of a
+    /// 2D sprite; the roll costs nothing and makes the ship feel like it has mass.
+    private func updateBanking() {
+        let dx = position.x - previousX
+        previousX = position.x
+        framesSinceMove = 0
+
+        // Smoothed, so a jittery finger doesn't make the ship twitch.
+        let maxBank: CGFloat = 0.38
+        let target = max(-maxBank, min(maxBank, -dx * 0.055))
+        bankAngle += (target - bankAngle) * 0.25
+        zRotation = bankAngle
+
+        // Counter-rotate the plumes slightly: thrust keeps pointing more or less
+        // down-range while the airframe rolls.
+        for plume in enginePlumes {
+            plume.zRotation = -bankAngle * 0.55
+        }
+    }
+
+    /// Brief squash on the hull when a shot goes out. Sub-100ms so it registers
+    /// as kick rather than as the ship wobbling.
+    func applyRecoil() {
+        removeAction(forKey: "recoil")
+        let dip = SKAction.scaleY(to: 0.9, duration: 0.045)
+        dip.timingMode = .easeOut
+        let back = SKAction.scaleY(to: 1.0, duration: 0.085)
+        back.timingMode = .easeOut
+        run(.sequence([dip, back]), withKey: "recoil")
     }
 
     func shoot() -> [SKShapeNode] {
@@ -675,31 +716,13 @@ class Player: SKShapeNode {
         // If no powerups, nothing to remove
     }
 
-    func resetPowerUps() {
-        // Complete reset of all powerups (used for game over or level start)
-        bulletCount = 1
-        sideMissileCount = 0
-        hasShield = false
-        hasLightningWeapon = false
-        hasRapidFire = false
-        hasMagnet = false
-        hasSlowMotion = false
-        hasScoreMultiplier = false
-        hasBarrier = false
-    }
-
-    func playHitAnimation() {
-        // Blink animation when hit
-        let blinkAction = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 0.1),
-            SKAction.fadeAlpha(to: 1.0, duration: 0.1)
-        ])
-        run(SKAction.repeat(blinkAction, count: 3))
-    }
+    // No resetPowerUps() here. It had no callers: a life lost goes through
+    // degradePowerUps(), and a new level builds a fresh Player from the arsenal
+    // GameScene hands it, so there is never a live ship whose power-ups need clearing.
 
     func updateBounds(sceneSize: CGSize, safeAreaBottom: CGFloat) {
         // Update player position to stay within new bounds
-        let playerHeight = safeAreaBottom + 60
+        let playerHeight = safeAreaBottom + GameConfiguration.playerBottomOffset
         let clampedX = max(30, min(sceneSize.width - 30, position.x))
         position = CGPoint(x: clampedX, y: playerHeight)
     }
@@ -787,12 +810,26 @@ class Player: SKShapeNode {
                     color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0),
                     intensity: 1.0
                 )
-            }
 
-            // Rotate all barrier segments together
-            let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 3.0)
-            let repeatRotate = SKAction.repeatForever(rotate)
-            barrierNodes.forEach { $0.run(repeatRotate) }
+                // Orbit the segment around the ship.
+                //
+                // This used to be `rotate(byAngle:)`, which spins a node about its own
+                // centre — invisible on a circle, so the "rotating barrier" sat
+                // perfectly still. Driving the position instead makes the ring actually
+                // sweep, which also means the gaps between segments move rather than
+                // leaving four permanently open approach lanes. The segments stay direct
+                // children of the ship so GameScene's non-recursive lookup for
+                // "barrierSegment" (where their physics bodies get attached) still
+                // finds them.
+                let orbitDuration: TimeInterval = 3.0
+                let baseAngle = angle
+                let orbit = SKAction.customAction(withDuration: orbitDuration) { node, elapsed in
+                    let progress = CGFloat(elapsed) / CGFloat(orbitDuration)
+                    let current = baseAngle + progress * .pi * 2
+                    node.position = CGPoint(x: cos(current) * radius, y: sin(current) * radius)
+                }
+                segment.run(SKAction.repeatForever(orbit))
+            }
         }
     }
 }

@@ -260,9 +260,14 @@ class Boss: SKShapeNode {
 
     // Damage visual effects
     private var damageLevel: Int = 0  // 0 = no damage, 1-3 = increasing damage
-    private var damageParts: [SKNode] = []
+    // No `damageParts` array here on purpose. It used to collect every chunk and scorch
+    // mark and was never read back — write-only state that just held strong references.
+    // Both kinds of node already retire themselves: chunks end their fly-off with
+    // removeFromParent(), and scorch marks are children of the boss.
     private var cracksLayer: SKNode?
-    private var lastDamageEffectHealth: Int = 0
+    // No `lastDamageEffectHealth` either, for the same reason: it was set once in init
+    // and never read. Re-application of the damage visuals is already gated by
+    // `damageLevel` in `applyDamageVisuals(healthPercent:)`.
 
     init(config: BossConfig, sceneSize: CGSize) {
         self.config = config
@@ -291,8 +296,6 @@ class Boss: SKShapeNode {
         cracks.zPosition = 1
         cracksLayer = cracks
         addChild(cracks)
-
-        lastDamageEffectHealth = config.maxHealth
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -562,29 +565,32 @@ class Boss: SKShapeNode {
         return cannon
     }
 
+    /// How far below the HUD margin the health bar hangs.
+    ///
+    /// Not private so `jetshotTests` can assert the placement without restating the
+    /// number. The point of that test is that the bar is measured down from
+    /// `GameConfiguration.topMargin(in:)`, and a test carrying its own copy of the drop
+    /// would keep passing if the margin fell out of the formula again — which is exactly
+    /// what went wrong here.
+    static let healthBarDropBelowHUD: CGFloat = 100
+
+    /// Builds the health bar. Its *position* is set later, by `layoutHealthBar(in:)`.
+    ///
+    /// The split is forced by the safe-area inset. This runs from `init`, where the boss
+    /// is not in a scene yet, so it has no view to ask — the lookup that used to sit here
+    /// read `self.scene?.view` and could therefore only ever return nil, pinning the
+    /// margin to `minTopMargin` on every device. On a notched iPhone that pulled the bar
+    /// ~40pt up into the HUD band and took the "⚡ BOSS ⚡" label with it, right under the
+    /// score and lives.
     private func setupHealthBar(sceneSize: CGSize) {
         // Health bar background
         let barWidth: CGFloat = sceneSize.width * 0.8
         let barHeight: CGFloat = 20
 
-        // Calculate safe area top inset - use same logic as GameScene
-        let safeAreaTop: CGFloat
-        if let view = self.scene?.view,
-           let windowScene = view.window?.windowScene {
-            safeAreaTop = windowScene.windows.first?.safeAreaInsets.top ?? 0
-        } else {
-            safeAreaTop = 0
-        }
-
-        // Position below safe area with margin
-        let topMargin = max(safeAreaTop + 20, 40)
-        let barY = sceneSize.height - topMargin - 100 // 100 points below top UI (increased from 60)
-
         healthBar = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 5)
         healthBar.fillColor = UIColor(white: 0.2, alpha: 0.8)
         healthBar.strokeColor = .white
         healthBar.lineWidth = 2
-        healthBar.position = CGPoint(x: sceneSize.width / 2, y: barY)
         healthBar.zPosition = 150
 
         // Health bar fill
@@ -594,18 +600,41 @@ class Boss: SKShapeNode {
         healthBarFill.position = CGPoint(x: 0, y: 0)
         healthBar.addChild(healthBarFill)
 
-        // Boss name label
-        let bossLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
+        // Boss name label.
+        //
+        // Positioned relative to healthBar, which is what it is parented to. It used to
+        // be given the same scene-space coordinates as the bar itself, so it landed at
+        // (sceneWidth, 2 * barY + 30) — off the right edge and far above the top of the
+        // screen, i.e. never visible at all.
+        let bossLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
         bossLabel.text = "⚡ BOSS ⚡"
         bossLabel.fontSize = 24
         bossLabel.fontColor = .yellow
-        bossLabel.position = CGPoint(x: sceneSize.width / 2, y: barY + 30)
-        bossLabel.zPosition = 150
+        bossLabel.position = CGPoint(x: 0, y: 30)
+        bossLabel.zPosition = 1
         healthBar.addChild(bossLabel)
     }
 
     func addHealthBarToScene(_ scene: GameScene) {
+        layoutHealthBar(in: scene)
         scene.gameContentNode.addChild(healthBar)
+    }
+
+    /// Places the health bar under the HUD.
+    ///
+    /// Separate from `addHealthBarToScene(_:)` so `GameScene.didChangeSize(_:)` can call
+    /// it too: the bar was placed for whatever the scene measured when the boss spawned,
+    /// and nothing re-flowed it afterwards. Portrait-only plus `UIRequiresFullScreen`
+    /// makes a mid-fight resize hard to reach today, but every other HUD element in that
+    /// method is already re-flowed and this one was the exception.
+    ///
+    /// Position only — the bar's width is baked into its shape path in
+    /// `setupHealthBar(sceneSize:)` and a resize would need the path rebuilt.
+    func layoutHealthBar(in scene: GameScene) {
+        healthBar.position = CGPoint(
+            x: scene.size.width / 2,
+            y: scene.size.height - GameConfiguration.topMargin(in: scene.view) - Self.healthBarDropBelowHUD
+        )
     }
 
     func removeHealthBarFromScene() {
@@ -615,27 +644,43 @@ class Boss: SKShapeNode {
         }
     }
 
+    /// Whether the health bar is currently in the scene, for `jetshotTests`.
+    ///
+    /// The bar is attached and detached independently of the boss node — `takeDamage()`
+    /// drops it the instant the boss dies, well before the explosion sequence removes
+    /// the boss itself — so "is the boss on screen" does not answer this.
+    var isHealthBarAttached: Bool {
+        return healthBar.parent != nil
+    }
+
+    /// The health bar's Y in scene coordinates, for `jetshotTests`.
+    ///
+    /// The bar itself stays private and is unnamed, so there is no other way to reach it.
+    /// Its placement is what regressed: computed in `init`, where the node has no view to
+    /// read a safe-area inset from and no scene whose height it can measure against.
+    var healthBarY: CGFloat {
+        return healthBar.position.y
+    }
+
     func enterScene(completion: @escaping () -> Void) {
         guard let scene = self.scene else { return }
 
-        // Calculate safe area top inset
-        let safeAreaTop: CGFloat
-        if let view = scene.view,
-           let windowScene = view.window?.windowScene {
-            safeAreaTop = windowScene.windows.first?.safeAreaInsets.top ?? 0
-        } else {
-            safeAreaTop = 0
-        }
-
-        // Calculate position below safe area
-        let topMargin = max(safeAreaTop + 20, 40)
+        // Position below the HUD. Through `GameConfiguration` rather than the inline
+        // `max(safeAreaTop + 20, 40)` this used to carry: that duplicated
+        // `topMargin(safeAreaTop:)` with its constants copied out, so a change to
+        // `minTopMargin` or `safeAreaTopSpacing` would move the HUD and leave the boss
+        // behind.
+        let topMargin = GameConfiguration.topMargin(in: scene.view)
         let targetY = scene.size.height - topMargin - config.size - 80 // More margin below UI (increased from 30)
 
         // Entrance animation
         let moveIn = SKAction.moveTo(y: targetY, duration: 2.0)
         moveIn.timingMode = .easeOut
 
-        run(moveIn) {
+        // Weak, like the explosion closures in takeDamage(): SpriteKit holds the action
+        // on this node, so a strong capture makes node -> action -> closure -> node.
+        run(moveIn) { [weak self] in
+            guard let self = self else { return }
             self.isActive = true
             self.startMovement()
             completion()
@@ -645,8 +690,22 @@ class Boss: SKShapeNode {
     private func startMovement() {
         guard let scene = self.scene else { return }
 
-        let minX = config.size
-        let maxX = scene.size.width - config.size
+        // Margin is the boss's *half* width, not `config.size`.
+        //
+        // `config.size` is the full silhouette — `createShapePath` spans -size/2 to
+        // +size/2 — so insetting each edge by the whole diameter reserved twice the
+        // room needed and collapsed the patrol it is supposed to define. It never
+        // crashed, because `moveTo` accepts any coordinate, so the late-game bosses
+        // simply stopped moving: on a 402pt iPhone the level 50 boss (size 200) swept
+        // between x=200 and x=202, two points, and on a 375pt screen the range
+        // inverted outright (200 -> 175) and parked it right of centre.
+        let margin = config.size * 0.5 + 8
+
+        // Clamped so a boss wider than the screen centres instead of inverting, the
+        // same fallback `CoinManager.place` uses for over-wide formations.
+        let centre = scene.size.width / 2
+        let minX = min(margin, centre)
+        let maxX = max(scene.size.width - margin, centre)
 
         // Create side-to-side movement
         let moveLeft = SKAction.moveTo(x: minX, duration: config.movementSpeed)
@@ -681,7 +740,8 @@ class Boss: SKShapeNode {
 
             for i in 0..<explosionCount {
                 let wait = SKAction.wait(forDuration: 0.2)
-                let explode = SKAction.run {
+                let explode = SKAction.run { [weak self] in
+                    guard let self = self else { return }
                     self.createExplosion(offset: CGPoint(
                         x: CGFloat.random(in: -self.config.size/2...self.config.size/2),
                         y: CGFloat.random(in: -self.config.size/2...self.config.size/2)
@@ -700,7 +760,8 @@ class Boss: SKShapeNode {
 
             // Final explosion and removal
             let finalWait = SKAction.wait(forDuration: 0.2)
-            let finalExplosion = SKAction.run {
+            let finalExplosion = SKAction.run { [weak self] in
+                guard let self = self else { return }
                 self.createExplosion(offset: .zero, isLarge: true)
                 self.removeHealthBarFromScene()
                 // Play multiple explosion sounds for the final big explosion
@@ -797,7 +858,7 @@ class Boss: SKShapeNode {
 
         // Create simple particle texture programmatically
         if explosion.particleTexture == nil {
-            explosion.particleTexture = createParticleTexture()
+            explosion.particleTexture = ParticleTexture.softCircle(diameter: 32)
         }
 
         // Particle configuration
@@ -866,32 +927,6 @@ class Boss: SKShapeNode {
         }
     }
 
-    private func createParticleTexture() -> SKTexture {
-        let size = CGSize(width: 32, height: 32)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let image = renderer.image { context in
-            let rect = CGRect(origin: .zero, size: size)
-            let path = UIBezierPath(ovalIn: rect)
-
-            // Create radial gradient
-            let colors = [UIColor.white.cgColor, UIColor.white.withAlphaComponent(0).cgColor]
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 1])!
-
-            context.cgContext.saveGState()
-            path.addClip()
-            context.cgContext.drawRadialGradient(
-                gradient,
-                startCenter: CGPoint(x: size.width/2, y: size.height/2),
-                startRadius: 0,
-                endCenter: CGPoint(x: size.width/2, y: size.height/2),
-                endRadius: size.width/2,
-                options: []
-            )
-            context.cgContext.restoreGState()
-        }
-        return SKTexture(image: image)
-    }
 
     func getPoints() -> Int {
         return config.points
@@ -994,7 +1029,13 @@ class Boss: SKShapeNode {
     }
 
     private func createDebris() {
-        guard let scene = self.scene else { return }
+        // `gameContentNode`, not the scene: the scene keeps ticking while the game is
+        // paused, so debris used to keep tumbling behind the pause menu. It also means
+        // the positions below — computed from `position`, which is in gameContentNode's
+        // space — land in the space they were measured in rather than working by
+        // coincidence because that node happens to sit at the origin unscaled.
+        guard let scene = self.scene as? GameScene else { return }
+        let debrisParent = scene.gameContentNode ?? scene
 
         let debrisCount = Int.random(in: 2...5)
 
@@ -1013,7 +1054,7 @@ class Boss: SKShapeNode {
             debris.position = CGPoint(x: position.x + offsetX, y: position.y + offsetY)
             debris.zPosition = zPosition - 1
 
-            scene.addChild(debris)
+            debrisParent.addChild(debris)
 
             // Fly away animation
             let angle = CGFloat.random(in: 0...(.pi * 2))
@@ -1035,7 +1076,9 @@ class Boss: SKShapeNode {
     }
 
     private func breakOffPart() {
-        guard let scene = self.scene else { return }
+        // See createDebris() for why this is gameContentNode rather than the scene.
+        guard let scene = self.scene as? GameScene else { return }
+        let chunkParent = scene.gameContentNode ?? scene
 
         // Create a visible chunk that breaks off
         let chunk = SKShapeNode(circleOfRadius: config.size * 0.15)
@@ -1050,8 +1093,7 @@ class Boss: SKShapeNode {
         chunk.position = CGPoint(x: position.x + offsetX, y: position.y + offsetY)
         chunk.zPosition = zPosition
 
-        scene.addChild(chunk)
-        damageParts.append(chunk)
+        chunkParent.addChild(chunk)
 
         // Small explosion at break point
         createSmallExplosion(at: chunk.position)
@@ -1115,7 +1157,6 @@ class Boss: SKShapeNode {
         scorch.alpha = 0
 
         addChild(scorch)
-        damageParts.append(scorch)
 
         scorch.run(SKAction.fadeAlpha(to: 0.6, duration: 0.3))
     }
@@ -1128,7 +1169,7 @@ class Boss: SKShapeNode {
         smoke.zPosition = zPosition - 1
 
         if smoke.particleTexture == nil {
-            smoke.particleTexture = createParticleTexture()
+            smoke.particleTexture = ParticleTexture.softCircle(diameter: 32)
         }
 
         smoke.particleBirthRate = isHeavy ? 40 : 20
@@ -1169,7 +1210,7 @@ class Boss: SKShapeNode {
         sparks.zPosition = zPosition + 1
 
         if sparks.particleTexture == nil {
-            sparks.particleTexture = createParticleTexture()
+            sparks.particleTexture = ParticleTexture.softCircle(diameter: 32)
         }
 
         sparks.particleBirthRate = 200
@@ -1212,7 +1253,7 @@ class Boss: SKShapeNode {
         explosion.zPosition = zPosition + 1
 
         if explosion.particleTexture == nil {
-            explosion.particleTexture = createParticleTexture()
+            explosion.particleTexture = ParticleTexture.softCircle(diameter: 32)
         }
 
         explosion.particleBirthRate = 300
