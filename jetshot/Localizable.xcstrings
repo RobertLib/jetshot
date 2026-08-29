@@ -1,0 +1,1654 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "combo.chain": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SÉRIE %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHAIN %lld"
+          }
+        }
+      }
+    },
+    "combo.lost": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SÉRIE ZTRACENA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHAIN LOST"
+          }
+        }
+      }
+    },
+    "combo.toNextTier": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JEŠTĚ %lld DO x%lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld TO x%lld"
+          }
+        }
+      }
+    },
+    "common.back": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZPĚT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BACK"
+          }
+        }
+      }
+    },
+    "common.best": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REKORD  %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BEST  %lld"
+          }
+        }
+      }
+    },
+    "common.endlessRecord": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REKORD  %lld  ·  KOLO %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BEST  %lld  ·  ROUND %lld"
+          }
+        }
+      }
+    },
+    "common.levels": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ÚROVNĚ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LEVELS"
+          }
+        }
+      }
+    },
+    "common.menu": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MENU"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MENU"
+          }
+        }
+      }
+    },
+    "common.no": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NO"
+          }
+        }
+      }
+    },
+    "common.retry": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZNOVU"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RETRY"
+          }
+        }
+      }
+    },
+    "common.score": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SKÓRE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SCORE"
+          }
+        }
+      }
+    },
+    "common.yes": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ANO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "YES"
+          }
+        }
+      }
+    },
+    "completion.congratulations": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gratulujeme!"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Congratulations!"
+          }
+        }
+      }
+    },
+    "completion.playAgain": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HRÁT ZNOVU"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PLAY AGAIN"
+          }
+        }
+      }
+    },
+    "completion.success": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Všechny úrovně jsou splněné!\nJsi mistr pilotáže!"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You have completed all levels!\nYou are a master pilot!"
+          }
+        }
+      }
+    },
+    "completion.thanks": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Děkujeme za hru!"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thank you for playing!"
+          }
+        }
+      }
+    },
+    "completion.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎉 VÍTĚZSTVÍ! 🎉"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎉 VICTORY! 🎉"
+          }
+        }
+      }
+    },
+    "completion.totalScore": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Celkové skóre:"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total Score:"
+          }
+        }
+      }
+    },
+    "gameOver.newRecord": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOVÝ REKORD"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEW RECORD"
+          }
+        }
+      }
+    },
+    "gameOver.reachedRound": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DOSAŽENO KOLO %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REACHED ROUND %lld"
+          }
+        }
+      }
+    },
+    "gameOver.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ÚROVEŇ NESPLNĚNA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LEVEL FAILED"
+          }
+        }
+      }
+    },
+    "hud.boss": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⚡ BOSS ⚡"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "⚡ BOSS ⚡"
+          }
+        }
+      }
+    },
+    "hud.endless": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEKONEČNÁ HRA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ENDLESS"
+          }
+        }
+      }
+    },
+    "hud.extremeDanger": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EXTRÉMNÍ NEBEZPEČÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EXTREME DANGER"
+          }
+        }
+      }
+    },
+    "hud.heat": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TEPLOTA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEAT"
+          }
+        }
+      }
+    },
+    "hud.level": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ÚROVEŇ %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LEVEL %lld"
+          }
+        }
+      }
+    },
+    "hud.overheated": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PŘEHŘÁTO!"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OVERHEATED!"
+          }
+        }
+      }
+    },
+    "hud.round": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KOLO %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ROUND %lld"
+          }
+        }
+      }
+    },
+    "hud.warning": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "! POZOR !"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "! WARNING !"
+          }
+        }
+      }
+    },
+    "levelComplete.bestChain": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEJDELŠÍ SÉRIE  %lld  ·  x%lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BEST CHAIN  %lld  ·  x%lld"
+          }
+        }
+      }
+    },
+    "levelComplete.continue": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "POKRAČOVAT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CONTINUE"
+          }
+        }
+      }
+    },
+    "levelComplete.newBest": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOVÝ REKORD  +%lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEW BEST  +%lld"
+          }
+        }
+      }
+    },
+    "levelComplete.next": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DALŠÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEXT"
+          }
+        }
+      }
+    },
+    "levelComplete.personalBestSet": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOVÝ OSOBNÍ REKORD"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PERSONAL BEST SET"
+          }
+        }
+      }
+    },
+    "levelComplete.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ÚROVEŇ SPLNĚNA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LEVEL COMPLETE"
+          }
+        }
+      }
+    },
+    "levelSelect.page": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Strana %lld / %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Page %lld / %lld"
+          }
+        }
+      }
+    },
+    "levelSelect.reset": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESET"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESET"
+          }
+        }
+      }
+    },
+    "levelSelect.resetMessage": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Veškerý postup ve hře bude ztracen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All level progress will be lost."
+          }
+        }
+      }
+    },
+    "levelSelect.resetTitle": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMAZAT POSTUP?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESET PROGRESS?"
+          }
+        }
+      }
+    },
+    "levelSelect.resetWarning": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tuto akci nelze vzít zpět!"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This action cannot be undone!"
+          }
+        }
+      }
+    },
+    "levelSelect.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VYBER ÚROVEŇ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SELECT LEVEL"
+          }
+        }
+      }
+    },
+    "menu.credits": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VYTVOŘIL ROBLIB"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CREATED BY ROBLIB"
+          }
+        }
+      }
+    },
+    "menu.endless": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEKONEČNÁ HRA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ENDLESS"
+          }
+        }
+      }
+    },
+    "menu.settings": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NASTAVENÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SETTINGS"
+          }
+        }
+      }
+    },
+    "menu.start": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "START"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "START"
+          }
+        }
+      }
+    },
+    "menu.subtitle": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VESMÍRNÁ STŘÍLEČKA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SPACE SHOOTER"
+          }
+        }
+      }
+    },
+    "pause.level": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Úroveň %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Level %lld"
+          }
+        }
+      }
+    },
+    "pause.resume": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "POKRAČOVAT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESUME"
+          }
+        }
+      }
+    },
+    "pause.settings": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NASTAVENÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SETTINGS"
+          }
+        }
+      }
+    },
+    "pause.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAUZA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAUSED"
+          }
+        }
+      }
+    },
+    "powerUp.barrier": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BARIÉRA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BARRIER"
+          }
+        }
+      }
+    },
+    "powerUp.extraLife": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+1 ŽIVOT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+1 LIFE"
+          }
+        }
+      }
+    },
+    "powerUp.freezeBomb": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MRAZIVÁ BOMBA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FREEZE BOMB"
+          }
+        }
+      }
+    },
+    "powerUp.gunsMax": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBRANĚ MAX"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GUNS MAX"
+          }
+        }
+      }
+    },
+    "powerUp.homingMissiles": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NAVÁDĚNÉ RAKETY"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HOMING MISSILES"
+          }
+        }
+      }
+    },
+    "powerUp.lightning": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BLESK"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIGHTNING"
+          }
+        }
+      }
+    },
+    "powerUp.livesMax": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ŽIVOTY MAX"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIVES MAX"
+          }
+        }
+      }
+    },
+    "powerUp.magnet": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAGNET"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAGNET"
+          }
+        }
+      }
+    },
+    "powerUp.missilesMax": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RAKETY MAX"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MISSILES MAX"
+          }
+        }
+      }
+    },
+    "powerUp.multiShot": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VÍCENÁSOBNÁ STŘELBA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MULTI SHOT"
+          }
+        }
+      }
+    },
+    "powerUp.nuke": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ATOMOVKA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NUKE"
+          }
+        }
+      }
+    },
+    "powerUp.rapidFire": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RYCHLOPALBA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RAPID FIRE"
+          }
+        }
+      }
+    },
+    "powerUp.scoreDouble": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SKÓRE x2"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SCORE x2"
+          }
+        }
+      }
+    },
+    "powerUp.shield": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ŠTÍT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHIELD"
+          }
+        }
+      }
+    },
+    "powerUp.sideMissiles": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BOČNÍ RAKETY"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIDE MISSILES"
+          }
+        }
+      }
+    },
+    "powerUp.slowMotion": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZPOMALENÍ ČASU"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SLOW MOTION"
+          }
+        }
+      }
+    },
+    "settings.close": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZAVŘÍT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLOSE"
+          }
+        }
+      }
+    },
+    "settings.haptics": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VIBRACE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HAPTICS"
+          }
+        }
+      }
+    },
+    "settings.music": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HUDBA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MUSIC"
+          }
+        }
+      }
+    },
+    "settings.off": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VYP"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OFF"
+          }
+        }
+      }
+    },
+    "settings.on": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZAP"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ON"
+          }
+        }
+      }
+    },
+    "settings.sound": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZVUK"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SOUND"
+          }
+        }
+      }
+    },
+    "settings.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NASTAVENÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SETTINGS"
+          }
+        }
+      }
+    },
+    "story.ending.p1": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Podařilo se..."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You did it..."
+          }
+        }
+      }
+    },
+    "story.ending.p10": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A odpověď bude ukrytá v kvantové pěně vesmíru — příběh pilota, který riskoval všechno, aby dal životu novou šanci."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "And the answer will be hidden in the quantum foam of space, the story of a pilot who risked everything to give life a new chance."
+          }
+        }
+      }
+    },
+    "story.ending.p11": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Děkujeme za hru!"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thank you for playing!"
+          }
+        }
+      }
+    },
+    "story.ending.p12": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nezachránil se jen vesmír,"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You saved not only the universe,"
+          }
+        }
+      }
+    },
+    "story.ending.p13": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ale samotná existence."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "but existence itself."
+          }
+        }
+      }
+    },
+    "story.ending.p2": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Za tebou zůstaly hroutící se dimenze, kvantové entity dávných civilizací i kolaps samotného časoprostoru."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You flew through collapsing dimensions, overcame quantum entities of ancient civilizations, survived the collapse of spacetime itself."
+          }
+        }
+      }
+    },
+    "story.ending.p3": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "V epicentru umírajícího vesmíru, kde se zastavil čas a realita ztratila smysl, ožil protokol Velký třesk nula."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "At the epicenter of the dying universe, where time stopped and reality lost its meaning, you activated protocol Big Bang Zero."
+          }
+        }
+      }
+    },
+    "story.ending.p4": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tvá loď Singularita-7 se stala katalyzátorem nového stvoření. Nasbíraná kvantová energie tvoří semínko nového vesmíru."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your ship Singularity-7 became the catalyst for new creation. The quantum energy you gathered forms the seed of a new universe."
+          }
+        }
+      }
+    },
+    "story.ending.p5": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kolem tebe vzniká nová singularita, nekonečně malý bod nekonečné hustoty, z něhož se zrodí prostor, čas, hmota i energie."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Around you forms a new singularity, an infinitesimal point of infinite density, from which space, time, matter and energy will be born."
+          }
+        }
+      }
+    },
+    "story.ending.p6": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vidíš první záblesky nových hvězd, které se rodí z prachu starého vesmíru. Cítíš, jak se kolem tebe formují nové dimenze, nové fyzikální zákony, nové možnosti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You see the first flashes of new stars being born from the dust of the old universe. You feel new dimensions forming around you, new physical laws, new possibilities."
+          }
+        }
+      }
+    },
+    "story.ending.p7": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tvá mise byla úspěšná. Starý vesmír zemřel, ale jeho odkaz přežije v novém stvoření."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your mission was successful. The old universe died, but its legacy will survive in the new creation."
+          }
+        }
+      }
+    },
+    "story.ending.p8": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Možná jednou, za miliardy let, až tento nový vesmír vyroste a dospěje, někdo položí otázku:"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perhaps someday, billions of years in the future, when this new universe grows and matures, someone will ask:"
+          }
+        }
+      }
+    },
+    "story.ending.p9": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "„Jak to všechno začalo?“"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\"How did it all begin?\""
+          }
+        }
+      }
+    },
+    "story.ending.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOVÝ ZAČÁTEK"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEW BEGINNING"
+          }
+        }
+      }
+    },
+    "story.opening.p1": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stojíme na samém konci času..."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We stand at the very end of time..."
+          }
+        }
+      }
+    },
+    "story.opening.p10": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buď se ti podaří proniknout do nové singularity..."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Either you successfully penetrate into the new singularity..."
+          }
+        }
+      }
+    },
+    "story.opening.p11": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "...nebo zanikneš spolu s tímto vesmírem."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "...or you perish along with this universe."
+          }
+        }
+      }
+    },
+    "story.opening.p2": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vesmír dosáhl svého kritického bodu. Hvězdy prožívají poslední okamžiky, černé díry pohltily většinu hmoty a samotná struktura časoprostoru se začíná hroutit."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The universe has reached its critical point. Stars are living their final moments, black holes have consumed most matter, and the very fabric of spacetime is beginning to collapse."
+          }
+        }
+      }
+    },
+    "story.opening.p3": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kvantová mechanika, kdysi přísně oddělená od makroskopického světa, nyní prosakuje do reality. Dimenze se překrývají, čas plyne chaoticky a fyzikální zákony ztrácejí smysl."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quantum mechanics, once strictly separated from the macroscopic world, now bleeds into reality. Dimensions overlap, time flows chaotically, and physical laws lose their meaning."
+          }
+        }
+      }
+    },
+    "story.opening.p4": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jsi pilotem experimentální lodi Singularita-7, poslední naděje civilizace. Tvým úkolem není zachránit tento umírající vesmír, to už není možné."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You are the pilot of the experimental ship Singularity-7, civilization's last hope. Your mission is not to save this dying universe, that is no longer possible."
+          }
+        }
+      }
+    },
+    "story.opening.p5": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tvým úkolem je uniknout."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your mission is to escape."
+          }
+        }
+      }
+    },
+    "story.opening.p6": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nasbírej dostatek kvantové energie z hroutících se oblastí vesmíru, pronikni dimenzionálními trhlinami a dosáhni epicentra kolapsu."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gather enough quantum energy from collapsing regions of space, penetrate through dimensional rifts, and reach the epicenter of the collapse."
+          }
+        }
+      }
+    },
+    "story.opening.p7": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam, v samém srdci umírajícího vesmíru, musíš aktivovat protokol Velký třesk nula, zažehnout novou singularitu, nový vesmír, nový začátek."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There, in the very heart of the dying universe, you must activate protocol Big Bang Zero, ignite a new singularity, a new universe, a new beginning."
+          }
+        }
+      }
+    },
+    "story.opening.p8": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cesta nebude snadná. Pozůstatky dávných civilizací, proměněné v nepřátelské kvantové entity, střeží poslední zlomky energie. Kosmické anomálie se tě pokusí pohltit. Sama realita bude klást odpor."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The path will not be easy. Remnants of ancient civilizations, transformed into hostile quantum entities, guard the last fragments of energy. Cosmic anomalies will seek to consume you. Reality itself will resist."
+          }
+        }
+      }
+    },
+    "story.opening.p9": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jiná cesta ale neexistuje."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "But there is no other way."
+          }
+        }
+      }
+    },
+    "story.opening.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KONEC VĚKŮ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "END OF AGES"
+          }
+        }
+      }
+    },
+    "story.skipHint": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klepnutím kdekoli přeskočíš"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap anywhere to skip"
+          }
+        }
+      }
+    },
+    "tutorial.chain": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RYCHLÉ ZÁSAHY TVOŘÍ SÉRII — SÉRIE NÁSOBÍ SKÓRE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KILL FAST TO CHAIN — CHAINS MULTIPLY SCORE"
+          }
+        }
+      }
+    },
+    "tutorial.coins": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SBÍREJ MINCE — URČUJÍ POČET HVĚZD"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GRAB COINS — THEY SET YOUR STAR RATING"
+          }
+        }
+      }
+    },
+    "tutorial.move": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TÁHNI PRSTEM  •  ZBRANĚ STŘÍLEJÍ SAMY"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DRAG TO MOVE  •  GUNS FIRE THEMSELVES"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

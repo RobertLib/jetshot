@@ -15,7 +15,17 @@ class LevelCompleteScene: SKScene {
     private let totalCoins: Int
     private let bulletCount: Int
     private let sideMissileCount: Int
+    private let bestChain: Int
     private var isInitialized = false
+
+    /// This level's stored best score as it stood *before* this run was recorded, and
+    /// whether the run beat it.
+    ///
+    /// Both are captured in `didMove(to:)` ahead of `completeLevel`, which is the call
+    /// that writes the new best. Reading the store afterwards would compare the run
+    /// against itself and could never report a record.
+    private var previousBest: Int = 0
+    private var isNewBest: Bool = false
 
     /// Computed once and reused. `calculateStarsEarned()` was previously called both
     /// here-equivalent (didMove, to persist progress) and again in createStarRating(),
@@ -23,13 +33,14 @@ class LevelCompleteScene: SKScene {
     /// time re-logging the result in debug builds.
     private lazy var starsEarned: Int = calculateStarsEarned()
 
-    init(size: CGSize, level: Int, score: Int, coinsCollected: Int = 0, totalCoins: Int = 0, bulletCount: Int = 1, sideMissileCount: Int = 0) {
+    init(size: CGSize, level: Int, score: Int, coinsCollected: Int = 0, totalCoins: Int = 0, bulletCount: Int = 1, sideMissileCount: Int = 0, bestChain: Int = 0) {
         self.level = level
         self.score = score
         self.coinsCollected = coinsCollected
         self.totalCoins = totalCoins
         self.bulletCount = bulletCount
         self.sideMissileCount = sideMissileCount
+        self.bestChain = bestChain
         super.init(size: size)
     }
 
@@ -39,6 +50,10 @@ class LevelCompleteScene: SKScene {
 
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
+
+        // Read the standing record before `completeLevel` replaces it. See `previousBest`.
+        previousBest = LevelManager.shared.getLevelScore(level: level) ?? 0
+        isNewBest = previousBest > 0 && score > previousBest
 
         // Mark level as completed with score, stars, and weapon arsenal
         LevelManager.shared.completeLevel(level, score: score, stars: starsEarned, bulletCount: bulletCount, sideMissileCount: sideMissileCount)
@@ -106,7 +121,10 @@ class LevelCompleteScene: SKScene {
 
         // Main panel background with rounded corners and golden glow
         let panelWidth: CGFloat = min(size.width - 60, UITheme.Dimensions.panelWidthMax)
-        let panelHeight = 420.0
+        // 460 rather than 420: the score block now carries a record line and a best-chain
+        // line under the number, and the buttons were 16pt away from them at the old
+        // height.
+        let panelHeight = 460.0
         let panel = UITheme.createPanel(
             width: panelWidth,
             height: panelHeight,
@@ -155,7 +173,7 @@ class LevelCompleteScene: SKScene {
 
         // "LEVEL COMPLETE" title - clean and simple
         let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = "LEVEL COMPLETE"
+        title.text = L10n.LevelComplete.title
         title.fontSize = UITheme.Typography.sizeMedium
         title.fontColor = UITheme.Colors.primaryGold
         title.position = CGPoint(x: 0, y: starsY - spacing - 10)
@@ -295,7 +313,7 @@ class LevelCompleteScene: SKScene {
         let scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
         scoreLabel.horizontalAlignmentMode = .center
         scoreLabel.verticalAlignmentMode = .center
-        scoreLabel.text = "SCORE"
+        scoreLabel.text = L10n.Common.score
         scoreLabel.fontSize = UITheme.Typography.sizeRegular
         scoreLabel.fontColor = UITheme.Colors.textSecondary
         scoreLabel.position = CGPoint(x: 0, y: 19)
@@ -311,6 +329,52 @@ class LevelCompleteScene: SKScene {
         scoreValue.position = CGPoint(x: 0, y: -18)
         container.addChild(scoreValue)
 
+        // The record line. A cleared level used to report a bare number with nothing to
+        // compare it against, so there was no reason to replay one and no way to tell a
+        // great run from a scraped-through one. Beating the stored best is now called
+        // out; falling short of it prints the target instead, which is the same hook
+        // from the other side.
+        let recordLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        recordLine.horizontalAlignmentMode = .center
+        recordLine.verticalAlignmentMode = .center
+        recordLine.fontSize = 15
+        recordLine.position = CGPoint(x: 0, y: -46)
+
+        if isNewBest {
+            recordLine.text = L10n.LevelComplete.newBest(improvement: score - previousBest)
+            recordLine.fontColor = UITheme.Colors.successGreenLight
+            recordLine.run(.repeatForever(.sequence([
+                .scale(to: 1.08, duration: 0.5),
+                .scale(to: 1.0, duration: 0.5)
+            ])))
+        } else if previousBest > 0 {
+            recordLine.text = L10n.Common.best(previousBest)
+            recordLine.fontColor = UITheme.Colors.textSecondary
+        } else {
+            recordLine.text = L10n.LevelComplete.personalBestSet
+            recordLine.fontColor = UITheme.Colors.successGreenLight
+        }
+        container.addChild(recordLine)
+
+        // Best chain of the run, when there was one worth reporting. This is the only
+        // place the chain's peak is shown after the meter itself disappears, and it is
+        // the number a player who wants a higher score has to attack next time.
+        if bestChain >= ComboRules.tiers[0].chain {
+            let chainLine = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
+            chainLine.horizontalAlignmentMode = .center
+            chainLine.verticalAlignmentMode = .center
+            chainLine.fontSize = 14
+            chainLine.text = L10n.LevelComplete.bestChain(
+                length: bestChain,
+                multiplier: ComboRules.multiplier(forChain: bestChain)
+            )
+            chainLine.fontColor = ComboSystem.tierColor(
+                forMultiplier: ComboRules.multiplier(forChain: bestChain)
+            )
+            chainLine.position = CGPoint(x: 0, y: -68)
+            container.addChild(chainLine)
+        }
+
         return container
     }
 
@@ -323,7 +387,7 @@ class LevelCompleteScene: SKScene {
         // Next level button (if not last level) - highlighted as primary action
         if !isLastLevel {
             let nextButton = UITheme.createButton(
-                text: "NEXT",
+                text: L10n.LevelComplete.next,
                 color: UIColor(red: 0.2, green: 0.7, blue: 0.3, alpha: 1.0),
                 width: UITheme.Dimensions.buttonWidthXLarge,
                 name: "nextButton"
@@ -349,7 +413,7 @@ class LevelCompleteScene: SKScene {
         } else {
             // If last level, show "Continue to Victory" button
             let victoryButton = UITheme.createButton(
-                text: "CONTINUE",
+                text: L10n.LevelComplete.continue,
                 color: UIColor(red: 1.0, green: 0.75, blue: 0.0, alpha: 1.0), // Golden color
                 width: UITheme.Dimensions.buttonWidthXLarge,
                 name: "victoryButton"
@@ -378,7 +442,7 @@ class LevelCompleteScene: SKScene {
         let secondaryButtonY = buttonY - 65
 
         let levelsButton = UITheme.createButton(
-            text: "LEVELS",
+            text: L10n.Common.levels,
             color: UITheme.Colors.buttonLevels,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "levelsButton"
@@ -388,7 +452,7 @@ class LevelCompleteScene: SKScene {
         panel.addChild(levelsButton)
 
         let menuButton = UITheme.createButton(
-            text: "MENU",
+            text: L10n.Common.menu,
             color: UITheme.Colors.buttonMenu,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "menuButton"

@@ -111,7 +111,7 @@ class GameCompletionScene: SKScene {
 
         // "VICTORY!" title
         let victoryTitle = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        victoryTitle.text = "🎉 VICTORY! 🎉"
+        victoryTitle.text = L10n.Completion.title
         victoryTitle.fontSize = UITheme.Typography.sizeLarge
         victoryTitle.fontColor = UITheme.Colors.primaryGold
         victoryTitle.position = CGPoint(x: 0, y: panelHeight / 2 - 70)
@@ -132,7 +132,7 @@ class GameCompletionScene: SKScene {
 
         // Congratulations message
         let congratsText = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        congratsText.text = "Congratulations!"
+        congratsText.text = L10n.Completion.congratulations
         congratsText.fontSize = UITheme.Typography.sizeMedium
         congratsText.fontColor = UITheme.Colors.textPrimary
         congratsText.position = CGPoint(x: 0, y: 145)
@@ -146,7 +146,7 @@ class GameCompletionScene: SKScene {
 
         // Success message
         let successText = createMultilineText(
-            text: "You have completed all levels!\nYou are a master pilot!",
+            text: L10n.Completion.success,
             fontSize: UITheme.Typography.sizeRegular,
             y: 90
         )
@@ -160,7 +160,7 @@ class GameCompletionScene: SKScene {
 
         // Thank you message
         let thanksText = createMultilineText(
-            text: "Thank you for playing!",
+            text: L10n.Completion.thanks,
             fontSize: UITheme.Typography.sizeRegular,
             y: 20
         )
@@ -212,7 +212,7 @@ class GameCompletionScene: SKScene {
 
         // "Total Score:" label
         let scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        scoreLabel.text = "Total Score:"
+        scoreLabel.text = L10n.Completion.totalScore
         scoreLabel.fontSize = UITheme.Typography.sizeRegular
         scoreLabel.fontColor = UITheme.Colors.textSecondary
         scoreLabel.position = CGPoint(x: 0, y: 55)
@@ -234,7 +234,7 @@ class GameCompletionScene: SKScene {
 
         // Play Again button (restart from level 1)
         let playAgainButton = UITheme.createButton(
-            text: "PLAY AGAIN",
+            text: L10n.Completion.playAgain,
             color: UIColor(red: 0.2, green: 0.7, blue: 0.3, alpha: 1.0),
             width: UITheme.Dimensions.buttonWidthXLarge,
             name: "playAgainButton"
@@ -262,7 +262,7 @@ class GameCompletionScene: SKScene {
         let secondaryButtonY = buttonY - 65
 
         let levelsButton = UITheme.createButton(
-            text: "LEVELS",
+            text: L10n.Common.levels,
             color: UITheme.Colors.buttonLevels,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "levelsButton"
@@ -272,7 +272,7 @@ class GameCompletionScene: SKScene {
         panel.addChild(levelsButton)
 
         let menuButton = UITheme.createButton(
-            text: "MENU",
+            text: L10n.Common.menu,
             color: UITheme.Colors.buttonMenu,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "menuButton"

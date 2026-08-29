@@ -120,9 +120,38 @@ class LevelManager {
         cloudStorage.removeObject(forKey: levelScoresKey)
         cloudStorage.removeObject(forKey: levelStarsKey)
         cloudStorage.removeObject(forKey: levelWeaponsKey)
+        cloudStorage.removeObject(forKey: CloudStorageManager.Keys.endlessRecords)
 
         // A full reset should feel like a fresh install, so the intro plays again.
         hasSeenOpeningStory = false
+    }
+
+    // MARK: - Endless Records
+
+    /// Best score and deepest round reached in endless, or zeros if it has never been
+    /// played. Both are kept as personal bests, the same way level scores are.
+    func getEndlessRecords() -> (bestScore: Int, bestRound: Int) {
+        let records = cloudStorage.loadDictionary(forKey: CloudStorageManager.Keys.endlessRecords) as? [String: Int] ?? [:]
+        return (records["bestScore"] ?? 0, records["bestRound"] ?? 0)
+    }
+
+    /// Records the outcome of an endless run, keeping the better of each field.
+    ///
+    /// Read-modify-write through `mutate` for the reason `completeLevel` documents: doing
+    /// the load and the save as separate steps lets the iCloud merge interleave and
+    /// overwrite a fresh record with its own stale copy.
+    @discardableResult
+    func recordEndlessRun(score: Int, round: Int) -> Bool {
+        let previous = getEndlessRecords()
+
+        cloudStorage.mutate(dictionary: CloudStorageManager.Keys.endlessRecords) { current in
+            var records = current as? [String: Int] ?? [:]
+            records["bestScore"] = max(score, records["bestScore"] ?? 0)
+            records["bestRound"] = max(round, records["bestRound"] ?? 0)
+            return records
+        }
+
+        return score > previous.bestScore
     }
 
     // MARK: - Story Playback
@@ -188,13 +217,22 @@ class LevelManager {
         let powerUpConfig = getPowerUpConfigForLevel(level)
         var asteroidWaves = getAsteroidWavesForLevel(level)
 
-        // Double level length - simply add random duplicates
-        let originalWaveCount = waves.count
-        for _ in 0..<originalWaveCount {
-            if let randomWave = waves.randomElement() {
-                waves.append(randomWave)
-            }
-        }
+        // Pace the authored waves, then reprise them harder.
+        //
+        // This used to read `waves.randomElement()` in a loop, appending one random
+        // existing wave per original wave. It doubled the level's length, which was the
+        // stated intent, but it also meant the back half of every level was the front
+        // half again in a shuffled order — often the same wave three times running, and
+        // with no relationship between where the player was in the level and how hard it
+        // was. A level had no shape at all: it started at its final difficulty, stayed
+        // there for a minute, and then stopped. That is most of why the game felt like it
+        // was going nowhere.
+        //
+        // `pacedWaves` fixes the density of what was authored; `reprisedWaves` replays it
+        // in order and tighter, so the second half is recognisably the same level turned
+        // up rather than a reshuffle. The count still doubles, which is what the obstacle
+        // and asteroid padding below expects.
+        waves = Self.pacedWaves(waves) + Self.reprisedWaves(waves)
 
         // For obstacles and asteroids, duplicate to match final enemy wave count
         // This ensures obstacles spawn throughout the entire level
@@ -230,6 +268,72 @@ class LevelManager {
         )
     }
 
+    // MARK: - Wave Pacing
+
+    /// Rescales an authored wave list to the cadence the game actually plays at.
+    ///
+    /// The waves in `getWavesForLevel(_:)` are hand-authored at a deliberately readable
+    /// cadence — one enemy per 1.2–1.5 s, behind a 2 s lead-in — which on a screen an
+    /// enemy takes 3–5 s to cross leaves the player with almost nothing in front of them.
+    /// Scaling here rather than editing fifty levels of content keeps the authored shape
+    /// of each wave (its enemy mix, its formation, its relative pacing against its
+    /// neighbours) and changes only how tightly it is delivered.
+    ///
+    /// Formation waves are left alone: they spawn as a single unit in
+    /// `EnemyManager.update(currentTime:)` and never read `spawnInterval`, so scaling it
+    /// would be a no-op that only muddies the numbers.
+    static func pacedWaves(_ waves: [EnemyWave]) -> [EnemyWave] {
+        return waves.map { wave in
+            scaled(wave, intervalScale: GameConfiguration.waveIntervalScale)
+        }
+    }
+
+    /// The second half of a level: the same waves, in the same order, delivered harder.
+    ///
+    /// Replaying in order matters more than it sounds. It means the difficulty curve
+    /// inside a level runs twice — a lull, a build, a peak, then the same build steeper —
+    /// which gives the player something to recognise and get better at, and it puts the
+    /// level's densest authored wave at the end where a climax belongs. The previous
+    /// random shuffle could just as easily finish a level on its opening warm-up wave.
+    static func reprisedWaves(_ waves: [EnemyWave]) -> [EnemyWave] {
+        let scale = GameConfiguration.waveIntervalScale * GameConfiguration.waveRepriseIntervalScale
+        return waves.map { wave in
+            scaled(wave, intervalScale: scale)
+        }
+    }
+
+    /// Applies the interval and lead-in scaling for one wave, respecting both floors.
+    private static func scaled(_ wave: EnemyWave, intervalScale: TimeInterval) -> EnemyWave {
+        let interval = wave.isFormation
+            ? wave.spawnInterval
+            : max(GameConfiguration.minSpawnInterval, wave.spawnInterval * intervalScale)
+
+        let delay = max(
+            GameConfiguration.minWaveDelay,
+            wave.spawnDelay * GameConfiguration.waveDelayScale
+        )
+
+        return EnemyWave(
+            enemies: wave.enemies,
+            spawnDelay: delay,
+            spawnInterval: interval,
+            isFormation: wave.isFormation,
+            formationPattern: wave.formationPattern
+        )
+    }
+
+    /// One endless round's worth of hazards, borrowed from the campaign level its depth
+    /// corresponds to.
+    ///
+    /// Endless builds its enemy waves procedurally in `EndlessDirector`, but there is no
+    /// reason to invent a second obstacle and asteroid authoring pass when fifty levels of
+    /// them already exist and are already tuned. Unpadded, unlike `getLevelConfig(for:)`:
+    /// the caller tops these up once per round rather than laying out a whole level.
+    func endlessHazardWaves(forRound round: Int) -> (obstacles: [ObstacleWave], asteroids: [AsteroidWave]) {
+        let level = EndlessRules.hazardLevel(forRound: round)
+        return (getObstacleWavesForLevel(level), getAsteroidWavesForLevel(level))
+    }
+
     // Define waves for each level
     private func getWavesForLevel(_ level: Int) -> [EnemyWave] {
         switch level {
@@ -238,158 +342,230 @@ class LevelManager {
         // ============================================
 
         case 1:
-            // Level 1: First steps - basic enemies only
+            // Level 1: First steps - basic enemies only, but in three distinct beats.
+            //
+            // This level was two waves of eight identical enemies at an identical
+            // cadence, which the reprise then played again: thirty-two `.basic` ships
+            // descending one at a time, in a line, for the whole of a new player's first
+            // impression of the game. Nothing in it changed, so nothing in it could be
+            // learned, and the first formation in the game did not appear until level 4.
+            //
+            // Same enemy type and the same total count — this is still the tutorial
+            // level and it is still easy — but now with a shape: singles to learn the
+            // controls on, a tighter run to feel the first real pressure, then a
+            // formation, which is the most visually striking thing the spawner can do
+            // and no reason at all to withhold it for three more levels. The reprise
+            // replays those three beats harder, so the level ends on a fast formation
+            // rather than trailing off.
             return [
                 EnemyWave(
-                    enemies: Array(repeating: .basic, count: 8),
-                    spawnDelay: 1.0,
-                    spawnInterval: 1.5
+                    enemies: Array(repeating: .basic, count: 5),
+                    spawnDelay: 0.8,
+                    spawnInterval: 1.3
                 ),
                 EnemyWave(
-                    enemies: Array(repeating: .basic, count: 8),
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.3
+                    enemies: Array(repeating: .basic, count: 6),
+                    spawnDelay: 1.2,
+                    spawnInterval: 0.85
+                ),
+                EnemyWave(
+                    enemies: Array(repeating: .basic, count: 5),
+                    spawnDelay: 1.5,
+                    spawnInterval: 0.5,
+                    isFormation: true,
+                    formationPattern: .vShape
                 )
             ]
 
         case 2:
-            // Level 2: Introducing fast enemies
+            // Level 2: Introducing fast enemies.
+            //
+            // The old opener was ten `.basic` in a row before anything new happened,
+            // which on a level whose entire headline is "fast enemies exist" is a long
+            // time to spend proving they do not yet. Every level from here follows the
+            // same four-beat shape: a short warm-up on known enemies, the new enemy alone
+            // so it reads, the new enemy combined with the old, and a formation to close
+            // on. The reprise in `getLevelConfig(for:)` then plays those beats again
+            // tighter, so each level builds twice.
             return [
                 EnemyWave(
-                    enemies: Array(repeating: .basic, count: 10),
-                    spawnDelay: 1.0,
-                    spawnInterval: 1.4
+                    enemies: Array(repeating: .basic, count: 6),
+                    spawnDelay: 0.8,
+                    spawnInterval: 1.3
                 ),
                 EnemyWave(
                     enemies: Array(repeating: .fast, count: 6),
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.0
+                    spawnDelay: 1.4,
+                    spawnInterval: 0.95
                 ),
                 EnemyWave(
-                    enemies: [.basic, .fast, .basic, .basic, .fast, .basic],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.2
+                    enemies: [.basic, .fast, .basic, .fast, .basic, .fast],
+                    spawnDelay: 1.4,
+                    spawnInterval: 1.05
+                ),
+                // A formation of an enemy the player already knows: this teaches the
+                // shape, not a new ship.
+                EnemyWave(
+                    enemies: Array(repeating: .fast, count: 5),
+                    spawnDelay: 1.6,
+                    spawnInterval: 0.5,
+                    isFormation: true,
+                    formationPattern: .line
                 )
             ]
 
         case 3:
-            // Level 3: Introducing striker and first mix
+            // Level 3: Introducing striker.
             return [
                 EnemyWave(
-                    enemies: [.basic, .basic, .striker, .basic, .basic, .basic, .striker, .basic],
-                    spawnDelay: 1.0,
-                    spawnInterval: 1.3
+                    enemies: [.basic, .basic, .striker, .basic, .striker, .basic],
+                    spawnDelay: 0.8,
+                    spawnInterval: 1.2
                 ),
                 EnemyWave(
-                    enemies: Array(repeating: .fast, count: 8),
-                    spawnDelay: 2.0,
+                    enemies: Array(repeating: .striker, count: 6),
+                    spawnDelay: 1.4,
+                    spawnInterval: 1.05
+                ),
+                EnemyWave(
+                    enemies: Array(repeating: .fast, count: 6),
+                    spawnDelay: 1.4,
+                    spawnInterval: 0.9
+                ),
+                EnemyWave(
+                    enemies: [.striker, .fast, .striker, .fast, .striker, .fast],
+                    spawnDelay: 1.5,
                     spawnInterval: 1.0
-                ),
-                EnemyWave(
-                    enemies: [.striker, .striker, .basic, .striker, .striker, .basic],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.4
                 )
             ]
 
         case 4:
-            // Level 4: First formations - scouts
+            // Level 4: Scouts, and the level where formations become the point — two of
+            // them, in different shapes, so the player learns to read a formation as a
+            // single target rather than as six separate ones.
             return [
                 EnemyWave(
-                    enemies: Array(repeating: .basic, count: 8),
-                    spawnDelay: 1.0,
-                    spawnInterval: 1.2
+                    enemies: [.basic, .fast, .basic, .fast, .basic, .basic],
+                    spawnDelay: 0.8,
+                    spawnInterval: 1.15
                 ),
                 EnemyWave(
                     enemies: Array(repeating: .scout, count: 6),
-                    spawnDelay: 2.0,
+                    spawnDelay: 1.5,
                     spawnInterval: 0.5,
                     isFormation: true,
                     formationPattern: .arrow
                 ),
                 EnemyWave(
-                    enemies: [.fast, .striker, .fast, .fast, .striker, .fast],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.1
+                    enemies: [.fast, .striker, .fast, .striker, .fast, .striker],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.0
+                ),
+                EnemyWave(
+                    enemies: Array(repeating: .scout, count: 6),
+                    spawnDelay: 1.6,
+                    spawnInterval: 0.5,
+                    isFormation: true,
+                    formationPattern: .vShape
                 )
             ]
 
         case 5:
-            // Level 5: Introducing heavy and zigzag
+            // Level 5: Introducing heavy and zigzag.
             return [
                 EnemyWave(
-                    enemies: [.basic, .heavy, .basic, .basic, .heavy, .basic],
-                    spawnDelay: 1.0,
-                    spawnInterval: 1.4
-                ),
-                EnemyWave(
-                    enemies: Array(repeating: .zigzag, count: 6),
-                    spawnDelay: 2.0,
+                    enemies: [.basic, .heavy, .basic, .heavy, .basic, .heavy],
+                    spawnDelay: 0.8,
                     spawnInterval: 1.3
                 ),
                 EnemyWave(
-                    enemies: [.fast, .fast, .striker, .striker, .fast, .fast, .striker, .striker],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.0
+                    enemies: Array(repeating: .zigzag, count: 6),
+                    spawnDelay: 1.4,
+                    spawnInterval: 1.15
                 ),
                 EnemyWave(
-                    enemies: [.heavy, .basic, .heavy, .heavy, .basic, .heavy],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.5
+                    enemies: [.fast, .striker, .fast, .striker, .fast, .striker],
+                    spawnDelay: 1.4,
+                    spawnInterval: 0.95
+                ),
+                EnemyWave(
+                    enemies: [.heavy, .zigzag, .heavy, .zigzag, .heavy, .zigzag],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.25
+                ),
+                EnemyWave(
+                    enemies: Array(repeating: .scout, count: 5),
+                    spawnDelay: 1.6,
+                    spawnInterval: 0.5,
+                    isFormation: true,
+                    formationPattern: .line
                 )
             ]
 
         case 6:
-            // Level 6: First kamikaze attack
+            // Level 6: Kamikaze. The opening rush is the level's signature, so it both
+            // opens and closes with one — the second faster, and after the player has
+            // spent the middle of the level being taught to hold position.
             return [
                 EnemyWave(
-                    enemies: Array(repeating: .kamikaze, count: 8),
-                    spawnDelay: 1.0,
+                    enemies: Array(repeating: .kamikaze, count: 6),
+                    spawnDelay: 0.8,
                     spawnInterval: 0.8
                 ),
                 EnemyWave(
-                    enemies: [.basic, .heavy, .basic, .heavy, .basic, .heavy, .basic, .heavy],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.3
+                    enemies: [.basic, .heavy, .basic, .heavy, .basic, .heavy],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.2
                 ),
                 EnemyWave(
                     enemies: Array(repeating: .scout, count: 8),
-                    spawnDelay: 2.0,
+                    spawnDelay: 1.6,
                     spawnInterval: 0.5,
                     isFormation: true,
                     formationPattern: .vShape
                 ),
                 EnemyWave(
-                    enemies: [.zigzag, .striker, .zigzag, .zigzag, .striker, .zigzag],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.2
+                    enemies: [.zigzag, .striker, .zigzag, .striker, .zigzag, .striker],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.1
+                ),
+                EnemyWave(
+                    enemies: Array(repeating: .kamikaze, count: 6),
+                    spawnDelay: 1.4,
+                    spawnInterval: 0.7
                 )
             ]
 
         case 7:
-            // Level 7: Introducing sniper
+            // Level 7: Introducing sniper — the first enemy that punishes standing still,
+            // so it is deliberately paired with the crowd waves that make you want to.
             return [
                 EnemyWave(
-                    enemies: [.fast, .fast, .striker, .fast, .fast, .fast, .striker, .fast],
-                    spawnDelay: 1.0,
-                    spawnInterval: 1.0
+                    enemies: [.fast, .fast, .striker, .fast, .striker, .fast],
+                    spawnDelay: 0.8,
+                    spawnInterval: 0.95
                 ),
                 EnemyWave(
-                    enemies: [.sniper, .basic, .sniper, .sniper, .basic, .sniper],
-                    spawnDelay: 2.0,
-                    spawnInterval: 2.0
+                    enemies: [.sniper, .basic, .sniper, .basic, .sniper],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.8
                 ),
                 EnemyWave(
                     enemies: Array(repeating: .formation, count: 8),
-                    spawnDelay: 2.0,
+                    spawnDelay: 1.6,
                     spawnInterval: 0.5,
                     isFormation: true,
                     formationPattern: .line
                 ),
                 EnemyWave(
-                    enemies: [.heavy, .zigzag, .heavy, .heavy, .zigzag, .heavy],
-                    spawnDelay: 2.0,
-                    spawnInterval: 1.4
+                    enemies: [.heavy, .zigzag, .heavy, .zigzag, .heavy, .zigzag],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.3
+                ),
+                EnemyWave(
+                    enemies: [.sniper, .striker, .sniper, .striker],
+                    spawnDelay: 1.5,
+                    spawnInterval: 1.6
                 )
             ]
 

@@ -15,6 +15,18 @@ class BossManager {
     private var isAttacking: Bool = false
     private weak var player: Player?
 
+    /// Act the fight is currently in, so a crossing can be detected on the damage that
+    /// causes it. See `BossPhaseRules`.
+    private var currentPhase: Int = 0
+
+    /// Index into the boss's available patterns of the attack that just fired, so the
+    /// next draw can avoid repeating it.
+    ///
+    /// A plain `randomElement()` over fourteen patterns still lands the same attack twice
+    /// in a row about seven per cent of the time, and a repeated barrage reads as the
+    /// fight glitching rather than as bad luck.
+    private var lastPatternIndex: Int?
+
     init(scene: GameScene) {
         self.scene = scene
     }
@@ -46,31 +58,138 @@ class BossManager {
 
     func startAttacking() {
         isAttacking = true
+        currentPhase = boss?.currentPhase ?? 0
         scheduleNextAttack()
     }
 
     private func scheduleNextAttack() {
         guard isAttacking, let boss = boss, boss.isAlive() else { return }
 
-        let delay = TimeInterval.random(in: GameConfiguration.bossAttackDelayMin...GameConfiguration.bossAttackDelayMax)
+        // A cornered boss presses harder. Scaling the whole range rather than the
+        // minimum keeps the rhythm irregular in every act.
+        let scale = BossPhaseRules.attackDelayScale(forPhase: currentPhase)
+        let delay = TimeInterval.random(
+            in: (GameConfiguration.bossAttackDelayMin * scale)...(GameConfiguration.bossAttackDelayMax * scale)
+        )
+
+        guard let (pattern, telegraph) = nextAttack() else { return }
+
+        // Wind up, then fire. Splitting the delay this way rather than adding the
+        // telegraph on top of it keeps the attack cadence exactly what the tuning above
+        // says it is — the warning comes out of the gap, not after it.
+        let leadIn = max(0, delay - telegraph)
 
         // Use SKAction instead of DispatchQueue to respect pause state
-        let waitAction = SKAction.wait(forDuration: delay)
-        let attackAction = SKAction.run { [weak self] in
-            self?.performAttack()
-            self?.scheduleNextAttack()
-        }
-        let sequence = SKAction.sequence([waitAction, attackAction])
+        let sequence = SKAction.sequence([
+            SKAction.wait(forDuration: leadIn),
+            SKAction.run { [weak self] in
+                self?.playTelegraph(duration: telegraph)
+            },
+            SKAction.wait(forDuration: telegraph),
+            SKAction.run { [weak self] in
+                self?.performAttack(pattern)
+                self?.scheduleNextAttack()
+            }
+        ])
         boss.run(sequence, withKey: "bossAttackSchedule")
     }
 
-    private func performAttack() {
+    /// Draws the next attack and how long it should be signalled for, or nil if the boss
+    /// has nothing available.
+    private func nextAttack() -> (pattern: BossAttackPattern, telegraph: TimeInterval)? {
+        guard let boss = boss else { return nil }
+
+        let available = boss.availableAttackPatterns()
+        guard !available.isEmpty else { return nil }
+
+        var index = Int.random(in: 0..<available.count)
+        if available.count > 1, let last = lastPatternIndex, index == last {
+            // One deterministic step aside rather than a re-roll loop: it cannot spin,
+            // and over many draws it is indistinguishable from rejection sampling.
+            index = (index + 1) % available.count
+        }
+        lastPatternIndex = index
+
+        let telegraph = BossPhaseRules.telegraphDuration(
+            forPatternIndex: index,
+            totalPatterns: available.count
+        )
+        return (available[index], telegraph)
+    }
+
+    /// The wind-up: the boss swells while a ring collapses onto it, then it fires.
+    ///
+    /// A converging ring rather than a colour flash because `Boss` is an `SKShapeNode`.
+    /// `SKAction.colorize` only drives `SKSpriteNode.color` and `colorBlendFactor`, which
+    /// a shape node does not have — it is accepted, runs for its full duration and does
+    /// nothing at all, which would have left this "telegraph" as a barely perceptible 8%
+    /// scale nudge. Convergence also reads better than brightness for a wind-up: it has a
+    /// direction and an obvious arrival time.
+    private func playTelegraph(duration: TimeInterval) {
+        guard let boss = boss, boss.isAlive() else { return }
+
+        boss.removeAction(forKey: "bossTelegraph")
+        boss.run(SKAction.sequence([
+            SKAction.scale(to: 1.09, duration: duration * 0.75),
+            SKAction.scale(to: 1.0, duration: duration * 0.25)
+        ]), withKey: "bossTelegraph")
+
+        let radius = boss.bossSize * 0.5
+        let ring = SKShapeNode(circleOfRadius: radius)
+        ring.strokeColor = boss.telegraphColor
+        ring.fillColor = .clear
+        ring.lineWidth = 3
+        ring.blendMode = .add
+        ring.zPosition = -1
+        ring.setScale(2.6)
+        ring.alpha = 0
+        boss.addChild(ring)
+
+        ring.run(SKAction.sequence([
+            SKAction.group([
+                SKAction.fadeAlpha(to: 0.9, duration: duration * 0.4),
+                SKAction.scale(to: 1.0, duration: duration)
+            ]),
+            SKAction.fadeOut(withDuration: 0.1),
+            SKAction.removeFromParent()
+        ]))
+    }
+
+    /// Runs the escalation when the boss crosses a health threshold: everything stops,
+    /// the boss flares, and it comes back attacking faster and with more of its list.
+    private func advanceToPhase(_ phase: Int) {
+        guard let boss = boss, boss.isAlive() else { return }
+
+        currentPhase = phase
+        lastPatternIndex = nil
+
+        // Cancel the pending attack outright. Letting a wind-up that started in the
+        // previous act land in the middle of the transition is exactly the kind of
+        // unreadable moment the telegraph exists to remove.
+        boss.removeAction(forKey: "bossAttackSchedule")
+        boss.removeAction(forKey: "bossTelegraph")
+
+        boss.playPhaseTransitionEffect()
+
+        if let scene = scene {
+            scene.shakeCamera(intensity: 12.0, duration: 0.4)
+            SoundManager.shared.playBossAppearSound(on: scene)
+            HapticManager.shared.heavyTap()
+        }
+
+        // Resume on the boss's own clock so a pause holds the breather too.
+        boss.run(SKAction.sequence([
+            SKAction.wait(forDuration: BossPhaseRules.phaseTransitionPause),
+            SKAction.run { [weak self] in
+                self?.scheduleNextAttack()
+            }
+        ]), withKey: "bossPhaseResume")
+    }
+
+    private func performAttack(_ pattern: BossAttackPattern) {
         guard let boss = boss, scene != nil, boss.isAlive() else { return }
 
         let bossPosition = boss.position
-
-        let patterns = boss.getAttackPatterns()
-        guard let pattern = patterns.randomElement() else { return }
 
         switch pattern {
         case .straightShot:
@@ -658,7 +777,18 @@ class BossManager {
     func bossTakeDamage() -> (defeated: Bool, points: Int) {
         guard let boss = boss else { return (false, 0) }
 
+        let phaseBefore = boss.currentPhase
         let defeated = boss.takeDamage()
+
+        // Checked before the defeat branch returns, and only while the boss lives: a
+        // dying boss crosses every remaining threshold on its way to zero, and firing a
+        // transition into the defeat animation would fight it for the same nodes.
+        if !defeated {
+            let phaseAfter = boss.currentPhase
+            if phaseAfter > phaseBefore {
+                advanceToPhase(phaseAfter)
+            }
+        }
 
         if defeated {
             isAttacking = false
@@ -718,6 +848,10 @@ class BossManager {
 
     func cleanup() {
         isAttacking = false
+        currentPhase = 0
+        lastPatternIndex = nil
+        boss?.removeAction(forKey: "bossPhaseResume")
+        boss?.removeAction(forKey: "bossTelegraph")
         boss?.removeAction(forKey: "bossAttackSchedule")
         boss?.removeFromParent()
         boss?.removeHealthBarFromScene()

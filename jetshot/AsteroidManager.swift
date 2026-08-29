@@ -51,6 +51,26 @@ class AsteroidManager {
         }
     }
 
+
+    /// Adds more waves to a manager that may already have drained its queue.
+    ///
+    /// For endless mode, which has no authored level to draw a fixed hazard track from —
+    /// `GameScene` tops this up a round at a time so the hazards keep escalating with the
+    /// run instead of running out. Same shape, and the same `waveStartTime` repair, as
+    /// `EnemyManager.appendWaves(_:currentTime:)`.
+    func appendWaves(_ newWaves: [AsteroidWave], currentTime: TimeInterval) {
+        guard !newWaves.isEmpty else { return }
+
+        let hadFinished = currentWaveIndex >= waves.count
+        waves.append(contentsOf: newWaves)
+        totalAsteroidsToSpawn += newWaves.reduce(0) { $0 + $1.count }
+
+        if hadFinished {
+            waveStartTime = currentTime
+            lastSpawnTime = currentTime
+        }
+    }
+
     func update(currentTime: TimeInterval) {
         guard scene != nil else { return }
 

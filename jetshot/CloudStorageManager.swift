@@ -63,7 +63,48 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
         static let levelScores = "levelScores"
         static let levelStars = "levelStars"
         static let levelWeapons = "levelWeapons"
+
+        /// The endless run's records, as `["bestScore": Int, "bestRound": Int]`.
+        ///
+        /// A dictionary rather than two scalars so it can ride the element-wise `max`
+        /// merge below with the other `[String: Int]` collections, which is exactly the
+        /// semantics a personal best wants across two devices.
+        static let endlessRecords = "endlessRecords"
     }
+
+    // MARK: - Demo Store
+
+    #if DEBUG
+    /// Progress served entirely from memory, for the App Store media pipeline.
+    ///
+    /// While this is non-nil the type is read-only: every read below answers out of it,
+    /// and every write — `mutate`, `removeObject`, the merge, the flush — returns
+    /// without touching `UserDefaults` or `NSUbiquitousKeyValueStore`. That is not a
+    /// convenience. `Tools/appstore_media.sh` launches the game with `-unlockall` more
+    /// than thirty times per run, and without this the first of those launches would
+    /// write a fabricated fifty-level save to disk and then push it to iCloud, where it
+    /// would land on every other device signed into the same account.
+    ///
+    /// `nonisolated(unsafe)` on the same terms the class itself is `@unchecked
+    /// Sendable`: it is assigned exactly once, from `DebugLaunch.prepare()` in
+    /// `application(_:didFinishLaunchingWithOptions:)`, before `shared` has been
+    /// resolved and therefore before any other thread in this type exists. Everything
+    /// after that point is a read.
+    nonisolated(unsafe) private static var demoStore: [String: Any]?
+
+    /// Switches the whole type into the read-only demo mode described above.
+    ///
+    /// Deliberately `static`: touching an instance member here would resolve `shared`,
+    /// and resolving `shared` runs `setupCloudSync()` — the very merge this is meant to
+    /// get in front of.
+    static func installDemoStore(_ values: [String: Any]) {
+        demoStore = values
+    }
+
+    private static var isDemo: Bool { demoStore != nil }
+    #else
+    private static var isDemo: Bool { false }
+    #endif
 
     // MARK: - Initialization
     private init() {
@@ -74,6 +115,12 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
 
     /// Setup iCloud synchronization and listeners
     private func setupCloudSync() {
+        // A demo launch neither reads iCloud nor writes it. Returning before the
+        // observer is registered matters as much as returning before the merge: an
+        // external change arriving mid-session would otherwise call
+        // `mergeCloudDataWithLocal()` on the real stores behind the demo's back.
+        guard !Self.isDemo else { return }
+
         // Listen for changes from iCloud
         NotificationCenter.default.addObserver(
             self,
@@ -142,8 +189,8 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
             label: "completed levels"
         ) || didPushToCloud
 
-        // Scores and stars: element-wise max per level.
-        for key in [Keys.levelScores, Keys.levelStars] {
+        // Scores, stars and endless records: element-wise max per key.
+        for key in [Keys.levelScores, Keys.levelStars, Keys.endlessRecords] {
             let cloud = cloudStore.dictionary(forKey: key) as? [String: Int] ?? [:]
             let local = userDefaults.dictionary(forKey: key) as? [String: Int] ?? [:]
             var merged: [String: Int] = [:]
@@ -233,6 +280,7 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     /// orders them correctly. What the caller does *not* wait for is the flush — see
     /// `scheduleFlush()`.
     func mutate(array key: String, _ transform: ([Any]) -> [Any]) {
+        guard !Self.isDemo else { return }
         queue.sync {
             let current = userDefaults.array(forKey: key) ?? []
             let updated = transform(current)
@@ -244,6 +292,7 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     /// Reads, transforms and writes one stored dictionary as a single serial operation.
     /// See `mutate(array:_:)` for the ordering guarantee and the deadlock caveat.
     func mutate(dictionary key: String, _ transform: ([String: Any]) -> [String: Any]) {
+        guard !Self.isDemo else { return }
         queue.sync {
             let current = userDefaults.dictionary(forKey: key) ?? [:]
             let updated = transform(current)
@@ -254,6 +303,7 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
 
     /// Remove a key from both local and cloud storage.
     func removeObject(forKey key: String) {
+        guard !Self.isDemo else { return }
         queue.sync {
             userDefaults.removeObject(forKey: key)
             cloudStore.removeObject(forKey: key)
@@ -279,12 +329,18 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     /// cannot interleave with the merge — belongs to `mutate(array:_:)` and
     /// `mutate(dictionary:_:)`, which still run their whole transform on `queue`.
     func loadArray(forKey key: String) -> [Any]? {
+        #if DEBUG
+        if let demo = Self.demoStore { return demo[key] as? [Any] }
+        #endif
         return userDefaults.array(forKey: key)
     }
 
     /// Load dictionary from local storage (kept up to date by the merge).
     /// See `loadArray(forKey:)` for why this does not use `queue`.
     func loadDictionary(forKey key: String) -> [String: Any]? {
+        #if DEBUG
+        if let demo = Self.demoStore { return demo[key] as? [String: Any] }
+        #endif
         return userDefaults.dictionary(forKey: key)
     }
 

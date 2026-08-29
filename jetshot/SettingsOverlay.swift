@@ -20,9 +20,9 @@ enum GameSetting: CaseIterable {
 
     var title: String {
         switch self {
-        case .music: return "MUSIC"
-        case .sound: return "SOUND"
-        case .haptics: return "HAPTICS"
+        case .music: return L10n.Settings.music
+        case .sound: return L10n.Settings.sound
+        case .haptics: return L10n.Settings.haptics
         }
     }
 
@@ -129,7 +129,7 @@ final class SettingsOverlay: SKNode {
         GlowHelper.addEnhancedGlow(to: panel, color: UITheme.Colors.primaryCyan, intensity: 0.5)
 
         let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = "SETTINGS"
+        title.text = L10n.Settings.title
         title.fontSize = UITheme.Typography.sizeMedium
         title.fontColor = UITheme.Colors.primaryCyanLight
         title.horizontalAlignmentMode = .center
@@ -149,7 +149,7 @@ final class SettingsOverlay: SKNode {
         }
 
         let closeButton = UITheme.createButton(
-            text: "CLOSE",
+            text: L10n.Settings.close,
             color: UITheme.Colors.primaryCyan,
             width: 160,
             name: Self.closeButtonName,
@@ -221,7 +221,7 @@ final class SettingsOverlay: SKNode {
         pill.fillColor = tint.withAlphaComponent(isOn ? 0.22 : 0.12)
         pill.strokeColor = tint
         pill.lineWidth = UITheme.Dimensions.lineWidthThin
-        label.text = isOn ? "ON" : "OFF"
+        label.text = isOn ? L10n.Settings.on : L10n.Settings.off
         label.fontColor = tint
     }
 

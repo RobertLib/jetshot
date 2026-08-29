@@ -1,0 +1,32 @@
+No account or sign-in is required. There are no ads, no in-app purchases and no
+third-party SDKs of any kind — the app links only Apple frameworks (UIKit,
+SpriteKit, AVFoundation, CoreImage, Foundation). There is no networking code, no
+StoreKit and no advertising identifier.
+
+Progression: only level 1 is unlocked at the start, and each level unlocks the
+next. ENDLESS appears on the main menu once level 1 has been cleared — it is a
+run with no completion condition and needs no unlocking beyond that. To reach the
+later levels and their bosses without playing through fifty of them, use RESET on
+the level-select screen and note that any level already completed stays
+selectable from the grid.
+
+Controls: drag a finger anywhere on the screen to fly the ship. The guns fire by
+themselves; there is no fire button. Tap the pause button at the top for the
+pause menu and settings (music, sound and haptics, each switchable on its own).
+
+Data: the game stores progress (completed levels, scores, star ratings, weapon
+loadouts and the endless records) in UserDefaults and mirrors it to
+NSUbiquitousKeyValueStore so that it follows the player's own iCloud account
+across their devices. That is the only thing that ever leaves the device, it goes
+to the user's own iCloud and nowhere else, and the app collects nothing. The
+iCloud key-value entitlement in jetshot.entitlements is there for exactly this.
+With no iCloud account signed in the game works normally against local storage.
+
+Age rating: 4+. The game is an abstract arcade shooter — the ships, enemies and
+explosions are drawn as geometric vector shapes, there are no characters, no
+blood, no realistic violence, no chat, no user-generated content and no links out
+of the app.
+
+Localisation: English and Czech, switched by the device language.
+
+The app supports iPhone and iPad, portrait only.

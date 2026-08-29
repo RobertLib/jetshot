@@ -11,11 +11,27 @@ class GameOverScene: SKScene {
 
     private let finalScore: Int
     private let currentLevel: Int
+    private let isEndless: Bool
+    private let endlessRound: Int
+    /// Whether this run beat the stored endless best. Decided by `GameScene.gameOver()`,
+    /// which records the run — by the time this scene exists the store already holds the
+    /// new figure, so comparing here would compare the run against itself.
+    private let isEndlessRecord: Bool
     private var isInitialized = false
 
-    init(size: CGSize, score: Int, level: Int = 1) {
+    init(
+        size: CGSize,
+        score: Int,
+        level: Int = 1,
+        isEndless: Bool = false,
+        endlessRound: Int = 0,
+        isEndlessRecord: Bool = false
+    ) {
         self.finalScore = score
         self.currentLevel = level
+        self.isEndless = isEndless
+        self.endlessRound = endlessRound
+        self.isEndlessRecord = isEndlessRecord
         super.init(size: size)
     }
 
@@ -65,7 +81,8 @@ class GameOverScene: SKScene {
 
         // Main panel background with rounded corners and glow
         let panelWidth: CGFloat = min(size.width - 60, UITheme.Dimensions.panelWidthMax)
-        let panelHeight = 420.0
+        // Taller in endless, which adds a round line and a record line under the score.
+        let panelHeight = isEndless ? 460.0 : 420.0
         let panel = UITheme.createPanel(
             width: panelWidth,
             height: panelHeight,
@@ -132,7 +149,7 @@ class GameOverScene: SKScene {
 
         // "LEVEL FAILED" title - more space from icon
         let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = "LEVEL FAILED"
+        title.text = L10n.GameOver.title
         title.fontSize = UITheme.Typography.sizeMedium
         title.fontColor = UITheme.Colors.dangerRed
         title.position = CGPoint(x: 0, y: defeatIcon.position.y - spacing - 10)
@@ -175,7 +192,7 @@ class GameOverScene: SKScene {
         let scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
         scoreLabel.horizontalAlignmentMode = .center
         scoreLabel.verticalAlignmentMode = .center
-        scoreLabel.text = "SCORE"
+        scoreLabel.text = L10n.Common.score
         scoreLabel.fontSize = UITheme.Typography.sizeRegular
         scoreLabel.fontColor = UITheme.Colors.textSecondary
         scoreLabel.position = CGPoint(x: 0, y: 19)
@@ -191,6 +208,39 @@ class GameOverScene: SKScene {
         scoreValue.position = CGPoint(x: 0, y: -18)
         container.addChild(scoreValue)
 
+        // Endless has no completion screen, so the run's result is reported here or
+        // nowhere: how deep it got, and whether it beat the standing record.
+        if isEndless {
+            let roundLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            roundLine.horizontalAlignmentMode = .center
+            roundLine.verticalAlignmentMode = .center
+            roundLine.fontSize = 16
+            roundLine.text = L10n.GameOver.reachedRound(endlessRound)
+            roundLine.fontColor = UITheme.Colors.primaryCyanLight
+            roundLine.position = CGPoint(x: 0, y: -46)
+            container.addChild(roundLine)
+
+            let recordLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            recordLine.horizontalAlignmentMode = .center
+            recordLine.verticalAlignmentMode = .center
+            recordLine.fontSize = 15
+            recordLine.position = CGPoint(x: 0, y: -68)
+
+            let records = LevelManager.shared.getEndlessRecords()
+            if isEndlessRecord {
+                recordLine.text = L10n.GameOver.newRecord
+                recordLine.fontColor = UITheme.Colors.successGreenLight
+                recordLine.run(.repeatForever(.sequence([
+                    .scale(to: 1.08, duration: 0.5),
+                    .scale(to: 1.0, duration: 0.5)
+                ])))
+            } else {
+                recordLine.text = L10n.Common.endlessRecord(score: records.bestScore, round: records.bestRound)
+                recordLine.fontColor = UITheme.Colors.textSecondary
+            }
+            container.addChild(recordLine)
+        }
+
         return container
     }
 
@@ -199,7 +249,7 @@ class GameOverScene: SKScene {
 
         // Retry button
         let retryButton = UITheme.createButton(
-            text: "RETRY",
+            text: L10n.Common.retry,
             color: UITheme.Colors.successGreen,
             width: UITheme.Dimensions.buttonWidthXLarge,
             name: "retryButton"
@@ -217,7 +267,7 @@ class GameOverScene: SKScene {
         let secondaryButtonY = buttonY - 65
 
         let levelsButton = UITheme.createButton(
-            text: "LEVELS",
+            text: L10n.Common.levels,
             color: UITheme.Colors.buttonLevels,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "levelsButton"
@@ -227,7 +277,7 @@ class GameOverScene: SKScene {
         panel.addChild(levelsButton)
 
         let menuButton = UITheme.createButton(
-            text: "MENU",
+            text: L10n.Common.menu,
             color: UITheme.Colors.buttonMenu,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "menuButton"
@@ -304,9 +354,13 @@ class GameOverScene: SKScene {
         let gameScene = GameScene(size: view.bounds.size)
         gameScene.scaleMode = scaleMode
         gameScene.currentLevel = currentLevel // Restart the same level
+        // RETRY on an endless run starts another endless run, not the campaign.
+        gameScene.isEndless = isEndless
 
-        // Load weapon arsenal from previous level when restarting
-        if currentLevel > 1 {
+        // Load weapon arsenal from previous level when restarting. Endless always starts
+        // from the default loadout — carrying an arsenal into an unbounded score chase
+        // would make the record depend on campaign progress rather than on the run.
+        if !isEndless, currentLevel > 1 {
             let weapons = LevelManager.shared.getLevelWeapons(level: currentLevel - 1)
             gameScene.startingBulletCount = weapons.bulletCount
             gameScene.startingSideMissileCount = weapons.sideMissileCount

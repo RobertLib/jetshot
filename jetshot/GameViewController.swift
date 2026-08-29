@@ -19,8 +19,15 @@ class GameViewController: UIViewController {
             return
         }
 
-        // Create menu scene (intro screen)
-        let scene = MenuScene(size: view.bounds.size)
+        // Create menu scene (intro screen).
+        //
+        // `DebugLaunch` returns something else only when the App Store media pipeline
+        // has passed it a launch argument; it is `#if DEBUG` and returns nil for every
+        // ordinary launch, so the menu stays the one and only entry point in Release.
+        var scene: SKScene = MenuScene(size: view.bounds.size)
+        #if DEBUG
+        scene = DebugLaunch.makeInitialScene(size: view.bounds.size) ?? scene
+        #endif
         scene.scaleMode = .resizeFill
 
         // Present scene

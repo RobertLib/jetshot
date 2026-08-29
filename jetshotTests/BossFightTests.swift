@@ -29,9 +29,9 @@ final class BossFightTests: XCTestCase {
     /// Entrance is a 2.0s `moveTo`; the boss only becomes fightable on its completion.
     private let entranceDuration: TimeInterval = 2.0
 
-    /// Level 2 rather than 1 by default: level 1 adds the "3 2 1" countdown, and none of
-    /// these tests need the intro. `startPlaying()` skips waiting for player control,
-    /// which the boss does not depend on.
+    /// Level 2 rather than 1 by default: level 1 is the only level with tutorial hints
+    /// and a longer title card, and none of these tests need the intro. `startPlaying()`
+    /// skips waiting for player control, which the boss does not depend on.
     @discardableResult
     private func startFight(_ harness: GameplayHarness, level: Int = 2) -> Boss {
         harness.startPlaying(level: level)

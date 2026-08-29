@@ -1,0 +1,59 @@
+A real arcade space shooter: fifty hand-built levels, a boss at the end of every one, and an endless run for when they are done. No ads, no in-app purchases, no account, no energy timers.
+
+FIFTY LEVELS, FIFTY BOSSES
+Every level ends with a boss, and every boss fight has three acts — it opens on a handful of patterns, then attacks faster and reaches deeper into its repertoire as its armor cracks at two-thirds and one-third health. The signatures are authored, not scaled: level 20 hunts you with aimed and homing fire, level 25 floods the screen from both sides, level 30 is a laser platform, level 50 draws on everything the game has.
+
+AN ARSENAL YOU BUILD, AND CAN LOSE
+Your guns stack to eight barrels — four straight, four angled — plus two side missile launchers. What you finish a level with is what you start the next with, and every life you lose costs you a barrel. Thirteen power-ups drop along the way:
+• Multi Shot — one more barrel, up to eight
+• Side Missiles — angled launchers on the wings
+• Shield — five seconds of nothing touching you
+• Rapid Fire — three times the rate of fire
+• Lightning — your guns become a storm that clears the screen and tears fifteen hits from a boss
+• Homing Missiles — six missiles that pick their own targets
+• Freeze Bomb — everything stops dead for two and a half seconds, then detonates
+• Slow Motion — enemies, asteroids and incoming fire at half speed
+• Barrier — a rotating shield that destroys whatever it touches
+• Magnet — coins come to you
+• Score x2 — twelve seconds of doubled points
+• Nuke — clears the screen
+• +1 Life — up to four
+
+TWENTY-SEVEN ENEMIES, EACH ASKING SOMETHING ELSE
+Snipers stop dead and aim. Tanks take two hits and answer with a spread. Turrets dock in mid-air and rotate. Shielded enemies have to be shot from behind. Splitters become two. Mirrors send your own fire back at you. Ghosts phase out of sight, teleporters relocate, vortices swallow your bullets, bouncers ricochet like pinballs. Around all of it: twelve kinds of moving obstacle, asteroid fields, and formations that arrive and attack as one shape.
+
+THE CHAIN
+Kills landing close together build a chain that multiplies your score up to eight times over. Take one hit and it is gone. The window shortens as the chain grows, so a long one has to be held rather than accumulated.
+
+HEAT
+Holding the trigger down is a decision. Twenty-five shots fill the heat gauge and the guns cut out for a second and a half — long enough to hurt, short enough to fly a good run straight through.
+
+ENDLESS
+When the campaign is finished, the run starts. Rounds grow and tighten, the enemy roster widens every third round, a boss arrives every fifth, and the chain multiplier is what the mode is built around. It keeps your best score and the deepest round you have reached.
+
+A STORY WITH AN ENDING
+You fly the experimental ship Singularity-7 through the last hours of a dying universe, gathering quantum energy to ignite protocol Big Bang Zero. Fifty levels later there is a real ending, written and played out.
+
+CONTROLS YOU ALREADY KNOW
+Drag anywhere to fly. The guns fire themselves. That is the entire control scheme, and it is why this plays one-handed on a train.
+
+DRAWN IN LIGHT
+Every ship, bullet and explosion is a glowing vector shape over a multi-layer parallax starfield, lit with real bloom, not a blur filter. Seven music tracks, one more for the story, and haptics — each switchable off on its own.
+
+WHAT YOU ARE PLAYING FOR
+• Three stars a level, set by the coins you pick up
+• A personal best on every level and on the endless run
+• Fifty levels, unlocked one at a time
+• Progress carried between your devices by your own iCloud
+
+FAIR PLAY
+• No ads
+• No in-app purchases
+• No account, no sign-in
+• No energy, no timers, no waiting
+• Plays offline — nothing leaves the device but your own progress, to your own iCloud
+• No data collected
+• English and Czech
+• iPhone and iPad
+
+Just the game. Nothing else.

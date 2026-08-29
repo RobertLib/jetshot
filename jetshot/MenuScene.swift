@@ -104,7 +104,7 @@ class MenuScene: SKScene {
         // Subtitle
         let subtitleLabel = SKLabelNode()
         subtitleLabel.attributedText = NeonFX.trackedText(
-            "SPACE SHOOTER",
+            L10n.Menu.subtitle,
             font: UITheme.Typography.fontRegular,
             size: UITheme.Typography.sizeSmall,
             color: UITheme.Colors.textSecondary,
@@ -117,7 +117,7 @@ class MenuScene: SKScene {
         // Credits - Creator info
         let creditsLabel = SKLabelNode()
         creditsLabel.attributedText = NeonFX.trackedText(
-            "CREATED BY ROBLIB",
+            L10n.Menu.credits,
             font: UITheme.Typography.fontRegular,
             size: UITheme.Typography.sizeTiny,
             color: UITheme.Colors.textSecondary.withAlphaComponent(0.5),
@@ -130,7 +130,7 @@ class MenuScene: SKScene {
 
     private func setupStartButton() {
         startButton = UITheme.createButton(
-            text: "START",
+            text: L10n.Menu.start,
             color: UITheme.Colors.primaryCyan,
             width: UITheme.Dimensions.buttonWidthLarge,
             name: "startButton"
@@ -154,15 +154,53 @@ class MenuScene: SKScene {
         // does need the label, ask the button for it without the prefix:
         // `startButton.childNode(withName: "SKLabelNode") as? SKLabelNode`.
 
+        // Endless, once the player has actually played something.
+        //
+        // Gated on level 1 rather than shown from a cold start: it is the mode with no
+        // tutorial, no intro and no completion, and dropping a brand-new player into it
+        // before they have flown the ship once is the worst first impression the game can
+        // make. Clearing level 1 is a low enough bar that anyone who wants it gets it in
+        // under two minutes.
+        var settingsY = size.height / 2 - 130
+
+        if LevelManager.shared.isLevelCompleted(1) {
+            let endlessButton = UITheme.createButton(
+                text: L10n.Menu.endless,
+                color: UITheme.Colors.primaryGold,
+                width: UITheme.Dimensions.buttonWidthLarge,
+                name: "endlessButton",
+                height: 44
+            )
+            endlessButton.position = CGPoint(x: size.width / 2, y: size.height / 2 - 125)
+            endlessButton.zPosition = 10
+            addChild(endlessButton)
+
+            // The record under the button is the whole pitch for the mode.
+            let records = LevelManager.shared.getEndlessRecords()
+            if records.bestScore > 0 {
+                let best = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
+                best.text = L10n.Common.endlessRecord(score: records.bestScore, round: records.bestRound)
+                best.fontSize = 13
+                best.fontColor = UITheme.Colors.textSecondary
+                best.horizontalAlignmentMode = .center
+                best.verticalAlignmentMode = .center
+                best.position = CGPoint(x: size.width / 2, y: size.height / 2 - 157)
+                best.zPosition = 10
+                addChild(best)
+            }
+
+            settingsY = size.height / 2 - 190
+        }
+
         // Settings, deliberately understated so it doesn't compete with START.
         let settingsButton = UITheme.createButton(
-            text: "SETTINGS",
+            text: L10n.Menu.settings,
             color: UITheme.Colors.buttonMenu,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "settingsButton",
             height: 42
         )
-        settingsButton.position = CGPoint(x: size.width / 2, y: size.height / 2 - 130)
+        settingsButton.position = CGPoint(x: size.width / 2, y: settingsY)
         settingsButton.zPosition = 10
         addChild(settingsButton)
     }
@@ -185,6 +223,13 @@ class MenuScene: SKScene {
             HapticManager.shared.lightTap()
             SoundManager.shared.playButtonClickSound(on: self)
             startGame()
+            return
+        }
+
+        if isTap(location, on: "endlessButton") {
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
+            startEndlessRun()
             return
         }
 
@@ -221,6 +266,18 @@ class MenuScene: SKScene {
         startButton.run(UITheme.createButtonPressAnimation { [weak self] in
             self?.transitionToGame()
         })
+    }
+
+    /// Straight into a run — endless has no level to pick, which is most of its appeal
+    /// as the "one more go" mode.
+    private func startEndlessRun() {
+        guard let view = view else { return }
+
+        let gameScene = GameScene(size: view.bounds.size)
+        gameScene.scaleMode = scaleMode
+        gameScene.isEndless = true
+
+        view.presentScene(gameScene, transition: SKTransition.fade(withDuration: 0.5))
     }
 
     private func transitionToGame() {

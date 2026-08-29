@@ -30,6 +30,20 @@ struct BossConfig {
     let points: Int
     let shape: BossShape
 
+    /// Each arm's `attackPatterns` runs lightest to heaviest, and that ordering is
+    /// load-bearing rather than cosmetic: `BossPhaseRules.patternCount(forPhase:
+    /// totalPatterns:)` takes a *prefix* of this list, so a boss opens with the front of
+    /// its array and only earns the back of it once it is wounded. Append a heavy attack
+    /// in the middle and it will show up in the opening act.
+    ///
+    /// The lists also differ per milestone, which they did not use to. Every arm from
+    /// level 8 to level 50 declared the identical fourteen patterns, so thirty-five of
+    /// the fifty bosses in the game were the same fight with a longer health bar — the
+    /// single largest piece of repetition left in the game, sitting at the climax of
+    /// every level. Each is now a signature of eight to fifteen patterns with a
+    /// recognisable bias: level 20 hunts (aimed, homing, sweeps), level 25 floods the
+    /// screen from the sides (zigzag, cascade, rain), level 30 is a laser platform, and
+    /// only level 50 draws on effectively everything.
     static func config(for level: Int) -> BossConfig {
         switch level {
         case 1:
@@ -70,7 +84,7 @@ struct BossConfig {
                 maxHealth: 70,
                 movementSpeed: 2.0,
                 size: 110,
-                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .spiral, .circularBarrage, .cascade],
+                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .spiral, .cascade, .circularBarrage],
                 color: UIColor(red: 0.7, green: 0.4, blue: 0.1, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 0.7, blue: 0.4, alpha: 1.0),
                 points: 1250,
@@ -81,7 +95,7 @@ struct BossConfig {
                 maxHealth: 90,
                 movementSpeed: 1.8,
                 size: 120,
-                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .spiral, .wave, .circularBarrage, .cascade, .doubleSpiral],
+                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .wave, .spiral, .cascade, .doubleSpiral, .circularBarrage],
                 color: UIColor(red: 0.1, green: 0.6, blue: 0.3, alpha: 1.0),
                 strokeColor: UIColor(red: 0.4, green: 1.0, blue: 0.6, alpha: 1.0),
                 points: 1500,
@@ -92,7 +106,7 @@ struct BossConfig {
                 maxHealth: 110,
                 movementSpeed: 1.6,
                 size: 130,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .circularBarrage, .cascade, .doubleSpiral, .barrageRain],
+                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .spiral, .burst, .cascade, .doubleSpiral, .circularBarrage, .barrageRain],
                 color: UIColor(red: 0.5, green: 0.1, blue: 0.5, alpha: 1.0),
                 strokeColor: UIColor(red: 0.9, green: 0.4, blue: 0.9, alpha: 1.0),
                 points: 1750,
@@ -103,7 +117,7 @@ struct BossConfig {
                 maxHealth: 135,
                 movementSpeed: 1.5,
                 size: 140,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern],
+                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .spiral, .burst, .zigzagPattern, .cascade, .homing, .doubleSpiral, .circularBarrage, .barrageRain],
                 color: UIColor(red: 0.7, green: 0.1, blue: 0.1, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 1.0),
                 points: 2000,
@@ -114,7 +128,7 @@ struct BossConfig {
                 maxHealth: 160,
                 movementSpeed: 1.3,
                 size: 150,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .burst, .homing, .sectorSweep, .laser],
                 color: UIColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0),
                 points: 2500,
@@ -125,7 +139,7 @@ struct BossConfig {
                 maxHealth: 200,
                 movementSpeed: 1.2,
                 size: 155,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .wave, .spiral, .burst, .doubleSpiral, .sectorSweep, .circularBarrage],
                 color: UIColor(red: 0.0, green: 0.2, blue: 0.4, alpha: 1.0),
                 strokeColor: UIColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1.0),
                 points: 3000,
@@ -136,7 +150,7 @@ struct BossConfig {
                 maxHealth: 250,
                 movementSpeed: 1.1,
                 size: 160,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.doubleShot, .tripleShot, .spread, .wave, .burst, .cascade, .circularBarrage, .barrageRain],
                 color: UIColor(red: 0.3, green: 0.0, blue: 0.5, alpha: 1.0),
                 strokeColor: UIColor(red: 0.7, green: 0.3, blue: 1.0, alpha: 1.0),
                 points: 3500,
@@ -147,7 +161,7 @@ struct BossConfig {
                 maxHealth: 300,
                 movementSpeed: 1.0,
                 size: 165,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .zigzagPattern, .homing, .sectorSweep, .laser],
                 color: UIColor(red: 0.5, green: 0.5, blue: 0.0, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 1.0, blue: 0.3, alpha: 1.0),
                 points: 4000,
@@ -158,7 +172,7 @@ struct BossConfig {
                 maxHealth: 350,
                 movementSpeed: 1.0,
                 size: 170,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.doubleShot, .tripleShot, .spread, .wave, .zigzagPattern, .cascade, .doubleSpiral, .barrageRain],
                 color: UIColor(red: 0.0, green: 0.4, blue: 0.4, alpha: 1.0),
                 strokeColor: UIColor(red: 0.3, green: 1.0, blue: 1.0, alpha: 1.0),
                 points: 4500,
@@ -169,7 +183,7 @@ struct BossConfig {
                 maxHealth: 400,
                 movementSpeed: 1.0,
                 size: 175,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .burst, .sectorSweep, .circularBarrage, .laser],
                 color: UIColor(red: 0.5, green: 0.2, blue: 0.0, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 0.6, blue: 0.2, alpha: 1.0),
                 points: 5000,
@@ -180,7 +194,7 @@ struct BossConfig {
                 maxHealth: 450,
                 movementSpeed: 1.0,
                 size: 180,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .wave, .burst, .cascade, .doubleSpiral, .circularBarrage, .barrageRain],
                 color: UIColor(red: 0.6, green: 0.0, blue: 0.3, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 0.3, blue: 0.7, alpha: 1.0),
                 points: 5500,
@@ -191,7 +205,7 @@ struct BossConfig {
                 maxHealth: 500,
                 movementSpeed: 1.0,
                 size: 185,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .zigzagPattern, .homing, .sectorSweep, .barrageRain, .laser],
                 color: UIColor(red: 0.2, green: 0.5, blue: 0.2, alpha: 1.0),
                 strokeColor: UIColor(red: 0.5, green: 1.0, blue: 0.5, alpha: 1.0),
                 points: 6000,
@@ -202,7 +216,7 @@ struct BossConfig {
                 maxHealth: 550,
                 movementSpeed: 1.0,
                 size: 190,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.tripleShot, .spread, .wave, .spiral, .burst, .cascade, .homing, .doubleSpiral, .circularBarrage, .laser],
                 color: UIColor(red: 0.4, green: 0.0, blue: 0.6, alpha: 1.0),
                 strokeColor: UIColor(red: 0.8, green: 0.4, blue: 1.0, alpha: 1.0),
                 points: 6500,
@@ -213,7 +227,7 @@ struct BossConfig {
                 maxHealth: 600,
                 movementSpeed: 1.0,
                 size: 200,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .wave, .burst, .homing, .laser, .circularBarrage, .cascade, .doubleSpiral, .barrageRain, .zigzagPattern, .sectorSweep],
+                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .wave, .spiral, .burst, .zigzagPattern, .cascade, .homing, .doubleSpiral, .sectorSweep, .circularBarrage, .barrageRain, .laser],
                 color: UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0),
                 strokeColor: UIColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0),
                 points: 7500,
@@ -228,8 +242,16 @@ struct BossConfig {
     }
 }
 
-// Boss attack patterns
-enum BossAttackPattern {
+// Boss attack patterns.
+//
+// `nonisolated` like `PhysicsCategory` and `ExplosionSize`: a bare enum of cases carries
+// no state and has no business on the main actor. `BossPhaseRules` slices these lists per
+// phase and is pure, so it cannot see a main-actor type — and nor can `jetshotTests`.
+//
+// The order of the cases is not load-bearing, but the order *within each config's
+// `attackPatterns` array* is: see `BossPhaseRules.patternCount(forPhase:totalPatterns:)`,
+// which takes a prefix and so expects each list to run lightest to heaviest.
+nonisolated enum BossAttackPattern {
     case straightShot   // Single bullet straight down
     case doubleShot     // Two bullets side by side
     case tripleShot     // Three bullets
@@ -607,7 +629,7 @@ class Boss: SKShapeNode {
         // (sceneWidth, 2 * barY + 30) — off the right edge and far above the top of the
         // screen, i.e. never visible at all.
         let bossLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        bossLabel.text = "⚡ BOSS ⚡"
+        bossLabel.text = L10n.HUD.boss
         bossLabel.fontSize = 24
         bossLabel.fontColor = .yellow
         bossLabel.position = CGPoint(x: 0, y: 30)
@@ -938,6 +960,67 @@ class Boss: SKShapeNode {
 
     func getAttackPatterns() -> [BossAttackPattern] {
         return config.attackPatterns
+    }
+
+    /// Remaining health as a fraction of the boss's maximum, 0...1.
+    var healthFraction: CGFloat {
+        guard config.maxHealth > 0 else { return 0 }
+        return CGFloat(currentHealth) / CGFloat(config.maxHealth)
+    }
+
+    /// Which act of the fight the boss is currently in. See `BossPhaseRules`.
+    var currentPhase: Int {
+        return BossPhaseRules.phase(forHealthFraction: healthFraction)
+    }
+
+    /// The attacks available to the boss right now — the prefix of its authored list that
+    /// its current health has unlocked.
+    func availableAttackPatterns() -> [BossAttackPattern] {
+        let all = config.attackPatterns
+        let count = BossPhaseRules.patternCount(
+            forPhase: currentPhase,
+            totalPatterns: all.count
+        )
+        return Array(all.prefix(count))
+    }
+
+    /// The boss's own size and stroke colour, for effects `BossManager` builds around it.
+    var bossSize: CGFloat { config.size }
+    var telegraphColor: UIColor { config.strokeColor }
+
+    /// Marks a phase change on the boss itself: a lurch outward and a ring thrown off the
+    /// silhouette.
+    ///
+    /// Loud on purpose. The transition is the one moment in a fight that tells the player
+    /// they are actually getting somewhere, and against a 600 hit point level 50 boss
+    /// that readout is most of what stops the fight feeling like a wall.
+    ///
+    /// Deliberately no alpha animation: `takeDamage()` runs an unkeyed alpha flash on
+    /// every single hit, and a second, longer one from here would be fighting it for the
+    /// same property throughout the transition.
+    func playPhaseTransitionEffect() {
+        removeAction(forKey: "bossPhaseFlash")
+
+        let flash = SKAction.sequence([
+            SKAction.scale(to: 1.18, duration: 0.14),
+            SKAction.scale(to: 1.0, duration: 0.22)
+        ])
+        run(flash, withKey: "bossPhaseFlash")
+
+        let ring = SKShapeNode(circleOfRadius: config.size * 0.5)
+        ring.strokeColor = config.strokeColor
+        ring.fillColor = .clear
+        ring.lineWidth = 5
+        ring.zPosition = -1
+        ring.blendMode = .add
+        addChild(ring)
+        ring.run(SKAction.sequence([
+            SKAction.group([
+                SKAction.scale(to: 2.4, duration: 0.5),
+                SKAction.fadeOut(withDuration: 0.5)
+            ]),
+            SKAction.removeFromParent()
+        ]))
     }
 
     // MARK: - Damage Visual Effects

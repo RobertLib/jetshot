@@ -158,6 +158,27 @@ class EnemyManager {
         return currentWaveIndex >= waves.count
     }
 
+    /// Adds more waves to a manager that may already have finished its queue.
+    ///
+    /// For endless mode, which has no authored wave list to hand the initialiser — it
+    /// tops the queue up a round at a time. `update(currentTime:)` returns early once
+    /// `currentWaveIndex` passes the end, so appending is enough to restart it; the only
+    /// thing that has to be repaired is `waveStartTime`, which would otherwise still hold
+    /// the instant the *previous* wave began and let the new one's `spawnDelay` elapse in
+    /// the past.
+    func appendWaves(_ newWaves: [EnemyWave], currentTime: TimeInterval) {
+        guard !newWaves.isEmpty else { return }
+
+        let hadFinished = areAllWavesSpawned()
+        waves.append(contentsOf: newWaves)
+        totalEnemiesToSpawn += newWaves.reduce(0) { $0 + $1.enemies.count }
+
+        if hadFinished {
+            waveStartTime = currentTime
+            lastSpawnTime = currentTime
+        }
+    }
+
     func stopSpawning() {
         currentWaveIndex = waves.count // Mark all waves as spawned
     }

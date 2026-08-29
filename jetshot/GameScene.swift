@@ -62,6 +62,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     var currentLevel: Int = 1
     private var levelConfig: LevelConfig!
 
+    /// Runs the scene as an endless survival run instead of an authored level.
+    ///
+    /// Endless reuses this scene wholesale — the same spawner, combat, power-ups, chain
+    /// scoring and bosses — and changes only where the waves come from and what "the end"
+    /// means. There is no completion: `EndlessDirector` tops the queue up a round at a
+    /// time forever, a boss arrives every fifth round, and the run finishes when the
+    /// player does.
+    var isEndless: Bool = false
+
+    /// Rounds survived in an endless run. Also the run's headline result, alongside score.
+    private(set) var endlessRound: Int = 0
+
+    /// Set while an endless boss round is being fought, so its defeat resumes the run
+    /// rather than ending the level.
+    private var isEndlessBossFight: Bool = false
+
     // Starting weapon arsenal (loaded from previous level)
     var startingBulletCount: Int = 1
     var startingSideMissileCount: Int = 0
@@ -119,6 +135,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // was already dead.
     private var bossSpawned: Bool = false
 
+    /// Freezes the level's own progression — wave spawning and the completion/boss
+    /// check — while leaving physics, input, scoring and every manager fully live.
+    ///
+    /// A seam for `jetshotTests`, in the same spirit as `bossManager` and `currentScore`
+    /// above, and it earns its keep for a specific reason. Several gameplay suites assert
+    /// that the scene's enemy cache returns to empty once the enemies *they* placed are
+    /// destroyed, which is only a meaningful claim while nothing else is adding any. They
+    /// used to get that quiet window purely by accident: the level intro ran for three
+    /// seconds and the first authored wave took another 1.4 s on top of it, so a
+    /// two-second test was always over before the spawner woke up. Both of those numbers
+    /// are gameplay tuning — the intro is now 1.75 s and the first wave lands at 0.9 s —
+    /// and the moment they were tightened those tests began racing a wave they never
+    /// meant to include, failing on a cache that was working perfectly.
+    ///
+    /// `EnemyManager.stopSpawning()` is deliberately not the seam used for this: it works
+    /// by marking every wave as already spawned, which satisfies `areAllWavesSpawned()`
+    /// and hands the level straight to `spawnBoss()` two seconds later.
+    var isLevelProgressionSuspended: Bool = false
+
     // Level completion tracking
     private var noEnemiesTime: TimeInterval?
     private let levelCompletionDelay: TimeInterval = GameConfiguration.levelCompletionDelay
@@ -160,6 +195,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// would open a window for a nil dereference. Its HUD nodes hang off `uiNode` and are
     /// torn down with it.
     private lazy var weaponHeat = WeaponHeatSystem(scene: self)
+
+    /// Chain-kill scoring and the meter that reports it. See `ComboSystem` for the
+    /// mechanic; the collaborator arrangement and the `lazy` are the same trade
+    /// `weaponHeat` above makes, for the same reasons.
+    private lazy var combo = ComboSystem(scene: self)
 
     // PowerUp timers and states
     private var scoreMultiplier: Int = 1
@@ -438,6 +478,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             self.setGameplayPaused(true)
             self.showLevelIntro()
 
+            // After the intro card exists, so `-nointro` has something to fast-forward.
+            // Compiled out of Release along with the whole harness.
+            #if DEBUG
+            DebugLaunch.apply(to: self)
+            #endif
+
             // Start background music for current level
             SoundManager.shared.setMusicForLevel(self.currentLevel)
         }
@@ -680,6 +726,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func setupEnemyManager() {
+        if isEndless {
+            // Round one only. Every later round is appended by `updateEndlessRun` as the
+            // queue drains, which is what makes the mode endless.
+            endlessRound = 1
+            enemyManager = EnemyManager(scene: self, waves: EndlessDirector.waves(forRound: 1))
+            return
+        }
+
         guard let config = levelConfig else {
             assertionFailure("Cannot setup EnemyManager - levelConfig is nil")
             return
@@ -737,6 +791,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         livesNodes.forEach { $0.removeFromParent() }
         livesNodes.removeAll()
         weaponHeat.removeHUD()
+        combo.removeHUD()
 
         scoreHUD?.removeFromParent()
 
@@ -779,7 +834,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         hud.addChild(scoreLabel)
 
         let scoreCaption = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        scoreCaption.text = "SCORE"
+        scoreCaption.text = L10n.Common.score
         scoreCaption.fontSize = 9
         scoreCaption.fontColor = UITheme.Colors.primaryCyan.withAlphaComponent(0.65)
         scoreCaption.verticalAlignmentMode = .center
@@ -795,6 +850,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Setup heat bar
         weaponHeat.installHUD(on: uiNode, sceneWidth: size.width)
+
+        // Chain meter, under the pause button and clear of the power-up stack on the
+        // left. It stays hidden until the first tier unlocks, so it costs nothing
+        // visually until it is earned. See `ComboSystem.installHUD(on:at:)`.
+        combo.installHUD(
+            on: uiNode,
+            at: CGPoint(x: size.width - 62, y: size.height - topMargin - 58)
+        )
     }
 
     private func updateLivesDisplay(topMargin: CGFloat) {
@@ -876,6 +939,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return ship
     }
 
+    /// The card that opens a level: the level number, the score to beat, and — on level
+    /// one — nothing else, because the coaching has moved into the playfield.
+    ///
+    /// This used to be the slowest thing in the game. Level 1 held a full-screen scrim
+    /// for about 9.6 seconds before the player could touch anything: 0.4 s for the title
+    /// to appear, a 4.5 s hold, a wall of four stacked instruction labels, a blocking
+    /// "3 2 1 GO" countdown with its own voice clip, and finally a 0.8 s entry animation
+    /// — all of it in front of somebody who had just tapped PLAY for the first time and
+    /// had, so far, played nothing at all. Every later level paid 3.0 s of the same
+    /// ceremony on every single retry.
+    ///
+    /// It is now 2.25 s on level 1 and 1.75 s elsewhere, the countdown is gone, and
+    /// the level-1 instructions run over live gameplay in `showTutorialHints()`, where
+    /// they can actually be acted on while reading them.
     private func showLevelIntro() {
         // Position player below screen for entry animation
         let originalPlayerY = player.position.y
@@ -893,220 +970,120 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Level number label
         let levelLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        levelLabel.text = "LEVEL \(currentLevel)"
+        levelLabel.text = isEndless ? L10n.HUD.endless : L10n.HUD.level(currentLevel)
         levelLabel.fontSize = 44
         levelLabel.fontColor = .white
-        levelLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 60)
+        levelLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
         levelLabel.alpha = 0
+        UITheme.fitLabel(levelLabel, toWidth: size.width - 48, minimumFontSize: 26)
         levelLabel.setScale(0.5)
         introNode.addChild(levelLabel)
 
-        // For level 1, add tutorial instructions
-        if currentLevel == 1 {
-            let instructionLabel = SKLabelNode(fontNamed: "Arial")
-            instructionLabel.text = "Drag to move"
-            instructionLabel.fontSize = 22
-            instructionLabel.fontColor = UIColor(red: 0.8, green: 0.9, blue: 1.0, alpha: 1.0)
-            instructionLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 10)
-            instructionLabel.alpha = 0
-            introNode.addChild(instructionLabel)
+        // The score to beat, whenever there is one. A target on the card gives a replay a
+        // point beyond "clear it again", and it is the cheapest hook available: the
+        // number is already stored per level to draw the level-select grid. Endless reads
+        // its own record instead, which is the only goal that mode has.
+        let target: Int? = isEndless
+            ? { let best = LevelManager.shared.getEndlessRecords().bestScore; return best > 0 ? best : nil }()
+            : LevelManager.shared.getLevelScore(level: currentLevel)
 
-            let shootLabel = SKLabelNode(fontNamed: "Arial")
-            shootLabel.text = "Auto-fire enabled"
-            shootLabel.fontSize = 22
-            shootLabel.fontColor = UIColor(red: 0.8, green: 0.9, blue: 1.0, alpha: 1.0)
-            shootLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 40)
-            shootLabel.alpha = 0
-            introNode.addChild(shootLabel)
-
-            let objectiveLabel = SKLabelNode(fontNamed: "Arial")
-            objectiveLabel.text = "Collect stars and destroy enemies!"
-            objectiveLabel.fontSize = 20
-            objectiveLabel.fontColor = UIColor(red: 1.0, green: 0.8, blue: 0.3, alpha: 1.0)
-            objectiveLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 80)
-            objectiveLabel.alpha = 0
-            introNode.addChild(objectiveLabel)
-
-            let luckLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-            luckLabel.text = "Good luck pilot!"
-            luckLabel.fontSize = 26
-            luckLabel.fontColor = UIColor(red: 0.3, green: 1.0, blue: 0.5, alpha: 1.0)
-            luckLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 130)
-            luckLabel.alpha = 0
-            introNode.addChild(luckLabel)
-
-            // Animate instructions
-            let fadeIn = SKAction.fadeIn(withDuration: 0.5)
-            let wait = SKAction.wait(forDuration: 4) // Longer wait for level 1
-            let fadeOut = SKAction.fadeOut(withDuration: 0.4)
-            let sequence = SKAction.sequence([
-                SKAction.wait(forDuration: 0.6),
-                fadeIn,
-                wait,
-                fadeOut
-            ])
-
-            instructionLabel.run(sequence)
-            shootLabel.run(SKAction.sequence([SKAction.wait(forDuration: 0.7), fadeIn, wait, fadeOut]))
-            objectiveLabel.run(SKAction.sequence([SKAction.wait(forDuration: 0.8), fadeIn, wait, fadeOut]))
-            luckLabel.run(SKAction.sequence([SKAction.wait(forDuration: 0.9), fadeIn, wait, fadeOut]))
+        if let best = target, best > 0 {
+            let bestLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            bestLabel.text = L10n.Common.best(best)
+            bestLabel.fontSize = 20
+            bestLabel.fontColor = UITheme.Colors.primaryGoldLight
+            bestLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 26)
+            bestLabel.alpha = 0
+            introNode.addChild(bestLabel)
+            bestLabel.run(.sequence([
+                .wait(forDuration: 0.2),
+                .fadeIn(withDuration: 0.25)
+            ]))
         }
 
         addChild(introNode)
 
-        // Animation sequence for level label
-        let fadeIn = SKAction.fadeIn(withDuration: 0.4)
-        let scaleUp = SKAction.scale(to: 1.0, duration: 0.4)
-        let appear = SKAction.group([fadeIn, scaleUp])
+        // Level 1 holds fractionally longer than the rest: long enough to read the words
+        // "LEVEL 1", not long enough to be a wait.
+        // `currentLevel` is left at its default of 1 in endless, so the mode has to be
+        // excluded explicitly or an endless run would inherit level 1's longer hold.
+        let hold: TimeInterval = (currentLevel == 1 && !isEndless) ? 1.2 : 0.7
 
-        let wait = SKAction.wait(forDuration: currentLevel == 1 ? 4.5 : 1.5) // Longer for level 1
-
-        let fadeOut = SKAction.fadeOut(withDuration: 0.3)
-        let scaleDown = SKAction.scale(to: 1.2, duration: 0.3)
-        let disappear = SKAction.group([fadeOut, scaleDown])
-
-        let startGame = SKAction.run { [weak self] in
+        let appear = SKAction.group([
+            SKAction.fadeIn(withDuration: 0.3),
+            SKAction.scale(to: 1.0, duration: 0.3)
+        ])
+        let disappear = SKAction.group([
+            SKAction.fadeOut(withDuration: 0.25),
+            SKAction.scale(to: 1.2, duration: 0.25)
+        ])
+        let startEntry = SKAction.run { [weak self] in
             guard let self = self else { return }
-            if self.currentLevel == 1 {
-                // Show countdown for level 1
-                self.showCountdown(in: introNode, background: background, completion: { [weak self] in
-                    self?.startPlayerEntryAnimation(targetY: originalPlayerY)
-                })
-            } else {
-                // Start immediately for other levels
-                self.startPlayerEntryAnimation(targetY: originalPlayerY)
-            }
+            self.startPlayerEntryAnimation(targetY: originalPlayerY)
         }
 
-        let remove = SKAction.removeFromParent()
-
-        let sequence = SKAction.sequence([appear, wait, disappear, startGame, remove])
-        levelLabel.run(sequence)
-
-        // Fade out background
-        if currentLevel == 1 {
-            // Keep background for countdown
-            // It will be removed after countdown completes
-        } else {
-            let backgroundFade = SKAction.sequence([
-                SKAction.wait(forDuration: 2.2),
-                SKAction.fadeOut(withDuration: 0.3)
-            ])
-            background.run(backgroundFade)
+        // The card tears itself down at the end of *this* sequence, rather than on a
+        // second timeline of its own. Both would finish on the same frame, and
+        // `levelLabel` is a child of `introNode`: if SpriteKit happened to run the
+        // parent's removal first, the child's remaining actions — `startEntry` among
+        // them — would be dropped, `startGame()` would never be reached, and the level
+        // would sit on a paused playfield forever. One timeline cannot race itself.
+        let teardown = SKAction.run { [weak introNode] in
+            introNode?.removeFromParent()
         }
+
+        levelLabel.run(.sequence([
+            appear,
+            .wait(forDuration: hold),
+            disappear,
+            startEntry,
+            teardown
+        ]))
+
+        // The scrim lifts alongside the title rather than after it, so the playfield is
+        // already clear while the ship flies in — the entry animation reads as the start
+        // of the level instead of as one more thing to sit through. Fade only; the
+        // removal above is what actually takes it off the scene.
+        introNode.run(.sequence([
+            .wait(forDuration: 0.3 + hold),
+            .fadeOut(withDuration: 0.25)
+        ]))
     }
 
-    private func showCountdown(in parentNode: SKNode, background: SKSpriteNode, completion: @escaping () -> Void) {
-        let countdownLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        countdownLabel.fontSize = 80
-        countdownLabel.fontColor = .white
-        countdownLabel.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        countdownLabel.zPosition = 10
-        parentNode.addChild(countdownLabel)
+    /// Level-one coaching, delivered over live gameplay.
+    ///
+    /// Replaces the four-label wall that used to sit on the intro scrim behind a 4 s
+    /// hold. Nothing here blocks input: the player is already flying and already
+    /// shooting, and each line arrives at roughly the moment it becomes worth knowing —
+    /// the controls immediately, coins once the first ones are drifting past, the chain
+    /// once there have been enough kills for it to mean something.
+    private func showTutorialHints() {
+        let hints: [(text: String, delay: TimeInterval, color: UIColor)] = [
+            (L10n.Tutorial.move, 0.4, UITheme.Colors.primaryCyanLight),
+            (L10n.Tutorial.coins, 7.0, UITheme.Colors.primaryGoldLight),
+            (L10n.Tutorial.chain, 14.0, ComboSystem.tierColor(forMultiplier: 2))
+        ]
 
-        // Play countdown sound once at the beginning (contains "3 2 1" audio, ~3 seconds)
-        SoundManager.shared.playCountdownSound(on: self)
+        for hint in hints {
+            let label = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            label.text = hint.text
+            label.fontSize = 17
+            label.fontColor = hint.color
+            label.horizontalAlignmentMode = .center
+            label.verticalAlignmentMode = .center
+            label.position = CGPoint(x: size.width / 2, y: size.height * 0.28)
+            label.alpha = 0
+            label.zPosition = 500
+            effectsParent.addChild(label)
 
-        var countdownActions: [SKAction] = []
-
-        // Each number shows for ~1 second to match the audio
-        let numberDuration: TimeInterval = 1.0
-
-        // Show 3
-        let show3 = SKAction.run { [weak self] in
-            guard self != nil else { return }
-            countdownLabel.text = "3"
-            countdownLabel.alpha = 0
-            countdownLabel.setScale(0.5)
-            HapticManager.shared.mediumTap()
+            label.run(.sequence([
+                .wait(forDuration: hint.delay),
+                .fadeIn(withDuration: 0.3),
+                .wait(forDuration: 2.8),
+                .fadeOut(withDuration: 0.5),
+                .removeFromParent()
+            ]))
         }
-        let fadeIn3 = SKAction.fadeIn(withDuration: 0.15)
-        let scaleUp3 = SKAction.scale(to: 1.2, duration: 0.15)
-        let appear3 = SKAction.group([fadeIn3, scaleUp3])
-        let wait3 = SKAction.wait(forDuration: numberDuration - 0.25)
-        let fadeOut3 = SKAction.fadeOut(withDuration: 0.1)
-
-        // Show 2
-        let show2 = SKAction.run { [weak self] in
-            guard self != nil else { return }
-            countdownLabel.text = "2"
-            countdownLabel.alpha = 0
-            countdownLabel.setScale(0.5)
-            HapticManager.shared.mediumTap()
-        }
-        let fadeIn2 = SKAction.fadeIn(withDuration: 0.15)
-        let scaleUp2 = SKAction.scale(to: 1.2, duration: 0.15)
-        let appear2 = SKAction.group([fadeIn2, scaleUp2])
-        let wait2 = SKAction.wait(forDuration: numberDuration - 0.25)
-        let fadeOut2 = SKAction.fadeOut(withDuration: 0.1)
-
-        // Show 1
-        let show1 = SKAction.run { [weak self] in
-            guard self != nil else { return }
-            countdownLabel.text = "1"
-            countdownLabel.alpha = 0
-            countdownLabel.setScale(0.5)
-            HapticManager.shared.mediumTap()
-        }
-        let fadeIn1 = SKAction.fadeIn(withDuration: 0.15)
-        let scaleUp1 = SKAction.scale(to: 1.2, duration: 0.15)
-        let appear1 = SKAction.group([fadeIn1, scaleUp1])
-        let wait1 = SKAction.wait(forDuration: numberDuration - 0.25)
-        let fadeOut1 = SKAction.fadeOut(withDuration: 0.1)
-
-        // Show "GO!"
-        let showGo = SKAction.run { [weak self] in
-            guard self != nil else { return }
-            countdownLabel.text = "GO!"
-            countdownLabel.alpha = 0
-            countdownLabel.setScale(0.5)
-            HapticManager.shared.heavyTap()
-        }
-        let fadeInGo = SKAction.fadeIn(withDuration: 0.15)
-        let scaleUpGo = SKAction.scale(to: 1.3, duration: 0.15)
-        let appearGo = SKAction.group([fadeInGo, scaleUpGo])
-        let waitGo = SKAction.wait(forDuration: 0.4)
-        let fadeOutGo = SKAction.fadeOut(withDuration: 0.15)
-
-        // Build sequence: 3, 2, 1, GO!
-        countdownActions.append(show3)
-        countdownActions.append(appear3)
-        countdownActions.append(wait3)
-        countdownActions.append(fadeOut3)
-
-        countdownActions.append(show2)
-        countdownActions.append(appear2)
-        countdownActions.append(wait2)
-        countdownActions.append(fadeOut2)
-
-        countdownActions.append(show1)
-        countdownActions.append(appear1)
-        countdownActions.append(wait1)
-        countdownActions.append(fadeOut1)
-
-        countdownActions.append(showGo)
-        countdownActions.append(appearGo)
-        countdownActions.append(waitGo)
-        countdownActions.append(fadeOutGo)
-
-        // Fade out background
-        let fadeBackground = SKAction.run { [weak self] in
-            guard self != nil else { return }
-            let fade = SKAction.fadeOut(withDuration: 0.3)
-            background.run(fade)
-        }
-
-        // Complete
-        let complete = SKAction.run { [weak self] in
-            guard self != nil else { return }
-            parentNode.removeFromParent()
-            completion()
-        }
-
-        countdownActions.append(fadeBackground)
-        countdownActions.append(complete)
-
-        countdownLabel.run(SKAction.sequence(countdownActions))
     }
 
     private func startPlayerEntryAnimation(targetY: CGFloat) {
@@ -1114,7 +1091,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         SoundManager.shared.playPlayerSpawnSound(on: self)
 
         // Animate player entering from bottom
-        let moveUp = SKAction.moveTo(y: targetY, duration: 0.8)
+        let moveUp = SKAction.moveTo(y: targetY, duration: 0.5)
         moveUp.timingMode = .easeOut
 
         player.run(moveUp) { [weak self] in
@@ -1136,6 +1113,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Play level start sound
         SoundManager.shared.playLevelStartSound(on: self)
+
+        // Coaching runs over live gameplay now, so it starts with the level rather than
+        // in front of it. Not in endless: `currentLevel` is 1 there by default, and
+        // nobody arrives at a survival mode needing to be told what a coin is.
+        if currentLevel == 1 && !isEndless {
+            showTutorialHints()
+        }
     }
 
     private func setupPauseButton(topMargin: CGFloat) {
@@ -1249,7 +1233,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // "PAUSED" title - simple and clean
         let title = SKLabelNode(fontNamed: "Arial-BoldMT")
-        title.text = "PAUSED"
+        title.text = L10n.Pause.title
         title.fontSize = 36
         title.fontColor = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0)
         title.position = CGPoint(x: 0, y: panelHeight / 2 - 50)
@@ -1259,7 +1243,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Level info
         let levelInfo = SKLabelNode(fontNamed: "Arial")
-        levelInfo.text = "Level \(currentLevel)"
+        levelInfo.text = L10n.Pause.level(currentLevel)
         levelInfo.fontSize = 22
         levelInfo.fontColor = UIColor(red: 0.8, green: 0.9, blue: 1.0, alpha: 1.0)
         levelInfo.position = CGPoint(x: 0, y: panelHeight / 2 - 90)
@@ -1269,7 +1253,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Resume button
         let resumeButton = createPauseMenuButton(
-            text: "RESUME",
+            text: L10n.Pause.resume,
             color: UIColor(red: 0.3, green: 0.7, blue: 0.3, alpha: 1.0),
             width: 220,
             name: "resumeButton"
@@ -1279,7 +1263,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Retry button
         let retryButton = createPauseMenuButton(
-            text: "RETRY",
+            text: L10n.Common.retry,
             color: UIColor(red: 0.9, green: 0.5, blue: 0.2, alpha: 1.0),
             width: 220,
             name: "pauseRetryButton"
@@ -1290,7 +1274,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Settings, reachable mid-level: muting only from the main menu would mean
         // abandoning a run to turn the music down.
         let settingsButton = createPauseMenuButton(
-            text: "SETTINGS",
+            text: L10n.Pause.settings,
             color: UIColor(red: 0.35, green: 0.6, blue: 0.75, alpha: 1.0),
             width: 220,
             name: "pauseSettingsButton"
@@ -1302,7 +1286,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let secondaryButtonY: CGFloat = -144
 
         let levelsButton = createPauseMenuButton(
-            text: "LEVELS",
+            text: L10n.Common.levels,
             color: UIColor(red: 0.3, green: 0.5, blue: 0.9, alpha: 1.0),
             width: 105,
             name: "pauseLevelsButton"
@@ -1311,7 +1295,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         panel.addChild(levelsButton)
 
         let menuButton = createPauseMenuButton(
-            text: "MENU",
+            text: L10n.Common.menu,
             color: UIColor(red: 0.4, green: 0.4, blue: 0.5, alpha: 1.0),
             width: 105,
             name: "pauseMenuButton"
@@ -1349,6 +1333,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         label.verticalAlignmentMode = .center
         label.name = name // Set name on label too for easier touch detection
         label.zPosition = 2
+        UITheme.fitLabel(label, toWidth: width - 20)
         button.addChild(label)
 
         return button
@@ -1502,6 +1487,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // bullet and no side missiles, while retrying after dying kept them.
         gameScene.startingBulletCount = startingBulletCount
         gameScene.startingSideMissileCount = startingSideMissileCount
+        // Retrying an endless run has to stay an endless run; without this the pause
+        // menu's RETRY quietly dropped the player into level 1 of the campaign.
+        gameScene.isEndless = isEndless
 
         let transition = SKTransition.fade(withDuration: 0.5)
         view.presentScene(gameScene, transition: transition)
@@ -1789,10 +1777,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     // Wait for the boss defeat animation, on the gameplay clock so a
                     // pause actually holds it.
                     let wait = SKAction.wait(forDuration: 2.2)
-                    let startExit = SKAction.run { [weak self] in
-                        self?.startPlayerExitAnimation()
+                    let afterDefeat = SKAction.run { [weak self] in
+                        self?.handleBossDefeatAftermath()
                     }
-                    runOnGameplayClock(SKAction.sequence([wait, startExit]), withKey: "bossDefeatTransition")
+                    runOnGameplayClock(SKAction.sequence([wait, afterDefeat]), withKey: "bossDefeatTransition")
                     break
                 }
             }
@@ -1982,10 +1970,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             if enemy.enemyType == .mine {
                 // Add score
                 let points = enemy.enemyType.points
-                addScore(points)
+                let awarded = addScore(points)
 
                 // Show floating score
-                let scoreText = "+\(points * scoreMultiplier)"
+                let scoreText = "+\(awarded)"
                 showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0))
 
                 // Mine explodes prematurely when shot (armed or not)
@@ -2013,10 +2001,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
                 // Add score based on enemy type
                 let points = enemy.enemyType.points
-                addScore(points)
+                let awarded = addScore(points)
 
                 // Show floating score
-                let scoreText = "+\(points * scoreMultiplier)"
+                let scoreText = "+\(awarded)"
                 showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0))
 
                 // Play splitter split sound
@@ -2037,10 +2025,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
                 // Add score based on enemy type
                 let points = enemy.enemyType.points
-                addScore(points)
+                let awarded = addScore(points)
 
                 // Show floating score
-                let scoreText = "+\(points * scoreMultiplier)"
+                let scoreText = "+\(awarded)"
                 showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0))
 
                 // Mark enemy as destroyed to prevent completion callback
@@ -2073,15 +2061,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         if result.defeated {
             // Boss defeated - add points
-            addScore(result.points)
+            let awarded = addScore(result.points)
 
             // Show floating score.
             //
-            // Multiplied, like every other score popup: `addScore` awards
-            // `points * scoreMultiplier`, and this line used to print the raw points.
-            // Power-ups keep spawning during a boss fight, so with SCORE x2 up the
-            // kill that ended the level reported half of what it actually paid.
-            let scoreText = "+\(result.points * scoreMultiplier)"
+            // Printed from what `addScore` actually credited, not recomputed: this line
+            // used to print the raw points, so with SCORE x2 up the kill that ended the
+            // level reported half of what it paid. The chain multiplier would have made
+            // the same mistake eight times worse.
+            let scoreText = "+\(awarded)"
             showFloatingText(scoreText, at: boss.position, color: UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0), fontSize: 32)
 
             // Play boss defeat sound
@@ -2091,10 +2079,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // a pause actually holds it.
             // (8 explosions * 0.2s + final explosion fade 0.5s = 2.1s)
             let wait = SKAction.wait(forDuration: 2.2)
-            let startExit = SKAction.run { [weak self] in
-                self?.startPlayerExitAnimation()
+            let afterDefeat = SKAction.run { [weak self] in
+                self?.handleBossDefeatAftermath()
             }
-            runOnGameplayClock(SKAction.sequence([wait, startExit]), withKey: "bossDefeatToExit")
+            runOnGameplayClock(SKAction.sequence([wait, afterDefeat]), withKey: "bossDefeatToExit")
         } else {
             // Boss took damage but still alive
             createHitEffect(at: boss.position)
@@ -2231,6 +2219,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func handlePlayerDamage() {
         SoundManager.shared.playHitSound(on: self)
 
+        // Taking a hit costs the chain as well as the life or the power-up stack. That
+        // second cost is what makes a good run worth protecting on levels where lives
+        // are plentiful.
+        combo.breakChain()
+
         if player.hasAnyPowerUps() {
             // Player has powerups - degrade them but don't lose life
             player.degradePowerUps()
@@ -2281,10 +2274,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         HapticManager.shared.mediumTap()
 
         // Add score for destroying enemy with barrier
-        addScore(enemy.enemyType.points)
+        let awarded = addScore(enemy.enemyType.points)
 
         // Show floating score
-        let scoreText = "+\(enemy.enemyType.points * scoreMultiplier)"
+        let scoreText = "+\(awarded)"
         showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), fontSize: 16)
 
         // Mark enemy as destroyed and remove
@@ -2379,9 +2372,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 lives += 1
                 SoundManager.shared.playExtraLifeSound(on: self)
                 HapticManager.shared.heavyTap()
-                showFloatingText("+1 LIFE", at: powerUp.position, color: UIColor(red: 0.0, green: 1.0, blue: 0.3, alpha: 1.0), fontSize: 18)
+                showFloatingText(L10n.PowerUp.extraLife, at: powerUp.position, color: UIColor(red: 0.0, green: 1.0, blue: 0.3, alpha: 1.0), fontSize: 18)
             } else {
-                showMaxedOutFeedback("LIVES MAX", at: powerUp.position)
+                showMaxedOutFeedback(L10n.PowerUp.livesMax, at: powerUp.position)
             }
 
         case .multiShot:
@@ -2389,9 +2382,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 player.bulletCount += 1
                 SoundManager.shared.playMultiShotActivateSound(on: self)
                 HapticManager.shared.lightTap()
-                showFloatingText("MULTI SHOT", at: powerUp.position, color: UIColor(red: 0.2, green: 1.0, blue: 0.8, alpha: 1.0), fontSize: 18)
+                showFloatingText(L10n.PowerUp.multiShot, at: powerUp.position, color: UIColor(red: 0.2, green: 1.0, blue: 0.8, alpha: 1.0), fontSize: 18)
             } else {
-                showMaxedOutFeedback("GUNS MAX", at: powerUp.position)
+                showMaxedOutFeedback(L10n.PowerUp.gunsMax, at: powerUp.position)
             }
 
         case .sideMissiles:
@@ -2401,68 +2394,68 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 player.sideMissileCount += 1
                 SoundManager.shared.playMissileSound(on: self)
                 HapticManager.shared.lightTap()
-                showFloatingText("SIDE MISSILES", at: powerUp.position, color: UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0), fontSize: 18)
+                showFloatingText(L10n.PowerUp.sideMissiles, at: powerUp.position, color: UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0), fontSize: 18)
             } else {
-                showMaxedOutFeedback("MISSILES MAX", at: powerUp.position)
+                showMaxedOutFeedback(L10n.PowerUp.missilesMax, at: powerUp.position)
             }
 
         case .shield:
             activateShield()
             SoundManager.shared.playShieldActivateSound(on: self)
             HapticManager.shared.heavyTap()
-            showFloatingText("SHIELD", at: powerUp.position, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.shield, at: powerUp.position, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), fontSize: 18)
 
         case .lightning:
             activateLightningWeapon()
             SoundManager.shared.playLightningSound(on: self)
             HapticManager.shared.heavyTap()
-            showFloatingText("LIGHTNING", at: powerUp.position, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.lightning, at: powerUp.position, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), fontSize: 18)
 
         case .rapidFire:
             activateRapidFire()
             SoundManager.shared.playRapidFireActivateSound(on: self)
             HapticManager.shared.mediumTap()
-            showFloatingText("RAPID FIRE", at: powerUp.position, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.rapidFire, at: powerUp.position, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), fontSize: 18)
 
         case .magnet:
             activateMagnet()
             SoundManager.shared.playMagnetActivateSound(on: self)
             HapticManager.shared.mediumTap()
-            showFloatingText("MAGNET", at: powerUp.position, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.magnet, at: powerUp.position, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), fontSize: 18)
 
         case .slowMotion:
             activateSlowMotion()
             SoundManager.shared.playSlowMotionActivateSound(on: self)
             HapticManager.shared.heavyTap()
-            showFloatingText("SLOW MOTION", at: powerUp.position, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.slowMotion, at: powerUp.position, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), fontSize: 18)
 
         case .freezeBomb:
             activateFreezeBomb()
             HapticManager.shared.heavyTap()
-            showFloatingText("FREEZE BOMB", at: powerUp.position, color: UIColor(red: 0.3, green: 0.9, blue: 1.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.freezeBomb, at: powerUp.position, color: UIColor(red: 0.3, green: 0.9, blue: 1.0, alpha: 1.0), fontSize: 18)
 
         case .homingMissiles:
             launchHomingMissiles()
             SoundManager.shared.playMissileSound(on: self)
             HapticManager.shared.heavyTap()
-            showFloatingText("HOMING MISSILES", at: powerUp.position, color: UIColor(red: 1.0, green: 0.6, blue: 0.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.homingMissiles, at: powerUp.position, color: UIColor(red: 1.0, green: 0.6, blue: 0.0, alpha: 1.0), fontSize: 18)
 
         case .scoreMultiplier:
             activateScoreMultiplier()
             SoundManager.shared.playScoreMultiplierSound(on: self)
             HapticManager.shared.mediumTap()
-            showFloatingText("SCORE x2", at: powerUp.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.scoreDouble, at: powerUp.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), fontSize: 18)
 
         case .barrier:
             activateBarrier()
             SoundManager.shared.playBarrierActivateSound(on: self)
             HapticManager.shared.heavyTap()
-            showFloatingText("BARRIER", at: powerUp.position, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.barrier, at: powerUp.position, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), fontSize: 18)
 
         case .nuke:
             activateNuke()
             HapticManager.shared.heavyTap()
-            showFloatingText("NUKE", at: powerUp.position, color: UIColor(red: 1.0, green: 0.2, blue: 0.0, alpha: 1.0), fontSize: 18)
+            showFloatingText(L10n.PowerUp.nuke, at: powerUp.position, color: UIColor(red: 1.0, green: 0.2, blue: 0.0, alpha: 1.0), fontSize: 18)
         }
 
         // Create 3D vector burst effect
@@ -2491,10 +2484,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Add score for collecting coin
         let points = coin.pointValue
-        addScore(points)
+        let awarded = addScore(points, chainsCombo: false)
 
         // Show floating score
-        let scoreText = "+\(points * scoreMultiplier)"
+        let scoreText = "+\(awarded)"
         showFloatingText(scoreText, at: coin.position, color: UIColor(red: 1.0, green: 0.85, blue: 0.0, alpha: 1.0), fontSize: 16)
 
         // Track coin collection
@@ -2521,10 +2514,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Add score based on asteroid size
         let points = asteroid.asteroidSize.points
-        addScore(points)
+        let awarded = addScore(points)
 
         // Show floating score
-        let scoreText = "+\(points * scoreMultiplier)"
+        let scoreText = "+\(awarded)"
         showFloatingText(scoreText, at: asteroid.position, color: UIColor(red: 0.8, green: 0.7, blue: 0.6, alpha: 1.0))
 
         // Split asteroid if it has a next size
@@ -3017,8 +3010,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // No additional camera shake - createExplosion handles it
     }
 
-    func addScore(_ points: Int) {
-        score += points * scoreMultiplier
+    /// Awards `points` scaled by both multipliers, and reports what was actually
+    /// credited so callers can label their floating text with the real figure rather
+    /// than recomputing it — which is how the boss payout once came to print half of
+    /// what it paid.
+    ///
+    /// `chainsCombo` is false only for pickups. A coin is still *paid* at the current
+    /// chain rate, but collecting one must not *extend* the chain: coins drift in on
+    /// their own timer, so ticking the deadline from them would let a player park at the
+    /// bottom of the screen and hold a high multiplier without shooting anything.
+    @discardableResult
+    func addScore(_ points: Int, chainsCombo: Bool = true) -> Int {
+        // Before the award, so the kill that unlocks a tier is paid at the new rate.
+        // Paying it at the old one reads as the meter lying about itself: the number
+        // flips to x3 while a "+20" from that same explosion floats past it.
+        if chainsCombo {
+            combo.registerKill(currentTime: gameTime)
+        }
+
+        let awarded = points * scoreMultiplier * combo.multiplier
+        score += awarded
+        return awarded
     }
 
     private func showFloatingText(_ text: String, at position: CGPoint, color: UIColor = .white, fontSize: CGFloat = 20) {
@@ -3388,7 +3400,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Play game over sound
         SoundManager.shared.playGameOverSound(on: self)
 
-        let gameOverScene = GameOverScene(size: size, score: score, level: currentLevel)
+        // An endless run has no completion screen to persist it, so this is the only
+        // place its result is ever recorded.
+        var isEndlessRecord = false
+        if isEndless {
+            isEndlessRecord = LevelManager.shared.recordEndlessRun(score: score, round: endlessRound)
+        }
+
+        let gameOverScene = GameOverScene(
+            size: size,
+            score: score,
+            level: currentLevel,
+            isEndless: isEndless,
+            endlessRound: endlessRound,
+            isEndlessRecord: isEndlessRecord
+        )
         stopGameplayAndTransition(to: gameOverScene, transitionDuration: 1.0)
     }
 
@@ -3517,6 +3543,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Vortex gravitational pull on player bullets
         applyVortexGravitationalPull()
 
+        // Expire a lapsed kill chain. On the gameplay clock, so a pause never eats one.
+        combo.update(currentTime: gameTime)
+
+        // Fly the ship for the App Store preview recordings. Placed here, ahead of the
+        // firing block, because the bot steers through `isTouching` / `touchLocation`
+        // and this frame's shot has to see the lane it just moved into.
+        #if DEBUG
+        DebugLaunch.steer(self, deltaTime: deltaTime)
+        #endif
+
         // Update weapon cooling.
         //
         // `isFiring` has to mirror the firing condition below rather than just
@@ -3535,7 +3571,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         // Update enemy spawning (with slow motion modifier)
-        enemyManager.update(currentTime: gameTime)
+        if !isLevelProgressionSuspended {
+            enemyManager.update(currentTime: gameTime)
+        }
 
         // Update obstacle spawning
         obstacleManager.update(currentTime: gameTime)
@@ -3566,7 +3604,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         // Check level completion - simple approach
-        checkLevelCompletion(currentTime: gameTime)
+        if !isLevelProgressionSuspended {
+            if isEndless {
+                updateEndlessRun()
+            } else {
+                checkLevelCompletion(currentTime: gameTime)
+            }
+        }
     }
 
     /// Removes bullets that are off-screen to prevent memory buildup
@@ -3644,6 +3688,99 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    // MARK: - Endless Run
+
+    /// Advances an endless run: when the playfield is clear and the queue is drained, the
+    /// next round is either a boss or a fresh batch of waves.
+    ///
+    /// Deliberately gated on the screen being *empty* rather than on a timer, so a player
+    /// who clears fast is rewarded with the next round immediately and a player who is
+    /// struggling is never buried under two rounds at once.
+    private func updateEndlessRun() {
+        guard !isEndlessBossFight, !bossManager.isBossActive() else { return }
+        guard enemyManager.areAllWavesSpawned() else { return }
+
+        pruneEnemyCache()
+        guard activeEnemies.isEmpty else { return }
+
+        endlessRound += 1
+
+        if EndlessRules.isBossRound(endlessRound) {
+            spawnEndlessBoss()
+        } else {
+            beginEndlessRound()
+        }
+    }
+
+    /// Queues one round: enemies from the director, hazards from the campaign level the
+    /// run's depth corresponds to. Both have to be topped up, or the playfield would
+    /// quietly empty of everything except ships a few rounds in.
+    private func beginEndlessRound() {
+        enemyManager.appendWaves(
+            EndlessDirector.waves(forRound: endlessRound),
+            currentTime: gameTime
+        )
+
+        let hazards = LevelManager.shared.endlessHazardWaves(forRound: endlessRound)
+        obstacleManager.appendWaves(hazards.obstacles, currentTime: gameTime)
+        asteroidManager?.appendWaves(hazards.asteroids, currentTime: gameTime)
+
+        announceEndlessRound()
+    }
+
+    /// The round banner. Endless has no level-complete screen, so this is the only place
+    /// the run reports progress back to the player.
+    private func announceEndlessRound() {
+        let label = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        label.text = L10n.HUD.round(endlessRound)
+        label.fontSize = 26
+        label.fontColor = UITheme.Colors.primaryCyanLight
+        label.horizontalAlignmentMode = .center
+        label.verticalAlignmentMode = .center
+        label.position = CGPoint(x: size.width / 2, y: size.height * 0.62)
+        label.alpha = 0
+        label.zPosition = 500
+        effectsParent.addChild(label)
+
+        label.run(.sequence([
+            .group([.fadeIn(withDuration: 0.2), .scale(to: 1.15, duration: 0.2)]),
+            .scale(to: 1.0, duration: 0.15),
+            .wait(forDuration: 0.9),
+            .fadeOut(withDuration: 0.4),
+            .removeFromParent()
+        ]))
+    }
+
+    /// A boss round. Reuses the campaign's boss entirely — including the phase escalation
+    /// and the per-milestone attack signatures — touring up through the authored
+    /// milestones as the run gets deeper. See `EndlessRules.bossLevel(forRound:)`.
+    private func spawnEndlessBoss() {
+        isEndlessBossFight = true
+
+        obstacleManager.stopSpawning()
+        coinManager.setBossFight(true)
+        powerUpTimers.hideAll()
+
+        let bossLevel = EndlessRules.bossLevel(forRound: endlessRound)
+
+        showBossWarning { [weak self] in
+            guard let self = self else { return }
+            SoundManager.shared.playBossAppearSound(on: self)
+            self.bossManager.spawnBoss(level: bossLevel) {
+                // Boss entrance complete, attacks begin
+            }
+        }
+    }
+
+    /// Picks the run back up after an endless boss dies, instead of ending the level.
+    private func resumeEndlessRunAfterBoss() {
+        isEndlessBossFight = false
+        bossManager.cleanup()
+        coinManager.setBossFight(false)
+
+        beginEndlessRound()
+    }
+
     private func spawnBoss() {
         guard !bossSpawned else {
             #if DEBUG
@@ -3690,7 +3827,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // WARNING text
         let warningLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        warningLabel.text = "! WARNING !"
+        warningLabel.text = L10n.HUD.warning
         warningLabel.fontSize = 40
         warningLabel.fontColor = UIColor(red: 1.0, green: 0.2, blue: 0.0, alpha: 1.0)
         warningLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 40)
@@ -3699,7 +3836,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Danger approaching text
         let approachingLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        approachingLabel.text = "EXTREME DANGER"
+        approachingLabel.text = L10n.HUD.extremeDanger
         approachingLabel.fontSize = 28
         approachingLabel.fontColor = .white
         approachingLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 20)
@@ -3752,6 +3889,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ]))
     }
 
+    /// What a dead boss means, which differs by mode: the end of an authored level, or
+    /// just the end of one endless round.
+    ///
+    /// Both boss-defeat paths — a bullet kill and a lightning kill — route through here so
+    /// the two cannot drift apart, which they already had once over the defeat sound.
+    private func handleBossDefeatAftermath() {
+        if isEndless {
+            resumeEndlessRunAfterBoss()
+        } else {
+            startPlayerExitAnimation()
+        }
+    }
+
     private func startPlayerExitAnimation() {
         // Disable player controls during exit
         isGameStarted = false
@@ -3782,7 +3932,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             coinsCollected: coinsCollected,
             totalCoins: totalCoins,
             bulletCount: player.bulletCount,
-            sideMissileCount: player.sideMissileCount
+            sideMissileCount: player.sideMissileCount,
+            bestChain: combo.bestChain
         )
         stopGameplayAndTransition(to: levelCompleteScene, transitionDuration: 1.0)
     }
@@ -3962,3 +4113,182 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 }
+
+// MARK: - Debug Launch Seams
+
+#if DEBUG
+
+/// The playfield state `DebugLaunch` needs in order to pose a screenshot or fly a
+/// preview clip, gathered into one narrow surface.
+///
+/// An extension rather than a scattering of relaxed `private`s, and in this file
+/// rather than beside `DebugLaunch`, because Swift's `private` is file-scoped for
+/// extensions of the same type — so everything here reaches the real state while the
+/// class body keeps its access control exactly as it was for the shipping build.
+/// The whole extension compiles out of Release along with its only caller.
+extension GameScene {
+
+    var debugPlayer: Player { player }
+
+    var debugSafeAreaBottom: CGFloat { safeAreaBottom }
+
+    /// Drives the ship through the same pair a real drag sets, so auto-fire, weapon
+    /// heat and the chain all behave as they do for a player. See `DebugLaunch.steer`.
+    func debugDrag(to location: CGPoint) {
+        isTouching = true
+        touchLocation = location
+        player.moveToInstant(
+            x: location.x,
+            y: location.y,
+            sceneWidth: size.width,
+            sceneHeight: size.height,
+            safeAreaBottom: safeAreaBottom
+        )
+    }
+
+    func debugSetInvulnerable(_ invulnerable: Bool) {
+        isInvulnerable = invulnerable
+    }
+
+    /// Positions of every live `name` node sitting above `minY`.
+    ///
+    /// Returns points rather than taking a callback because `enumerateChildNodes` is
+    /// imported with an escaping closure, and an escaping seam here would be an odd
+    /// shape for what is only ever "where are the bullets right now".
+    func debugPositions(named name: String, above minY: CGFloat) -> [CGPoint] {
+        var found: [CGPoint] = []
+        gameContentNode.enumerateChildNodes(withName: name) { node, _ in
+            if node.position.y > minY { found.append(node.position) }
+        }
+        return found
+    }
+
+    /// Lets the level actually begin, and optionally fast-forwards the intro card.
+    ///
+    /// The unpause is not a shortcut, it is the fix for a deadlock this route would
+    /// otherwise hit every single time. `showLevelIntro()` ends by animating the player
+    /// up from below and calling `startGame()` from that action's completion — but the
+    /// player lives inside `gameContentNode`, which the intro has just paused, so the
+    /// action is frozen and the completion never fires. In the shipped app it runs
+    /// anyway: every route into `GameScene` presents it with an `SKTransition`,
+    /// SpriteKit pauses the incoming scene for the duration and unpausing the *scene*
+    /// afterwards clears `isPaused` on its descendants, `gameContentNode` included.
+    /// `DebugLaunch` presents the scene straight from `GameViewController` with no
+    /// transition, so nothing ever clears it. `GameplayHarness` in jetshotTests hits the
+    /// same wall for the same reason and resolves it the same way — see the comment at
+    /// the top of that file, which is where this one comes from.
+    ///
+    /// The fast-forward, when asked for, raises the card's own `speed` rather than
+    /// tearing it down: `showLevelIntro()` hangs the entry animation, the unpause and
+    /// the card's removal off one action sequence and the comment there explains why
+    /// they may not be split, so running that sequence at 25x skips nothing.
+    func debugReleaseIntro(fastForward: Bool) {
+        setGameplayPaused(false)
+        if fastForward {
+            childNode(withName: "levelIntro")?.speed = 25
+        }
+    }
+
+    /// Puts the chain meter at a given length by registering the kills that would have
+    /// built it. Going through `registerKill` rather than writing the counter is what
+    /// makes the meter, its colour, its decay bar and its multiplier agree.
+    func debugSeedChain(_ chain: Int) {
+        for _ in 0..<chain {
+            combo.registerKill(currentTime: gameTime)
+        }
+    }
+
+    func debugActivatePowerUp(_ type: PowerUpType) {
+        switch type {
+        case .shield: activateShield()
+        case .barrier: activateBarrier()
+        case .rapidFire: activateRapidFire()
+        case .magnet: activateMagnet()
+        case .lightning: activateLightningWeapon()
+        case .slowMotion: activateSlowMotion()
+        case .scoreMultiplier: activateScoreMultiplier()
+        default: break
+        }
+    }
+
+    /// Jumps an endless run to `round`.
+    ///
+    /// Queues the round the same way the run itself would, boss rounds included, so
+    /// `updateEndlessRun()` picks the sequence up at `round + 1` when the screen clears.
+    /// `stopSpawning()` first because `setupEnemyManager()` has already queued round one:
+    /// without it a run started at round 24 would spend its first half-minute working
+    /// through round one's two enemy types.
+    func debugSetEndlessRound(_ round: Int) {
+        endlessRound = round
+        debugWhen({ [weak self] in self?.isGameStarted == true }) { [weak self] in
+            guard let self = self else { return }
+            self.enemyManager.stopSpawning()
+            if EndlessRules.isBossRound(round) {
+                self.spawnEndlessBoss()
+            } else {
+                self.beginEndlessRound()
+            }
+        }
+    }
+
+    /// Re-shows the round banner, which is the only place an endless run says out loud
+    /// which round it is on — it is a banner, not a HUD element, so a screenshot taken
+    /// thirty seconds in would have no way to tell endless apart from a campaign level.
+    /// The number it prints is the run's real `endlessRound`.
+    func debugAnnounceEndlessRound() {
+        announceEndlessRound()
+    }
+
+    /// Skips to the boss and damages it down to `healthFraction` of its health.
+    ///
+    /// The two waits are why this is not four lines: `spawnBoss()` needs a started
+    /// level, and the boss only exists to be damaged once its warning and entrance have
+    /// played. Polling for both beats guessing at a delay, which would go stale the next
+    /// time either animation is retimed.
+    func debugForceBoss(healthFraction: CGFloat) {
+        debugWhen({ [weak self] in self?.isGameStarted == true }) { [weak self] in
+            guard let self = self else { return }
+
+            // A boss shot wants the boss, not the wave that happened to be on screen
+            // when the run was hijacked.
+            self.gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
+                node.removeFromParent()
+            }
+            self.pruneEnemyCache()
+            self.spawnBoss()
+
+            self.debugWhen({ [weak self] in self?.bossManager.isBossActive() == true }) {
+                [weak self] in
+                guard let self = self else { return }
+                let level = self.isEndless
+                    ? EndlessRules.bossLevel(forRound: self.endlessRound)
+                    : self.currentLevel
+                let maxHealth = BossConfig.config(for: level).maxHealth
+                let target = max(1, Int(CGFloat(maxHealth) * healthFraction))
+                for _ in 0..<(maxHealth - target) {
+                    guard self.bossManager.isBossActive() else { break }
+                    _ = self.bossManager.bossTakeDamage()
+                }
+            }
+        }
+    }
+
+    /// Runs `body` on the first tick at which `condition` holds, then stops polling.
+    /// One shared helper because both of `debugForceBoss`'s waits want it.
+    private func debugWhen(_ condition: @escaping () -> Bool, run body: @escaping () -> Void) {
+        var fired = false
+        let key = "debugWhen-\(UUID().uuidString)"
+        let poll = SKAction.repeatForever(.sequence([
+            .wait(forDuration: 0.1),
+            .run { [weak self] in
+                guard !fired, condition() else { return }
+                fired = true
+                self?.removeAction(forKey: key)
+                body()
+            }
+        ]))
+        run(poll, withKey: key)
+    }
+}
+
+#endif

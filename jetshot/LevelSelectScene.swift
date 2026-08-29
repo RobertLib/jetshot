@@ -117,7 +117,7 @@ class LevelSelectScene: SKScene {
 
     private func setupTitle(view: SKView) {
         let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = "SELECT LEVEL"
+        title.text = L10n.LevelSelect.title
         title.fontSize = UITheme.Typography.sizeLarge
         title.fontColor = UITheme.Colors.primaryGoldLight
         title.zPosition = 10
@@ -208,7 +208,7 @@ class LevelSelectScene: SKScene {
     }
 
     private func updatePageIndicator() {
-        pageIndicator.text = "Page \(currentPage + 1) / \(totalPages)"
+        pageIndicator.text = L10n.LevelSelect.page(currentPage + 1, of: totalPages)
     }
 
     private func loadPage(_ page: Int) {
@@ -404,7 +404,7 @@ class LevelSelectScene: SKScene {
 
         // Back button
         let backButton = UITheme.createButton(
-            text: "BACK",
+            text: L10n.Common.back,
             color: UIColor(red: 0.5, green: 0.5, blue: 0.6, alpha: 1.0),
             width: buttonWidth,
             name: "backButton"
@@ -419,7 +419,7 @@ class LevelSelectScene: SKScene {
 
         // Reset button
         let resetButton = UITheme.createButton(
-            text: "RESET",
+            text: L10n.LevelSelect.reset,
             color: UIColor(red: 0.3, green: 0.3, blue: 0.35, alpha: 0.5),
             width: buttonWidth,
             name: "resetButton"
@@ -721,7 +721,7 @@ class LevelSelectScene: SKScene {
 
         // Title
         let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = "RESET PROGRESS?"
+        title.text = L10n.LevelSelect.resetTitle
         title.fontSize = UITheme.Typography.sizeMedium
         title.fontColor = UITheme.Colors.dangerRed
         title.position = CGPoint(x: 0, y: dialogHeight / 2 - topBottomMargin - 14)
@@ -731,7 +731,7 @@ class LevelSelectScene: SKScene {
 
         // Message
         let message = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        message.text = "All level progress will be lost."
+        message.text = L10n.LevelSelect.resetMessage
         message.fontSize = UITheme.Typography.sizeSmall
         message.fontColor = UITheme.Colors.textPrimary
         message.position = CGPoint(x: 0, y: 25)
@@ -740,7 +740,7 @@ class LevelSelectScene: SKScene {
         dialog.addChild(message)
 
         let message2 = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        message2.text = "This action cannot be undone!"
+        message2.text = L10n.LevelSelect.resetWarning
         message2.fontSize = UITheme.Typography.sizeSmall
         message2.fontColor = UITheme.Colors.textSecondary
         message2.position = CGPoint(x: 0, y: 1)
@@ -753,7 +753,7 @@ class LevelSelectScene: SKScene {
         let buttonHeight: CGFloat = 40 // Shorter buttons for dialog
         let buttonYPosition = -dialogHeight / 2 + topBottomMargin + buttonHeight / 2 + 10
         let noButton = UITheme.createButton(
-            text: "NO",
+            text: L10n.Common.no,
             color: UIColor(red: 0.4, green: 0.8, blue: 0.4, alpha: 1.0),
             width: buttonWidth,
             name: "confirmNo",
@@ -764,7 +764,7 @@ class LevelSelectScene: SKScene {
 
         // Yes button (right side)
         let yesButton = UITheme.createButton(
-            text: "YES",
+            text: L10n.Common.yes,
             color: UIColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 1.0),
             width: buttonWidth,
             name: "confirmYes",

@@ -66,6 +66,17 @@ class StoryScene: SKScene {
         scrollContainer?.removeAllChildren()
     }
 
+    /// Re-inserts the blank lines that separate the crawl's paragraphs.
+    ///
+    /// The gaps are layout, not copy: `setupStory()` gives an empty label a flat 20pt of
+    /// vertical space, and that rhythm is what makes the crawl read as a sequence of
+    /// beats rather than one wall of text. Keeping the blanks out of the string catalog
+    /// means a translator cannot drop or double them, and the spacing comes out identical
+    /// in every language.
+    private static func spaced(_ paragraphs: [String]) -> [String] {
+        Array(paragraphs.map { [$0, ""] }.joined().dropLast())
+    }
+
     private func setupStory() {
         scrollContainer = SKNode()
         scrollContainer.position = CGPoint(x: size.width / 2, y: size.height)
@@ -76,60 +87,11 @@ class StoryScene: SKScene {
 
         switch storyType {
         case .opening:
-            title = "END OF AGES"
-            storyText = [
-                "We stand at the very end of time...",
-                "",
-                "The universe has reached its critical point. Stars are living their final moments, black holes have consumed most matter, and the very fabric of spacetime is beginning to collapse.",
-                "",
-                "Quantum mechanics, once strictly separated from the macroscopic world, now bleeds into reality. Dimensions overlap, time flows chaotically, and physical laws lose their meaning.",
-                "",
-                "You are the pilot of the experimental ship Singularity-7, civilization's last hope. Your mission is not to save this dying universe, that is no longer possible.",
-                "",
-                "Your mission is to escape.",
-                "",
-                "Gather enough quantum energy from collapsing regions of space, penetrate through dimensional rifts, and reach the epicenter of the collapse.",
-                "",
-                "There, in the very heart of the dying universe, you must activate protocol Big Bang Zero, ignite a new singularity, a new universe, a new beginning.",
-                "",
-                "The path will not be easy. Remnants of ancient civilizations, transformed into hostile quantum entities, guard the last fragments of energy. Cosmic anomalies will seek to consume you. Reality itself will resist.",
-                "",
-                "But there is no other way.",
-                "",
-                "Either you successfully penetrate into the new singularity...",
-                "",
-                "...or you perish along with this universe."
-            ]
+            title = L10n.Story.openingTitle
+            storyText = Self.spaced(L10n.Story.openingParagraphs)
         case .ending:
-            title = "NEW BEGINNING"
-            storyText = [
-                "You did it...",
-                "",
-                "You flew through collapsing dimensions, overcame quantum entities of ancient civilizations, survived the collapse of spacetime itself.",
-                "",
-                "At the epicenter of the dying universe, where time stopped and reality lost its meaning, you activated protocol Big Bang Zero.",
-                "",
-                "Your ship Singularity-7 became the catalyst for new creation. The quantum energy you gathered forms the seed of a new universe.",
-                "",
-                "Around you forms a new singularity, an infinitesimal point of infinite density, from which space, time, matter and energy will be born.",
-                "",
-                "You see the first flashes of new stars being born from the dust of the old universe. You feel new dimensions forming around you, new physical laws, new possibilities.",
-                "",
-                "Your mission was successful. The old universe died, but its legacy will survive in the new creation.",
-                "",
-                "Perhaps someday, billions of years in the future, when this new universe grows and matures, someone will ask:",
-                "",
-                "\"How did it all begin?\"",
-                "",
-                "And the answer will be hidden in the quantum foam of space, the story of a pilot who risked everything to give life a new chance.",
-                "",
-                "∞",
-                "",
-                "Thank you for playing!",
-                "",
-                "You saved not only the universe,",
-                "but existence itself."
-            ]
+            title = L10n.Story.endingTitle
+            storyText = Self.spaced(L10n.Story.endingParagraphs)
         }
 
         // Create title
@@ -205,7 +167,7 @@ class StoryScene: SKScene {
 
     private func setupSkipButton() {
         skipLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        skipLabel.text = "Tap anywhere to skip"
+        skipLabel.text = L10n.Story.skipHint
         skipLabel.fontSize = UITheme.Typography.sizeSmall
         skipLabel.fontColor = UITheme.Colors.textSecondary
         skipLabel.position = CGPoint(x: size.width / 2, y: safeAreaBottom + 40)

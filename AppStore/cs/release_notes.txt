@@ -1,0 +1,9 @@
+Nekonečná hra, násobič série a přepracovaných všech padesát soubojů s bossem.
+
+• NEKONEČNÁ HRA — běh, který nikde nekončí; odemkne se po dohrání první úrovně. Kola se zvětšují a utahují, každé třetí přibývá nový typ nepřítele a každé páté přilétá boss. Drží tvůj rekord i nejhlubší dosažené kolo.
+• Zásahy, které padnou rychle za sebou, teď staví sérii, která násobí skóre až x8. Jeden zásah do tebe a série je pryč, a okno se s její délkou zkracuje.
+• Bossové bojují ve třech dějstvích. Jak jim praská pancíř na dvou třetinách a jedné třetině životů, střílejí rychleji a sahají hlouběji do repertoáru — souboj se konečně dá číst z toho, jak vypadá.
+• Od osmé do padesáté úrovně měl každý boss vypsaných stejných čtrnáct útoků — pětatřicet z padesáti byl tentýž souboj s delším life barem. Každý má nově vlastní rukopis.
+• Úrovně mají tempo místo prázdna. Vlny přilétají zhruba o třetinu rychleji a druhá polovina úrovně přehrává tu první, jen utaženěji — pořád máš do čeho střílet.
+• Přehřátí zbraní už tě nepřipraví o rozehranou sérii: chladnutí se zkrátilo ze tří sekund na půldruhé a mezi dávkami zbraně chladnou o polovinu rychleji.
+• Čeština v celé hře i v příběhu.

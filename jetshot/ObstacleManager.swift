@@ -138,6 +138,25 @@ class ObstacleManager {
     // `scene` for "obstacle" nodes, but spawnObstacle parents them to
     // `gameScene.gameContentNode`, so the enumeration matched nothing.
 
+
+    /// Adds more waves to a manager that may already have drained its queue.
+    ///
+    /// For endless mode, which has no authored level to draw a fixed hazard track from —
+    /// `GameScene` tops this up a round at a time so the hazards keep escalating with the
+    /// run instead of running out. Same shape, and the same `waveStartTime` repair, as
+    /// `EnemyManager.appendWaves(_:currentTime:)`.
+    func appendWaves(_ newWaves: [ObstacleWave], currentTime: TimeInterval) {
+        guard !newWaves.isEmpty else { return }
+
+        let hadFinished = currentWaveIndex >= waves.count
+        waves.append(contentsOf: newWaves)
+
+        if hadFinished {
+            waveStartTime = currentTime
+            lastSpawnTime = currentTime
+        }
+    }
+
     func stopSpawning() {
         currentWaveIndex = waves.count // Mark all waves as spawned
     }

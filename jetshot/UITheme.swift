@@ -194,9 +194,41 @@ struct UITheme {
         label.verticalAlignmentMode = .center
         label.position = .zero
         label.zPosition = 2
+        fitLabel(label, toWidth: width - 20)
         button.addChild(label)
 
         return button
+    }
+
+    /// Shrinks a label's point size until its text fits `maxWidth`.
+    ///
+    /// Every button in the game is laid out at a width chosen against English copy, and
+    /// translations do not respect that width — Czech "NASTAVENÍ" is a third longer than
+    /// "SETTINGS", "NEKONEČNÁ HRA" more than half again "ENDLESS" — while an `SKLabelNode`
+    /// on one line has nothing to reflow and simply draws past its button's stroke.
+    /// Widening every button to the longest language would cost the English layout for
+    /// nothing, so the label gives up point size instead, down to a floor where it still
+    /// reads as the same UI as its neighbours.
+    ///
+    /// A no-op whenever the text already fits, which is the English case throughout.
+    static func fitLabel(_ label: SKLabelNode, toWidth maxWidth: CGFloat, minimumFontSize: CGFloat = 11) {
+        guard maxWidth > 0 else { return }
+
+        // Text width scales linearly with point size, so one division lands on the right
+        // answer; the loop only exists to absorb the rounding that kerning and hinting
+        // add back. It is bounded because the `minimumFontSize` clamp can otherwise leave
+        // an over-long label reporting the same excess width forever.
+        var size = label.fontSize
+        for _ in 0..<4 {
+            let width = label.frame.width
+            guard width > maxWidth, width > 0 else { return }
+
+            let fitted = max(minimumFontSize, size * maxWidth / width)
+            guard fitted < size else { return }
+
+            size = fitted
+            label.fontSize = size
+        }
     }
 
     /// Creates a standard panel with consistent styling

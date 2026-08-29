@@ -36,7 +36,10 @@ final class GameplayInputTests: XCTestCase {
     @MainActor
     func testEnemiesArriveOnceTheLevelIsRunning() {
         let harness = GameplayHarness()
-        harness.startPlayingWithControl()
+        // The one test in the suite that wants the level to run itself, so the only one
+        // that opts out of the harness's default suspension. See
+        // `GameScene.isLevelProgressionSuspended`.
+        harness.startPlayingWithControl(suspendLevelProgression: false)
         defer { harness.teardown() }
 
         // Waves are scheduled on gameContentNode's clock; nothing should spawn until the
@@ -268,8 +271,8 @@ final class GameplayInputTests: XCTestCase {
         harness.startPlayingWithControl()
         defer { harness.teardown() }
 
-        // Rapid fire reaches the limit in about a quarter of the time: heatPerShot 0.04
-        // means 25 shots, which is ~2.5 s at the rapid interval instead of ~7.5 s.
+        // Rapid fire reaches the limit in about a quarter of the time it otherwise
+        // would, which is what keeps this test short.
         harness.player.hasRapidFire = true
         harness.holdFire(for: 0.5)
         XCTAssertGreaterThan(
@@ -277,14 +280,10 @@ final class GameplayInputTests: XCTestCase {
             "the guns never fired at all, so a silent gauge later would prove nothing"
         )
 
-        harness.spin(3.5)
-
-        // Still holding the trigger. If overheat works, nothing new comes out.
-        harness.clearBullets()
-        harness.spin(1.0)
-
-        XCTAssertEqual(
-            harness.bulletsInFlight, 0,
+        // Still holding the trigger throughout. If overheat works, the fire stops on its
+        // own; if it does not, the poll runs out its timeout and this fails.
+        XCTAssertTrue(
+            harness.holdUntilGunsFallSilent(),
             "the guns never overheated — the gauge and its OVERHEATED state are dead weight"
         )
     }
@@ -296,10 +295,10 @@ final class GameplayInputTests: XCTestCase {
         defer { harness.teardown() }
 
         harness.player.hasRapidFire = true
-        harness.holdFire(for: 4.0)
-        harness.clearBullets()
-        harness.spin(0.8)
-        XCTAssertEqual(harness.bulletsInFlight, 0, "the guns did not overheat, so there is nothing to recover from")
+        XCTAssertTrue(
+            harness.holdUntilGunsFallSilent(),
+            "the guns did not overheat, so there is nothing to recover from"
+        )
 
         // Let go and wait out the cooldown, then fire again.
         harness.touchUp(at: harness.player.position)

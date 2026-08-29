@@ -115,7 +115,7 @@ final class WeaponHeatSystem {
         let label = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
         label.fontSize = 11
         label.fontColor = UIColor(white: 0.8, alpha: 0.9)
-        label.text = "HEAT"
+        label.text = L10n.HUD.heat
         label.position = CGPoint(x: sceneWidth / 2, y: bottomMargin + 14)
         label.zPosition = 100
         label.alpha = 0.0 // Hidden initially
@@ -257,7 +257,7 @@ final class WeaponHeatSystem {
             let flash = SKAction.sequence([
                 SKAction.run {
                     background.fillColor = UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 0.9)
-                    label.text = "OVERHEATED!"
+                    label.text = L10n.HUD.overheated
                     label.fontColor = UIColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
                 },
                 SKAction.wait(forDuration: 0.3),
@@ -269,7 +269,7 @@ final class WeaponHeatSystem {
 
             let flashSequence = SKAction.repeat(flash, count: 3)
             let reset = SKAction.run {
-                label.text = "HEAT"
+                label.text = L10n.HUD.heat
                 label.fontColor = UIColor(white: 0.8, alpha: 0.9)
             }
 

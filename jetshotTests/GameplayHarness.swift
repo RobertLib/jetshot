@@ -99,17 +99,32 @@ final class GameplayHarness {
 
     /// Presents `GameScene` and runs it far enough that the deferred setup in
     /// `didMove(to:)` has built the player and every manager, then hands control over.
+    ///
+    /// The level's own wave spawner is suspended by default. Unpausing `gameContentNode`
+    /// lets the intro's entry animation finish, and that animation's completion is
+    /// `startGame()` — so a few seconds in, every scene built here quietly starts
+    /// spawning its authored waves. Tests that place their own enemies and then assert on
+    /// the scene's cache were only ever passing because the intro plus the first wave
+    /// delay outlasted them; that is gameplay tuning, not a guarantee, and tightening it
+    /// broke them. Pass `suspendLevelProgression: false` for a test that genuinely wants
+    /// the level to run itself. See `GameScene.isLevelProgressionSuspended`.
     @discardableResult
     func startPlaying(
         level: Int = 2,
         bulletCount: Int = 1,
-        sideMissileCount: Int = 0
+        sideMissileCount: Int = 0,
+        suspendLevelProgression: Bool = true,
+        endless: Bool = false
     ) -> GameScene {
         let scene = GameScene(size: view.bounds.size)
         scene.scaleMode = .resizeFill
         scene.currentLevel = level
         scene.startingBulletCount = bulletCount
         scene.startingSideMissileCount = sideMissileCount
+        scene.isLevelProgressionSuspended = suspendLevelProgression
+        // Before presenting: `didMove(to:)` reads this to decide where the enemy manager
+        // gets its waves from, so setting it afterwards would build a campaign level.
+        scene.isEndless = endless
 
         // Deliberately no transition: with one the scene never finishes transitioning
         // in this environment and stays paused forever (see the type comment).
@@ -131,23 +146,27 @@ final class GameplayHarness {
     /// the ship flies in from below and the completion of that animation calls
     /// `startGame()`. Once it returns, `isGameStarted` is true and input works.
     ///
-    /// Level 2 by default, not 1 — level 1 adds the "3 2 1" countdown, which puts about
-    /// seven more seconds on every test that uses it.
+    /// Level 2 by default, not 1. Level 1 is the only level that shows tutorial hints and
+    /// holds its title card slightly longer, and none of these tests are about either.
     @discardableResult
     func startPlayingWithControl(
         level: Int = 2,
         bulletCount: Int = 1,
         sideMissileCount: Int = 0,
-        timeout: TimeInterval = 8.0
+        timeout: TimeInterval = 8.0,
+        suspendLevelProgression: Bool = true
     ) -> GameScene {
         let scene = startPlaying(
-            level: level, bulletCount: bulletCount, sideMissileCount: sideMissileCount
+            level: level,
+            bulletCount: bulletCount,
+            sideMissileCount: sideMissileCount,
+            suspendLevelProgression: suspendLevelProgression
         )
 
         // The intro parks the ship at y = -50 and animates it up to its resting spot;
         // `startGame()` is that animation's *completion*, so control only arrives once the
         // ship has come to rest. Waiting for `y > 0` alone is not enough — it goes
-        // positive part-way through the 0.8 s glide, and breaking there leaves
+        // positive part-way through the 0.5 s glide, and breaking there leaves
         // `isGameStarted` false and every touch ignored.
         //
         // Resting is detected by the y position repeating exactly: while the action runs
@@ -300,6 +319,21 @@ final class GameplayHarness {
         return gameContent.children.filter { $0.name == "bullet" }.count
     }
 
+    /// Wipes every enemy off the playfield and out of the scene's cache.
+    ///
+    /// Stands in for the player actually shooting a round down, which is the condition an
+    /// endless run advances on. Doing it by hand keeps such a test to a couple of seconds
+    /// instead of the fifteen it would take to wait a round out.
+    func clearEnemies() {
+        for node in gameContent.children where node.name == "enemy" {
+            if let enemy = node as? Enemy {
+                enemy.markAsDestroyed()
+                scene.unregisterEnemy(enemy)
+            }
+            node.removeFromParent()
+        }
+    }
+
     /// Clears the sky so the next count starts from a known zero.
     func clearBullets() {
         for bullet in gameContent.children where bullet.name == "bullet" {
@@ -353,6 +387,33 @@ final class GameplayHarness {
         let target = CGPoint(x: player.position.x + offsetX, y: player.position.y)
         touchDown(at: target)
         spin(seconds)
+    }
+
+    /// Holds the trigger down until the guns actually fall silent, and reports whether
+    /// they did. The touch is left pressed, so a caller can go straight on to observing
+    /// the lockout.
+    ///
+    /// Polling for the silence rather than sleeping a computed number of seconds is
+    /// deliberate. The obvious version — work out that 25 shots at the rapid-fire
+    /// interval is 2.5 s, hold for a bit longer than that, then look — bakes three
+    /// separate tuning constants and the simulator's frame rate into one hardcoded
+    /// literal, and it fails in both directions: retune `heatPerShot` and the wait is too
+    /// short to overheat at all, shorten `overheatCooldownTime` and the wait overshoots
+    /// the whole lockout and finds the guns already back. Both have now happened. A poll
+    /// asks the question the test actually cares about — "have the guns stopped?" — and
+    /// is indifferent to every one of those numbers.
+    func holdUntilGunsFallSilent(timeout: TimeInterval = 10.0) -> Bool {
+        touchDown(at: CGPoint(x: player.position.x, y: player.position.y))
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            clearBullets()
+            spin(0.25)
+            if bulletsInFlight == 0 {
+                return true
+            }
+        }
+        return false
     }
 
     /// Presenting another scene runs `willMove(from:)`, which is where GameScene tears

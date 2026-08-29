@@ -30,3 +30,14 @@ Carthage/Build/
 fastlane/report.xml
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# App Store media. Only the texts in AppStore/ and the scripts in Tools/ are
+# versioned — the images and videos are output, not source, a PNG will not
+# compress any further in git and they would stay in the history for good.
+# They are produced by:
+#   Tools/appstore_media.sh      → screenshots/ + preview/, ~25 min
+#   Tools/appstore_captions.sh   → screenshots-captioned/, ~2 min
+# Details in AppStore/screenshots.md.
+AppStore/screenshots/
+AppStore/screenshots-captioned/
+AppStore/preview/

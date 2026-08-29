@@ -59,11 +59,25 @@ nonisolated struct GameConfiguration {
     /// so holding the trigger down is a real trade-off and tapping stays unpunished.
     static let heatPerShot: CGFloat = 0.04
 
-    /// Heat removed per second when not firing
-    static let cooldownRate: CGFloat = 0.30
+    /// Heat removed per second when not firing.
+    ///
+    /// Raised from 0.30 alongside the level pacing pass. Waves now arrive roughly a
+    /// third faster, so the natural gaps in which a player was assumed to be cooling off
+    /// — the lulls between waves — are largely gone, and the gauge was filling on a
+    /// duty cycle it was never tuned against.
+    static let cooldownRate: CGFloat = 0.45
 
-    /// Cooldown time when overheated (in seconds)
-    static let overheatCooldownTime: TimeInterval = 3.0
+    /// Cooldown time when overheated (in seconds).
+    ///
+    /// Has to stay below `ComboRules.minWindow`, and that is the binding constraint
+    /// rather than a coincidence. A kill chain lapses after 1.8 s without a kill at its
+    /// tightest, so at the previous 3.0 s an overheat did not merely interrupt the
+    /// player's fire — it guaranteed the loss of whatever chain they were holding, every
+    /// time, no matter how well they were flying. That turns the gauge from a trade-off
+    /// into a scheduled punishment, and it punishes precisely the players who are
+    /// engaging with the scoring system hardest. At 1.5 s a good run can be flown through
+    /// an overheat, and a careless one still cannot.
+    static let overheatCooldownTime: TimeInterval = 1.5
 
     /// Maximum heat level (1.0 = overheated)
     static let maxHeat: CGFloat = 1.0
@@ -167,6 +181,38 @@ nonisolated struct GameConfiguration {
 
     /// Total number of levels in the game
     static let totalLevels: Int = 50
+
+    // MARK: - Level Pacing
+    //
+    // The authored waves in `LevelManager.getWavesForLevel(_:)` were written with very
+    // long gaps — most early waves spawn one enemy every 1.2–1.5 s and open with a 2 s
+    // lead-in. A basic enemy takes 3–5 s to cross the screen, so that cadence put barely
+    // two enemies in front of the player at a time and left a two-second hole between
+    // every wave. The level was not hard, it was empty: long stretches of holding a
+    // finger still with nothing to shoot.
+    //
+    // Rather than rewrite fifty levels of hand-authored content, the pacing pass in
+    // `getLevelConfig(for:)` scales what is already there. The multipliers live here
+    // because they are the single knob that sets how busy the whole game feels.
+
+    /// Multiplier applied to every authored `spawnInterval`.
+    ///
+    /// 0.65 takes a 1.4 s cadence to 0.91 s, which puts roughly four enemies on screen
+    /// at once instead of two — busy enough that there is always a target, and well
+    /// short of a bullet-hell wall given the player has auto-fire and free movement.
+    static let waveIntervalScale: TimeInterval = 0.65
+
+    /// Extra tightening applied to the second half of a level. See `reprisedWaves`.
+    static let waveRepriseIntervalScale: TimeInterval = 0.8
+
+    /// Floor on the gap between two spawns, so the scaling can never turn a
+    /// deliberately tight late-game wave into an unreadable clump.
+    static let minSpawnInterval: TimeInterval = 0.35
+
+    /// Multiplier and floor for the lead-in before each wave. The authored 2.0 s
+    /// becomes 0.9 s: enough to read as a new wave arriving, not enough to be a lull.
+    static let waveDelayScale: TimeInterval = 0.45
+    static let minWaveDelay: TimeInterval = 0.5
 
     // MARK: - UI Configuration
 
