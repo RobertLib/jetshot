@@ -38,8 +38,8 @@ cs_caption() {
     case "$1" in
         01) echo "Padesát úrovní."$'\n'"Zbraně střílejí samy." ;;
         02) echo "Každá úroveň"$'\n'"končí bossem" ;;
-        03) echo "Řetěz zásahů,"$'\n'"skóre až osmkrát" ;;
-        04) echo "Třináct vylepšení,"$'\n'"osm hlavní" ;;
+        03) echo "Série zásahů,"$'\n'"skóre až osmkrát" ;;
+        04) echo "Třináct vylepšení,"$'\n'"osm zbraní" ;;
         05) echo "Padesát úrovní,"$'\n'"tři hvězdy za každou" ;;
         06) echo "Nekonečná hra:"$'\n'"jak daleko doletíš?" ;;
         07) echo "27 nepřátel,"$'\n'"12 překážek" ;;
@@ -56,7 +56,7 @@ en_caption() {
         05) echo "Fifty levels,"$'\n'"three stars each" ;;
         06) echo "Endless:"$'\n'"how far can you get?" ;;
         07) echo "27 enemies,"$'\n'"12 obstacles" ;;
-        08) echo "No ads."$'\n'"No purchases. No account." ;;
+        08) echo "No ads. No purchases."$'\n'"No account." ;;
     esac
 }
 

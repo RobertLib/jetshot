@@ -6,12 +6,19 @@
 import XCTest
 @testable import jetshot
 
-/// The four keys that hold everything persisted about a player's progress.
+/// The keys that hold everything persisted about a player's progress.
+///
+/// Must stay in step with what `LevelManager.resetProgress()` clears, which is what the
+/// snapshot below is undoing. `endlessRecords` was missing here while `resetProgress()`
+/// cleared it, so every test that used `withCleanProgress` wiped five keys and put four
+/// back — permanently destroying whatever endless record the developer had set in the
+/// simulator. Exactly the failure this helper exists to prevent.
 private let progressKeys = [
     CloudStorageManager.Keys.completedLevels,
     CloudStorageManager.Keys.levelScores,
     CloudStorageManager.Keys.levelStars,
-    CloudStorageManager.Keys.levelWeapons
+    CloudStorageManager.Keys.levelWeapons,
+    CloudStorageManager.Keys.endlessRecords
 ]
 
 /// Runs `body` against a wiped progress store, then puts back whatever was there before.

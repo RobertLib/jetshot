@@ -9,6 +9,13 @@ import SpriteKit
 
 class GameOverScene: SKScene {
 
+    /// Shared vertical rhythm for the results panels. See `UITheme.PanelRhythm`.
+    private typealias Rhythm = UITheme.PanelRhythm
+
+    /// How far the figure block rises during its entrance. It starts this far below
+    /// its laid-out position and ends exactly on it.
+    private static let figuresRise: CGFloat = 10
+
     private let finalScore: Int
     private let currentLevel: Int
     private let isEndless: Bool
@@ -81,8 +88,34 @@ class GameOverScene: SKScene {
 
         // Main panel background with rounded corners and glow
         let panelWidth: CGFloat = min(size.width - 60, UITheme.Dimensions.panelWidthMax)
-        // Taller in endless, which adds a round line and a record line under the score.
-        let panelHeight = isEndless ? 460.0 : 420.0
+
+        // Content is built and measured *before* the panel, because the panel is sized
+        // to hold it. The fixed 420/460 heights this replaces were tuned by eye and left
+        // ~40pt of dead space above the icon and ~35pt below the buttons, while the
+        // figures underneath the score sat on a tighter pitch than anything around them.
+        // See `UITheme.PanelStack`.
+        let defeatIcon = createDefeatIcon()
+        defeatIcon.setScale(0.8) // Make it smaller
+        let iconHeight = defeatIcon.calculateAccumulatedFrame().height
+
+        let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        title.text = L10n.GameOver.title
+        title.fontSize = UITheme.Typography.sizeMedium
+        title.fontColor = UITheme.Colors.dangerRed
+        title.horizontalAlignmentMode = .center
+        let titleHeight = UITheme.capBandHeight(of: title)
+
+        let figures = createScoreDisplay()
+        let buttonHeight = UITheme.Dimensions.buttonHeight
+
+        var stack = UITheme.PanelStack()
+        stack.add(gapAbove: Rhythm.edge, height: iconHeight)
+        stack.add(gapAbove: Rhythm.emblemToTitle, height: titleHeight)
+        stack.add(gapAbove: Rhythm.aroundFigures, height: figures.height)
+        stack.add(gapAbove: Rhythm.aroundFigures, height: buttonHeight)
+        stack.add(gapAbove: Rhythm.buttonRow, height: buttonHeight)
+
+        let panelHeight = stack.height
         let panel = UITheme.createPanel(
             width: panelWidth,
             height: panelHeight,
@@ -120,13 +153,14 @@ class GameOverScene: SKScene {
         ]))
         panel.setScale(0.8)
 
-        // Better spacing for proper layout
-        let spacing = UITheme.Dimensions.spacingLarge
+        // Placement pass, walking the same rows back down from the panel's top edge.
+        stack.start(panelHeight: panelHeight)
 
-        // X mark icon (defeat symbol) - smaller and better positioned
-        let defeatIcon = createDefeatIcon()
-        defeatIcon.position = CGPoint(x: 0, y: panelHeight / 2 - 65)
-        defeatIcon.setScale(0.8) // Make it smaller
+        // X mark icon (defeat symbol)
+        defeatIcon.position = CGPoint(
+            x: 0,
+            y: stack.next(gapAbove: Rhythm.edge, height: iconHeight)
+        )
         defeatIcon.alpha = 0
         panel.addChild(defeatIcon)
 
@@ -147,12 +181,11 @@ class GameOverScene: SKScene {
             ])
         ]))
 
-        // "LEVEL FAILED" title - more space from icon
-        let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = L10n.GameOver.title
-        title.fontSize = UITheme.Typography.sizeMedium
-        title.fontColor = UITheme.Colors.dangerRed
-        title.position = CGPoint(x: 0, y: defeatIcon.position.y - spacing - 10)
+        // "LEVEL FAILED" title
+        UITheme.centerOnCapBand(
+            title,
+            centerY: stack.next(gapAbove: Rhythm.emblemToTitle, height: titleHeight)
+        )
         title.alpha = 0
         panel.addChild(title)
 
@@ -169,62 +202,74 @@ class GameOverScene: SKScene {
         ]))
 
         // Score display
-        let scoreContainer = createScoreDisplay()
-        scoreContainer.position = CGPoint(x: 0, y: title.position.y - 75)
+        let scoreContainer = figures.node
+        scoreContainer.position = CGPoint(
+            x: 0,
+            y: stack.next(gapAbove: Rhythm.aroundFigures, height: figures.height)
+        )
+        // The entrance rises *into* the slot rather than out of it. `moveBy` is
+        // relative and permanent, so running it from the laid-out position left the
+        // block sitting 10pt above where the stack put it for the rest of the scene's
+        // life — which is what tipped the figures off centre between the title and the
+        // button. Starting the same 10pt low makes the animation land on the layout.
+        scoreContainer.position.y -= Self.figuresRise
         scoreContainer.alpha = 0
         panel.addChild(scoreContainer)
         scoreContainer.run(SKAction.sequence([
             SKAction.wait(forDuration: 0.7),
             SKAction.group([
                 SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.moveBy(x: 0, y: 10, duration: UITheme.Animations.durationNormal)
+                SKAction.moveBy(x: 0, y: Self.figuresRise, duration: UITheme.Animations.durationNormal)
             ])
         ]))
 
-        // Buttons with better spacing and animation
-        setupButtons(on: panel, panelHeight: panelHeight)
+        // Buttons
+        setupButtons(
+            on: panel,
+            retryY: stack.next(gapAbove: Rhythm.aroundFigures, height: buttonHeight),
+            secondaryY: stack.next(gapAbove: Rhythm.buttonRow, height: buttonHeight)
+        )
     }
 
-    private func createScoreDisplay() -> SKNode {
+    /// The figures under the title, spaced by `UITheme.PanelRhythm` and centred on the
+    /// returned node's origin, with the optical height the outer stack needs.
+    private func createScoreDisplay() -> (node: SKNode, height: CGFloat) {
         let container = SKNode()
 
         // Score label "SCORE" with icon
         let scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
         scoreLabel.horizontalAlignmentMode = .center
-        scoreLabel.verticalAlignmentMode = .center
         scoreLabel.text = L10n.Common.score
         scoreLabel.fontSize = UITheme.Typography.sizeRegular
         scoreLabel.fontColor = UITheme.Colors.textSecondary
-        scoreLabel.position = CGPoint(x: 0, y: 19)
-        container.addChild(scoreLabel)
 
         // Score value
         let scoreValue = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
         scoreValue.horizontalAlignmentMode = .center
-        scoreValue.verticalAlignmentMode = .center
         scoreValue.text = "\(finalScore)"
         scoreValue.fontSize = UITheme.Typography.sizeLarge
         scoreValue.fontColor = UITheme.Colors.primaryGold
-        scoreValue.position = CGPoint(x: 0, y: -18)
-        container.addChild(scoreValue)
+
+        // The caption rides tight against the number it labels; anything further down
+        // is a separate figure and gets the wider gap.
+        var rows: [(label: SKLabelNode, gapAbove: CGFloat)] = [
+            (scoreLabel, 0),
+            (scoreValue, Rhythm.captionToValue)
+        ]
 
         // Endless has no completion screen, so the run's result is reported here or
         // nowhere: how deep it got, and whether it beat the standing record.
         if isEndless {
             let roundLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
             roundLine.horizontalAlignmentMode = .center
-            roundLine.verticalAlignmentMode = .center
             roundLine.fontSize = 16
             roundLine.text = L10n.GameOver.reachedRound(endlessRound)
             roundLine.fontColor = UITheme.Colors.primaryCyanLight
-            roundLine.position = CGPoint(x: 0, y: -46)
-            container.addChild(roundLine)
+            rows.append((roundLine, Rhythm.figureLine))
 
             let recordLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
             recordLine.horizontalAlignmentMode = .center
-            recordLine.verticalAlignmentMode = .center
             recordLine.fontSize = 15
-            recordLine.position = CGPoint(x: 0, y: -68)
 
             let records = LevelManager.shared.getEndlessRecords()
             if isEndlessRecord {
@@ -238,14 +283,19 @@ class GameOverScene: SKScene {
                 recordLine.text = L10n.Common.endlessRecord(score: records.bestScore, round: records.bestRound)
                 recordLine.fontColor = UITheme.Colors.textSecondary
             }
-            container.addChild(recordLine)
+            rows.append((recordLine, Rhythm.figureLine))
         }
 
-        return container
+        // Named so `ResultsPanelCentringTests` can find the block it is asserting on;
+        // nothing looks it up at runtime.
+        container.name = "figureBlock"
+
+        let height = UITheme.stackLabels(rows, in: container)
+        return (container, height)
     }
 
-    private func setupButtons(on panel: SKShapeNode, panelHeight: CGFloat) {
-        let buttonY: CGFloat = -panelHeight / 2 + 125
+    private func setupButtons(on panel: SKShapeNode, retryY: CGFloat, secondaryY: CGFloat) {
+        let buttonY = retryY
 
         // Retry button
         let retryButton = UITheme.createButton(
@@ -264,7 +314,7 @@ class GameOverScene: SKScene {
         ]))
 
         // Secondary buttons container
-        let secondaryButtonY = buttonY - 65
+        let secondaryButtonY = secondaryY
 
         let levelsButton = UITheme.createButton(
             text: L10n.Common.levels,

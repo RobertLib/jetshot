@@ -110,8 +110,8 @@ is read by people who have already decided to look. The captions are the ones
 |---|---|---|---|
 | 1 | Level 34 mid-wave: eight barrels firing, coins, asteroids, chain lit | Fifty levels. The guns fire themselves. | Padesát úrovní. Zbraně střílejí samy. |
 | 2 | Level 40's boss in its third act — cracked armor, health bar under a third, the screen full of its barrage | Every level ends with a boss | Každá úroveň končí bossem |
-| 3 | The chain meter at x8 with the CHAIN counter high | Chain your kills, score up to x8 | Řetěz zásahů, skóre až osmkrát |
-| 4 | Barrier, shield, rapid fire and magnet all live, their timer bars stacked under the HUD | Thirteen power-ups, eight barrels | Třináct vylepšení, osm hlavní |
+| 3 | The chain meter at x8 with the CHAIN counter high | Chain your kills, score up to x8 | Série zásahů, skóre až osmkrát |
+| 4 | Barrier, shield, rapid fire and magnet all live, their timer bars stacked under the HUD | Thirteen power-ups, eight barrels | Třináct vylepšení, osm zbraní |
 | 5 | The level grid, fifty levels, most of them three-starred | Fifty levels, three stars each | Padesát úrovní, tři hvězdy za každou |
 | 6 | An endless run at round 24, ROUND banner up | Endless: how far can you get? | Nekonečná hra: jak daleko doletíš? |
 | 7 | Level 45: a turret mid-rotation, a laser charging, a formation arriving as one shape | 27 enemies, 12 obstacles | 27 nepřátel, 12 překážek |

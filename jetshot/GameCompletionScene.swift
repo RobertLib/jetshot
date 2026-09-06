@@ -9,6 +9,13 @@ import SpriteKit
 
 class GameCompletionScene: SKScene {
 
+    /// Shared vertical rhythm for the results panels. See `UITheme.PanelRhythm`.
+    private typealias Rhythm = UITheme.PanelRhythm
+
+    /// How far the figure block rises during its entrance. It starts this far below
+    /// its laid-out position and ends exactly on it.
+    private static let figuresRise: CGFloat = 10
+
     private let totalScore: Int
     private var isInitialized = false
 
@@ -68,7 +75,46 @@ class GameCompletionScene: SKScene {
 
         // Main panel
         let panelWidth: CGFloat = min(size.width - 60, UITheme.Dimensions.panelWidthMax)
-        let panelHeight: CGFloat = 520
+
+        // Measured before the panel exists, so the panel is sized to its content — see
+        // `UITheme.PanelStack`. The fixed 520 this replaces was picked against the
+        // English copy, and the two body blocks below wrap to a different number of
+        // lines in every other language.
+        let victoryTitle = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        victoryTitle.text = L10n.Completion.title
+        victoryTitle.fontSize = UITheme.Typography.sizeLarge
+        victoryTitle.fontColor = UITheme.Colors.primaryGold
+        victoryTitle.horizontalAlignmentMode = .center
+        let titleHeight = UITheme.capBandHeight(of: victoryTitle)
+
+        let congratsText = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        congratsText.text = L10n.Completion.congratulations
+        congratsText.fontSize = UITheme.Typography.sizeMedium
+        congratsText.fontColor = UITheme.Colors.textPrimary
+        congratsText.horizontalAlignmentMode = .center
+        let congratsHeight = UITheme.capBandHeight(of: congratsText)
+
+        let successText = createMultilineText(
+            text: L10n.Completion.success,
+            fontSize: UITheme.Typography.sizeRegular
+        )
+        let thanksText = createMultilineText(
+            text: L10n.Completion.thanks,
+            fontSize: UITheme.Typography.sizeRegular
+        )
+        let figures = createScoreDisplay()
+        let buttonHeight = UITheme.Dimensions.buttonHeight
+
+        var stack = UITheme.PanelStack()
+        stack.add(gapAbove: Rhythm.edge, height: titleHeight)
+        stack.add(gapAbove: Rhythm.emblemToTitle, height: congratsHeight)
+        stack.add(gapAbove: Rhythm.aroundFigures, height: successText.height)
+        stack.add(gapAbove: Rhythm.figureLine, height: thanksText.height)
+        stack.add(gapAbove: Rhythm.aroundFigures, height: figures.height)
+        stack.add(gapAbove: Rhythm.aroundFigures, height: buttonHeight)
+        stack.add(gapAbove: Rhythm.buttonRow, height: buttonHeight)
+
+        let panelHeight = stack.height
         let panel = UITheme.createPanel(
             width: panelWidth,
             height: panelHeight,
@@ -109,12 +155,14 @@ class GameCompletionScene: SKScene {
         ]))
         panel.setScale(0.8)
 
+        // Placement pass, walking the same rows back down from the panel's top edge.
+        stack.start(panelHeight: panelHeight)
+
         // "VICTORY!" title
-        let victoryTitle = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        victoryTitle.text = L10n.Completion.title
-        victoryTitle.fontSize = UITheme.Typography.sizeLarge
-        victoryTitle.fontColor = UITheme.Colors.primaryGold
-        victoryTitle.position = CGPoint(x: 0, y: panelHeight / 2 - 70)
+        UITheme.centerOnCapBand(
+            victoryTitle,
+            centerY: stack.next(gapAbove: Rhythm.edge, height: titleHeight)
+        )
         victoryTitle.alpha = 0
         panel.addChild(victoryTitle)
 
@@ -131,11 +179,10 @@ class GameCompletionScene: SKScene {
         ]))
 
         // Congratulations message
-        let congratsText = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        congratsText.text = L10n.Completion.congratulations
-        congratsText.fontSize = UITheme.Typography.sizeMedium
-        congratsText.fontColor = UITheme.Colors.textPrimary
-        congratsText.position = CGPoint(x: 0, y: 145)
+        UITheme.centerOnCapBand(
+            congratsText,
+            centerY: stack.next(gapAbove: Rhythm.emblemToTitle, height: congratsHeight)
+        )
         congratsText.alpha = 0
         panel.addChild(congratsText)
 
@@ -145,36 +192,43 @@ class GameCompletionScene: SKScene {
         ]))
 
         // Success message
-        let successText = createMultilineText(
-            text: L10n.Completion.success,
-            fontSize: UITheme.Typography.sizeRegular,
-            y: 90
+        successText.node.position = CGPoint(
+            x: 0,
+            y: stack.next(gapAbove: Rhythm.aroundFigures, height: successText.height)
         )
-        successText.alpha = 0
-        panel.addChild(successText)
+        successText.node.alpha = 0
+        panel.addChild(successText.node)
 
-        successText.run(SKAction.sequence([
+        successText.node.run(SKAction.sequence([
             SKAction.wait(forDuration: 1.3),
             SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
         ]))
 
         // Thank you message
-        let thanksText = createMultilineText(
-            text: L10n.Completion.thanks,
-            fontSize: UITheme.Typography.sizeRegular,
-            y: 20
+        thanksText.node.position = CGPoint(
+            x: 0,
+            y: stack.next(gapAbove: Rhythm.figureLine, height: thanksText.height)
         )
-        thanksText.alpha = 0
-        panel.addChild(thanksText)
+        thanksText.node.alpha = 0
+        panel.addChild(thanksText.node)
 
-        thanksText.run(SKAction.sequence([
+        thanksText.node.run(SKAction.sequence([
             SKAction.wait(forDuration: 1.6),
             SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
         ]))
 
         // Final score display
-        let scoreContainer = createScoreDisplay()
-        scoreContainer.position = CGPoint(x: 0, y: -100)
+        let scoreContainer = figures.node
+        scoreContainer.position = CGPoint(
+            x: 0,
+            y: stack.next(gapAbove: Rhythm.aroundFigures, height: figures.height)
+        )
+        // The entrance rises *into* the slot rather than out of it. `moveBy` is
+        // relative and permanent, so running it from the laid-out position left the
+        // block sitting 10pt above where the stack put it for the rest of the scene's
+        // life — which is what tipped the figures off centre between the title and the
+        // button. Starting the same 10pt low makes the animation land on the layout.
+        scoreContainer.position.y -= Self.figuresRise
         scoreContainer.alpha = 0
         panel.addChild(scoreContainer)
 
@@ -182,32 +236,42 @@ class GameCompletionScene: SKScene {
             SKAction.wait(forDuration: 1.9),
             SKAction.group([
                 SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.moveBy(x: 0, y: 10, duration: UITheme.Animations.durationNormal)
+                SKAction.moveBy(x: 0, y: Self.figuresRise, duration: UITheme.Animations.durationNormal)
             ])
         ]))
 
         // Buttons
-        setupButtons(on: panel, panelHeight: panelHeight)
+        setupButtons(
+            on: panel,
+            primaryY: stack.next(gapAbove: Rhythm.aroundFigures, height: buttonHeight),
+            secondaryY: stack.next(gapAbove: Rhythm.buttonRow, height: buttonHeight)
+        )
     }
 
-    private func createMultilineText(text: String, fontSize: CGFloat, y: CGFloat) -> SKNode {
+    /// A block of body copy, one label per line, centred on the returned node's origin.
+    ///
+    /// The caller no longer passes a `y`: the block reports its own height and the panel
+    /// stack decides where it goes. Line pitch comes from the rhythm rather than from
+    /// `fontSize + 8`, so a block of copy breathes the same as every other stack in the
+    /// results panels.
+    private func createMultilineText(text: String, fontSize: CGFloat) -> (node: SKNode, height: CGFloat) {
         let container = SKNode()
-        container.position = CGPoint(x: 0, y: y)
 
-        let lines = text.components(separatedBy: "\n")
-        for (index, line) in lines.enumerated() {
+        let rows = text.components(separatedBy: "\n").enumerated().map { index, line -> (label: SKLabelNode, gapAbove: CGFloat) in
             let label = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
             label.text = line
             label.fontSize = fontSize
             label.fontColor = UITheme.Colors.textSecondary
-            label.position = CGPoint(x: 0, y: -CGFloat(index) * (fontSize + 8))
-            container.addChild(label)
+            label.horizontalAlignmentMode = .center
+            return (label, index == 0 ? 0 : Rhythm.bodyLine)
         }
 
-        return container
+        let height = UITheme.stackLabels(rows, in: container)
+        return (container, height)
     }
 
-    private func createScoreDisplay() -> SKNode {
+    /// The caption and the total, as one tight pair. See `UITheme.PanelRhythm`.
+    private func createScoreDisplay() -> (node: SKNode, height: CGFloat) {
         let container = SKNode()
 
         // "Total Score:" label
@@ -215,22 +279,29 @@ class GameCompletionScene: SKScene {
         scoreLabel.text = L10n.Completion.totalScore
         scoreLabel.fontSize = UITheme.Typography.sizeRegular
         scoreLabel.fontColor = UITheme.Colors.textSecondary
-        scoreLabel.position = CGPoint(x: 0, y: 55)
-        container.addChild(scoreLabel)
+        scoreLabel.horizontalAlignmentMode = .center
 
         // Score value
         let scoreValue = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
         scoreValue.text = "\(totalScore)"
         scoreValue.fontSize = UITheme.Typography.sizeLarge
         scoreValue.fontColor = UITheme.Colors.primaryGoldLight
-        scoreValue.position = CGPoint(x: 0, y: 16)
-        container.addChild(scoreValue)
+        scoreValue.horizontalAlignmentMode = .center
 
-        return container
+        // Named so `ResultsPanelCentringTests` can find the block it is asserting on;
+        // nothing looks it up at runtime. Structural matching would not do on this
+        // screen — the two body-copy blocks above are label-only containers too.
+        container.name = "figureBlock"
+
+        let height = UITheme.stackLabels([
+            (scoreLabel, 0),
+            (scoreValue, Rhythm.captionToValue)
+        ], in: container)
+        return (container, height)
     }
 
-    private func setupButtons(on panel: SKShapeNode, panelHeight: CGFloat) {
-        let buttonY: CGFloat = -panelHeight / 2 + 125
+    private func setupButtons(on panel: SKShapeNode, primaryY: CGFloat, secondaryY: CGFloat) {
+        let buttonY = primaryY
 
         // Play Again button (restart from level 1)
         let playAgainButton = UITheme.createButton(
@@ -259,7 +330,7 @@ class GameCompletionScene: SKScene {
         ]))
 
         // Secondary buttons container
-        let secondaryButtonY = buttonY - 65
+        let secondaryButtonY = secondaryY
 
         let levelsButton = UITheme.createButton(
             text: L10n.Common.levels,

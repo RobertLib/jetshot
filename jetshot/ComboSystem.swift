@@ -137,6 +137,9 @@ final class ComboSystem {
 
     private static let barWidth: CGFloat = 76
 
+    /// Node name for the whole meter. Not private so the HUD layout test can find it.
+    static let meterNodeName = "chainMeter"
+
     private weak var scene: GameScene?
 
     init(scene: GameScene) {
@@ -178,6 +181,9 @@ final class ComboSystem {
         node.position = position
         node.zPosition = 100
         node.alpha = 0
+        // Named so `HUDLayoutTests` can measure where the meter sits without reaching
+        // into this type; nothing looks it up at runtime.
+        node.name = Self.meterNodeName
         parent.addChild(node)
         meterNode = node
 
@@ -323,10 +329,15 @@ final class ComboSystem {
         decayFillContainer?.xScale = max(0.001, CGFloat(remaining / window))
     }
 
+    /// Deliberately silent.
+    ///
+    /// A tier-up used to play the score-multiplier cue. Chains step up often, and a
+    /// coin-drop chime on every one of them made the game sound like a slot machine —
+    /// the haptic and the pulse already say it happened, without adding a sound to a
+    /// mix that is busy with weapons and explosions. The cue itself still belongs to
+    /// the score-multiplier *power-up*, which is a rare pickup rather than a running
+    /// meter; see `GameScene.activateScoreMultiplier()`.
     private func announceTierUp() {
-        guard let scene = scene else { return }
-
-        SoundManager.shared.playScoreMultiplierSound(on: scene)
         HapticManager.shared.mediumTap()
         pulseMeter(scale: 1.5, duration: 0.12)
     }

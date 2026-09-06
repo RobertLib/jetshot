@@ -12,9 +12,32 @@ class MenuScene: SKScene {
     private var startButton: SKShapeNode!
     private var isInitialized = false
 
-    /// Forgiveness added around each button's outline. Kept under half the 19pt gap
-    /// between START and SETTINGS so the two hit areas can never meet.
+    /// Forgiveness added around each button's outline. Kept under half of `buttonGap`,
+    /// the tightest button-to-button gap any of the menu's configurations produces, so
+    /// two hit areas can never meet.
     private static let touchSlop: CGFloat = 6
+
+    // Vertical rhythm for the stack under the title.
+    //
+    // Named, and the difference between them is the whole point: a caption sits close
+    // to the button it describes and well clear of the unrelated one below it. The
+    // record line used to be placed at a hand-picked y that gave it ~5pt of air above
+    // and ~7pt below, between buttons that are themselves 16pt apart — so ENDLESS, the
+    // record and SETTINGS read as one mashed block rather than a button with a caption.
+
+    // Not private, so `MenuLayoutTests` can assert the spacing it actually gets rather
+    // than a second copy of these numbers — the same reason `GameScene.activeEnemyCount`
+    // is exposed.
+
+    /// Between two buttons.
+    static let buttonGap: CGFloat = 16
+
+    /// From a button's bottom edge to its own caption.
+    static let captionGap: CGFloat = 9
+
+    /// From a caption to the next, unrelated button. Deliberately the largest of the
+    /// three — it is what stops the caption from reading as SETTINGS' label.
+    static let captionToButtonGap: CGFloat = 22
 
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
@@ -161,19 +184,27 @@ class MenuScene: SKScene {
         // before they have flown the ship once is the worst first impression the game can
         // make. Clearing level 1 is a low enough bar that anyone who wants it gets it in
         // under two minutes.
+        let settingsHeight: CGFloat = 42
         var settingsY = size.height / 2 - 130
 
         if LevelManager.shared.isLevelCompleted(1) {
+            let endlessHeight: CGFloat = 44
+            let endlessCenterY = size.height / 2 - 125
             let endlessButton = UITheme.createButton(
                 text: L10n.Menu.endless,
                 color: UITheme.Colors.primaryGold,
                 width: UITheme.Dimensions.buttonWidthLarge,
                 name: "endlessButton",
-                height: 44
+                height: endlessHeight
             )
-            endlessButton.position = CGPoint(x: size.width / 2, y: size.height / 2 - 125)
+            endlessButton.position = CGPoint(x: size.width / 2, y: endlessCenterY)
             endlessButton.zPosition = 10
             addChild(endlessButton)
+
+            // Everything below ENDLESS is measured down from its bottom edge rather
+            // than placed at its own hand-picked y, which is what let the record line
+            // and SETTINGS drift into it. See the gap constants at the top.
+            var cursorY = endlessCenterY - endlessHeight / 2
 
             // The record under the button is the whole pitch for the mode.
             let records = LevelManager.shared.getEndlessRecords()
@@ -184,12 +215,26 @@ class MenuScene: SKScene {
                 best.fontColor = UITheme.Colors.textSecondary
                 best.horizontalAlignmentMode = .center
                 best.verticalAlignmentMode = .center
-                best.position = CGPoint(x: size.width / 2, y: size.height / 2 - 157)
                 best.zPosition = 10
+                // Named so the layout is assertable; nothing looks it up at runtime.
+                best.name = "endlessRecord"
+
+                // Measured, not assumed, so the spacing holds if the font or size here
+                // ever changes. `verticalAlignmentMode = .center` puts the frame
+                // symmetrically around the position, hence the half-heights.
+                let captionHeight = best.calculateAccumulatedFrame().height
+                cursorY -= Self.captionGap + captionHeight / 2
+                best.position = CGPoint(x: size.width / 2, y: cursorY)
                 addChild(best)
+
+                cursorY -= captionHeight / 2 + Self.captionToButtonGap
+            } else {
+                // No record yet. SETTINGS closes the gap instead of holding the
+                // caption's slot open, which a fixed y used to do.
+                cursorY -= Self.buttonGap
             }
 
-            settingsY = size.height / 2 - 190
+            settingsY = cursorY - settingsHeight / 2
         }
 
         // Settings, deliberately understated so it doesn't compete with START.
@@ -198,7 +243,7 @@ class MenuScene: SKScene {
             color: UITheme.Colors.buttonMenu,
             width: UITheme.Dimensions.buttonWidthSmall,
             name: "settingsButton",
-            height: 42
+            height: settingsHeight
         )
         settingsButton.position = CGPoint(x: size.width / 2, y: settingsY)
         settingsButton.zPosition = 10

@@ -226,6 +226,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // runs every frame (see the note there), so the one that used to sit here was never
     // read.
 
+    /// Intensity of the camera shake currently playing, so a weaker one cannot cut a
+    /// stronger one short. See `shakeCamera(intensity:duration:)` for why this is safe
+    /// to keep as plain state rather than reading it back off the action.
+    private var activeShakeIntensity: CGFloat = 0
+
+    /// Drop from the HUD margin to the centre of the chain meter.
+    ///
+    /// The meter is boxed in on both sides, which is what makes this a constant worth
+    /// naming rather than a literal at the call site. Above it is the 44pt pause button
+    /// — which carries a glow halo, so its apparent edge is lower than its outline —
+    /// and below it is the boss health bar, whose right end runs under the meter at the
+    /// same x. At a drop of 58 those gaps were 9pt and 4pt: the meter read as stuck to
+    /// the pause button.
+    ///
+    /// Moving it down therefore had to move `Boss.healthBarDropBelowHUD` with it. Not
+    /// private, like that constant and for the same reason: `HUDLayoutTests` asserts the
+    /// two gaps rather than carrying its own copy of these numbers.
+    static let chainMeterDropBelowHUD: CGFloat = 70
+
     // MARK: - Cache Management
 
     /// Number of enemies currently held in the cache.
@@ -414,10 +433,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Dark background for better glow contrast
         backgroundColor = UIColor(red: 0.03, green: 0.03, blue: 0.12, alpha: 1.0)
 
-        // Setup camera for shake effects
+        // Setup camera for shake effects.
+        //
+        // Parented to `gameContentNode`, not the scene, for the same reason as
+        // `effectsParent` and `BossManager`'s "bossCameraShakes" timeline: the scene
+        // keeps ticking while the game is paused, so a shake started by an explosion
+        // went on rattling the pause menu. `gameContentNode` is the clock that actually
+        // stops.
+        //
+        // Safe because `gameContentNode` sits at the origin with an identity transform
+        // and is never moved or scaled, so the camera's position still reads in scene
+        // coordinates — which is what both the centring here and the recentring in
+        // `didChangeSize(_:)` assume.
         let cameraNode = SKCameraNode()
         cameraNode.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        addChild(cameraNode)
+        gameContentNode.addChild(cameraNode)
         camera = cameraNode
 
         // Setup critical components first - add to game content node
@@ -856,7 +886,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // visually until it is earned. See `ComboSystem.installHUD(on:at:)`.
         combo.installHUD(
             on: uiNode,
-            at: CGPoint(x: size.width - 62, y: size.height - topMargin - 58)
+            at: CGPoint(x: size.width - 62, y: size.height - topMargin - Self.chainMeterDropBelowHUD)
         )
     }
 
@@ -3463,6 +3493,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func shakeCamera(intensity: CGFloat = 10.0, duration: TimeInterval = 0.3) {
         guard let camera = camera else { return }
 
+        // Keyed, and gated on the shake already in flight.
+        //
+        // The steps below are absolute `move(to:)`s, so concurrent shakes do not add up
+        // — they fight over the same position. An unkeyed `run` let them: `activateNuke`
+        // staggers its explosions 0.05 s apart and every one of them calls in here with
+        // a 0.3 s shake, which stacked six to ten sequences on the camera at once and
+        // came out as jitter rather than the intended shake.
+        //
+        // A bare `withKey:` would fix the stacking but introduce a worse bug: the last
+        // caller would always win, so one small enemy popping during the boss defeat
+        // sequence would downgrade its 20-point shake to a 6-point one. Hence the
+        // intensity gate — a weaker shake yields to a stronger one still playing, while
+        // an equal or stronger one takes over and keeps a nuke shaking continuously.
+        //
+        // Checking the action first is what makes `activeShakeIntensity` self-healing:
+        // once the sequence has ended (or been cleared by teardown) the recorded value
+        // is stale and must not gate the next shake. Same idiom as the "heatPulse"
+        // guard in `WeaponHeatSystem.updateHeatBar()`.
+        if camera.action(forKey: "cameraShake") == nil {
+            activeShakeIntensity = 0
+        }
+        guard intensity >= activeShakeIntensity else { return }
+        activeShakeIntensity = intensity
+
         // Original position is always the center of the scene
         let originalPosition = CGPoint(x: size.width / 2, y: size.height / 2)
 
@@ -3485,7 +3539,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Run shake sequence on camera
         let shakeSequence = SKAction.sequence(shakeActions)
-        camera.run(shakeSequence)
+        camera.run(shakeSequence, withKey: "cameraShake")
     }
 
     func createExplosionForFrozenEnemy(at position: CGPoint) {

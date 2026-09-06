@@ -3,7 +3,7 @@ Endless mode, a chain multiplier, and a pass over all fifty boss fights.
 • ENDLESS — a run with no finish line, unlocked once you clear level 1. Rounds grow and tighten, the enemy roster widens every third round and a boss arrives every fifth. It keeps your best score and the deepest round you have reached.
 • Kills landing close together now build a chain that multiplies your score up to x8. One hit taken and it is gone, and the window shortens as the chain grows.
 • Bosses fight in three acts. As the armor cracks at two-thirds and one-third health they attack faster and reach deeper into their repertoire, so the fight now reads the way it looks.
-• From level 8 to level 50 every boss used to declare the identical fourteen attack patterns — thirty-five of the fifty were the same fight with a longer health bar. Each is now a signature of its own.
+• From level 8 to level 50 every boss used to declare the identical fourteen attack patterns — forty-three of the fifty were the same fight with a longer health bar. The seventeen identities behind them now each have a signature of their own.
 • Levels are paced instead of empty. Waves land roughly a third faster and the second half of a level replays the first, tighter, so there is always something in front of you.
 • An overheat no longer costs you the chain you were holding: the cooldown is down from three seconds to a second and a half, and the guns cool half again as fast between bursts.
 • Czech localization, throughout the game and the story.

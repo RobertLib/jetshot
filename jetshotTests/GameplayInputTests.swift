@@ -213,7 +213,7 @@ final class GameplayInputTests: XCTestCase {
     }
 
     @MainActor
-    func testHoldingAwayFromTheShipDoesNotFire() {
+    func testHoldingAwayFromTheShipDoesNotFire() throws {
         let harness = GameplayHarness()
         harness.startPlayingWithControl()
         defer { harness.teardown() }
@@ -236,7 +236,10 @@ final class GameplayInputTests: XCTestCase {
         harness.spin(0.12)
 
         let gap = abs(harness.player.position.x - fingerX)
-        try? XCTSkipIf(gap <= gate, "the ship closed the gap too quickly to observe the range gate")
+        // `try`, not `try?`: XCTSkipIf signals a skip by *throwing*, so swallowing it
+        // with `try?` left the guard as a no-op and ran the assertion below on exactly
+        // the state it was written to exclude.
+        try XCTSkipIf(gap <= gate, "the ship closed the gap too quickly to observe the range gate")
         XCTAssertEqual(
             harness.bulletsInFlight, 0,
             "the guns fired while the finger was \(Int(gap))pt from the ship (gate is \(Int(gate))pt)"
@@ -340,7 +343,7 @@ final class GameplayInputTests: XCTestCase {
     }
 
     @MainActor
-    func testPausingDoesNotStopTheGunsPermanently() {
+    func testPausingDoesNotStopTheGunsPermanently() throws {
         let harness = GameplayHarness()
         harness.startPlayingWithControl()
         defer { harness.teardown() }
@@ -360,8 +363,9 @@ final class GameplayInputTests: XCTestCase {
         XCTAssertFalse(harness.gameContent.isPaused, "resume did not take")
 
         // If an enemy reached the ship while the menu was up, the guns being silent would
-        // say nothing about the pause round trip.
-        try? XCTSkipUnless(harness.playerIsAlive, "the ship was destroyed before fire could be retested")
+        // say nothing about the pause round trip. `try`, not `try?` — see the note on
+        // the skip in `testHoldingAwayFromTheShipDoesNotFire()`.
+        try XCTSkipUnless(harness.playerIsAlive, "the ship was destroyed before fire could be retested")
 
         harness.clearBullets()
         harness.holdFire(for: 1.0)

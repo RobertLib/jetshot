@@ -191,13 +191,222 @@ struct UITheme {
         label.fontSize = Typography.sizeSmall
         label.fontColor = color
         label.horizontalAlignmentMode = .center
-        label.verticalAlignmentMode = .center
-        label.position = .zero
         label.zPosition = 2
+        // Size first, then centre: `fitLabel` changes the point size, and the cap band
+        // it has to be centred on is measured at whatever size it settles on.
         fitLabel(label, toWidth: width - 20)
+        centerOnCapBand(label)
         button.addChild(label)
 
         return button
+    }
+
+    /// Centres a label on its **cap band** rather than on its full glyph box, and
+    /// returns the resulting y so callers can offset from it.
+    ///
+    /// `verticalAlignmentMode = .center` centres the box SpriteKit measures, and that
+    /// box grows upwards for accented capitals: at 20pt in this font "SETTINGS" reports
+    /// 18pt tall while Czech "NASTAVENÍ" reports 22pt, because the acute on the Í sits
+    /// above the cap line. Centring the taller box pushes the letters themselves 2pt
+    /// down, so every button whose translation carries a diacritic sat visibly low while
+    /// the English original looked right — which is why this only ever showed up in
+    /// Czech.
+    ///
+    /// The fix is what a typesetter would do: ignore the accents and centre the caps.
+    /// `.baseline` puts the baseline at the label's own origin, so the cap band can be
+    /// measured directly off a diacritic-stripped copy of the same string, at the same
+    /// font and size, and its midpoint moved to `centerY`.
+    ///
+    /// A no-op in effect for unaccented text: "SETTINGS" comes out at exactly the y
+    /// `.center` gave it, so this changes no English layout anywhere.
+    ///
+    /// Assumes the single-line, all-caps text every button and HUD caption in the game
+    /// uses. Lowercase descenders would want the descender counted too, and none of the
+    /// callers have any.
+    /// Stays on `.center` alignment and corrects the *position* instead of switching to
+    /// `.baseline`, which would be the obvious way to do this and is a trap: several of
+    /// these labels carry `SKAction.scale` entrances and pulses, and those scale about
+    /// the node's origin. On `.baseline` the origin is the baseline, so a pulse would
+    /// grow the text upwards out of its slot instead of breathing about its middle.
+    ///
+    /// With `.center` the origin stays the box centre, and the whole correction is the
+    /// half-difference between the box SpriteKit measures and the cap band inside it —
+    /// which is zero for unaccented text, hence no change to any English layout.
+    @discardableResult
+    static func centerOnCapBand(_ label: SKLabelNode, centerY: CGFloat = 0) -> CGFloat {
+        label.verticalAlignmentMode = .center
+        let correction = (label.frame.height - capBandHeight(of: label)) / 2
+        let y = centerY + correction
+        label.position = CGPoint(x: label.position.x, y: y)
+        return y
+    }
+
+    /// Stacks `rows` downwards inside `container`, centred on its origin, and returns
+    /// the block's height for the caller's own stack maths.
+    ///
+    /// Gaps here are **ink to ink**: the space actually left between the glyphs of one
+    /// row and the next, accents included. Spacing by the cap band instead — which is
+    /// what a single label in a box wants, see `centerOnCapBand` — makes the gaps
+    /// *measure* equal and *look* unequal, because an accent eats into the space above
+    /// its own row by however far it happens to reach. In the level-complete figures
+    /// that came out as 16pt of cap-band gap either side of the record line rendering
+    /// as 13pt above it and 14.5pt below: the acute on `NOVÝ` overhangs its caps by
+    /// 3.5pt while the caron on `NEJDELŠÍ` overhangs by 2.
+    ///
+    /// So rows are spaced, and centred, on the box SpriteKit actually draws. There is no
+    /// per-row cap-band correction: inside a stack a row has no slot of its own to be
+    /// centred in, and the only thing a reader can judge is the air between the lines.
+    @discardableResult
+    static func stackLabels(
+        _ rows: [(label: SKLabelNode, gapAbove: CGFloat)],
+        in container: SKNode
+    ) -> CGFloat {
+        var y: CGFloat = 0
+        var placed: [(label: SKLabelNode, centerY: CGFloat)] = []
+
+        for (index, row) in rows.enumerated() {
+            // `.center` centres the drawn box on the node's position, which is what
+            // makes the arithmetic below symmetric — and what keeps any scale pulse on
+            // one of these rows breathing about its middle.
+            row.label.verticalAlignmentMode = .center
+            let height = row.label.frame.height
+            y -= (index == 0 ? 0 : row.gapAbove) + height / 2
+            placed.append((row.label, y))
+            y -= height / 2
+        }
+
+        // `y` is the bottom of the block, so -y is its height and -y/2 lifts it back
+        // onto the container's origin. Callers place the container by its centre.
+        let blockHeight = -y
+        for entry in placed {
+            entry.label.position = CGPoint(
+                x: entry.label.position.x,
+                y: entry.centerY + blockHeight / 2
+            )
+            container.addChild(entry.label)
+        }
+        return blockHeight
+    }
+
+    /// How tall a label reads, accents excluded — the height to stack it by.
+    ///
+    /// Using `frame.height` instead would make a row's height depend on whether its
+    /// translation happens to carry a diacritic, so the same layout would breathe
+    /// differently in Czech than in English for no reason the reader can see.
+    static func capBandHeight(of label: SKLabelNode) -> CGFloat {
+        return capBand(of: label).height
+    }
+
+    /// The label's glyph box with diacritics folded away, measured from its baseline.
+    private static func capBand(of label: SKLabelNode) -> CGRect {
+        let probe = SKLabelNode(fontNamed: label.fontName ?? Typography.fontBold)
+        probe.text = (label.text ?? "").folding(
+            options: .diacriticInsensitive,
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        probe.fontSize = label.fontSize
+        probe.verticalAlignmentMode = .baseline
+        probe.horizontalAlignmentMode = label.horizontalAlignmentMode
+        return probe.frame
+    }
+
+    // MARK: - Results Panel Rhythm
+
+    /// Vertical rhythm shared by the three results panels — game over, level complete
+    /// and victory.
+    ///
+    /// One set of gaps for all three, because they are the same screen with different
+    /// words: an emblem, a title, a block of figures, a primary button and a secondary
+    /// row. All three used to hand-place every row at an offset from the panel's
+    /// half-height, with the *same* magic numbers copied between them (`- 65`,
+    /// `- spacing - 10`, `- 75`, `-46`, `-68`, `+125`, `- 65`). Two things came out of
+    /// that: the figures ended up on a 22pt pitch — tighter than anything around them,
+    /// which is what made them read as mashed together — while the panel kept ~40pt of
+    /// dead space above the emblem and ~35pt below the buttons.
+    ///
+    /// Gaps are edge-to-edge between what you actually see, so a row's own height never
+    /// leaks into the gap below it. `PanelStack` turns them into positions and sizes the
+    /// panel to what it ends up holding, so there is no dead space left to tune.
+    ///
+    /// `nonisolated` for the reason `GameRules` and `ComboRules` give: constants and
+    /// arithmetic over plain numbers, with no reason to be bound to the main actor just
+    /// because the rest of `UITheme` touches UIKit.
+    nonisolated struct PanelRhythm {
+        /// Panel edge to the first and last row.
+        static let edge: CGFloat = 30
+
+        /// Emblem — the icon or the star row — to the title.
+        static let emblemToTitle: CGFloat = 24
+
+        /// Above *and* below the figure block, so it sits centred between the title and
+        /// the button rather than merely somewhere between them.
+        ///
+        /// Deliberately one constant used on both sides instead of two that happen to be
+        /// close. The block's height changes with what there is to report — two lines on
+        /// a plain defeat, four when a personal best and a chain are worth calling out —
+        /// and with separate gaps the centre drifts with it, differently on every screen.
+        /// One value makes "centred" true by construction, whatever it ends up holding.
+        static let aroundFigures: CGFloat = 30
+
+        /// A caption to the number it labels, ink to ink. Deliberately the tightest gap
+        /// in the set: the pair has to read as one thing.
+        static let captionToValue: CGFloat = 6
+
+        /// Between two figure lines, ink to ink — see `stackLabels`.
+        ///
+        /// 14 rather than 16 because the number changed meaning: as a cap-band gap it
+        /// rendered as 13–14.5pt depending on which accents the row carried, and 14
+        /// keeps the block at the density it already had while making every gap in it
+        /// identical.
+        static let figureLine: CGFloat = 14
+
+
+        /// Primary button to the secondary row.
+        static let buttonRow: CGFloat = 16
+
+        /// Between body copy lines, which the victory screen has instead of figures.
+        static let bodyLine: CGFloat = 14
+    }
+
+    /// Turns a list of row heights and the gaps above them into centre positions, and
+    /// reports the height the panel needs to hold them.
+    ///
+    /// Two-pass on purpose: `height` is what the panel is built with, and `next(_:_:)`
+    /// then walks the same rows down from that panel's top edge. Placing rows first and
+    /// choosing a panel height afterwards is what left the old layouts lopsided.
+    ///
+    /// `nonisolated` on the same terms as `PanelRhythm`: it is a running total.
+    nonisolated struct PanelStack {
+        private var rows: [(gapAbove: CGFloat, height: CGFloat)] = []
+        private var cursor: CGFloat = 0
+
+        /// Records a row. Call once per row, top to bottom, before reading `height`.
+        mutating func add(gapAbove: CGFloat, height: CGFloat) {
+            rows.append((gapAbove, height))
+        }
+
+        /// Panel height that fits every recorded row.
+        ///
+        /// The top margin comes from the first row's own `gapAbove` — callers pass
+        /// `PanelRhythm.edge` there — so only the bottom one is added here.
+        var height: CGFloat {
+            let content = rows.reduce(0) { $0 + $1.gapAbove + $1.height }
+            return content + PanelRhythm.edge
+        }
+
+        /// Begins the placement pass at the top edge of a panel of `panelHeight`.
+        mutating func start(panelHeight: CGFloat) {
+            cursor = panelHeight / 2
+        }
+
+        /// Centre y of the next row down, given the same gap and height it was added
+        /// with. Panel-relative, so it is what a child of the panel wants.
+        mutating func next(gapAbove: CGFloat, height: CGFloat) -> CGFloat {
+            cursor -= gapAbove + height / 2
+            let center = cursor
+            cursor -= height / 2
+            return center
+        }
     }
 
     /// Shrinks a label's point size until its text fits `maxWidth`.

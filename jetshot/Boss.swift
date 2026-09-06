@@ -594,7 +594,11 @@ class Boss: SKShapeNode {
     /// `GameConfiguration.topMargin(in:)`, and a test carrying its own copy of the drop
     /// would keep passing if the margin fell out of the formula again — which is exactly
     /// what went wrong here.
-    static let healthBarDropBelowHUD: CGFloat = 100
+    /// Moved down from 100 when the chain meter was moved off the pause button: the
+    /// meter's panel bottom sits at the HUD margin less 97, and the bar's right end runs
+    /// underneath it at the same x, so leaving this at 100 would have overlapped them.
+    /// `HUDLayoutTests` pins the resulting clearance.
+    static let healthBarDropBelowHUD: CGFloat = 114
 
     /// Builds the health bar. Its *position* is set later, by `layoutHealthBar(in:)`.
     ///

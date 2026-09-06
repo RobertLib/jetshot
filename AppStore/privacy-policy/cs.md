@@ -9,7 +9,7 @@ vlastní herní postup — a putuje do vašeho vlastního iCloudu.
 
 ## Podrobně
 
-**Nesbíráme žádná data.** Aplikace se nikdy neptá na jméno, e-mail, telefonní
+**Nesbírám žádná data.** Aplikace se nikdy neptá na jméno, e-mail, telefonní
 číslo ani na žádný jiný osobní údaj. Nevyžaduje účet ani přihlášení a neodesílá
 mně ani nikomu jinému nic o vás ani o tom, jak hrajete.
 
@@ -21,17 +21,17 @@ nesleduje.
 **Žádné nákupy v aplikaci.** Aplikace neobsahuje nákupy v aplikaci ani
 předplatné.
 
-**Kde je uložený váš postup.** Dokončené úrovně, skóre za úrovně, hvězdičky,
+**Kde je uložený váš postup.** Dokončené úrovně, skóre za úrovně, hvězdy,
 výzbroj lodi a rekordy z nekonečné hry se ukládají na vaše zařízení do systémového
 úložiště UserDefaults.
 
 **Synchronizace přes iCloud.** Stejných pět hodnot se zrcadlí do Apple iCloud
 Key-Value Storage, aby vás postup provázel mezi vašimi zařízeními a přežil
-přeinstalaci aplikace. Tato data leží ve vašem osobním iCloud účtu, přečíst je jde
+přeinstalaci aplikace. Tato data leží ve vašem osobním účtu iCloud, přečíst je lze
 jen na zařízeních přihlášených vaším Apple ID a já k nim přístup nemám — žádný můj
 server v tom v žádné chvíli nefiguruje. Pokud chcete postup držet jen na jednom
 zařízení, vypněte pro Jetshot iCloud Drive v Nastavení → vaše jméno → iCloud. Hra
-funguje i bez něj normálně.
+funguje normálně i bez něj.
 
 **Všechno ostatní běží offline.** Veškerý obsah — úrovně, grafika, hudba i zvuky —
 je uvnitř aplikace. Kromě výše popsané synchronizace s iCloudem aplikace
