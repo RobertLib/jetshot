@@ -12,16 +12,16 @@ Screenshots* section (language switch at the top, one locale at a time).
 
 | What | Where | Resolution | Count |
 |---|---|---|---|
-| iPhone screenshots | `screenshots/<locale>/iphone-6.5/` | 1242 × 2688 (6.5" slot) | 8 |
-| iPad 13" screenshots | `screenshots/<locale>/ipad-13/` | 2064 × 2752 | 8 |
-| The same with captions | `screenshots-captioned/<locale>/<device>/` | same | 8 + 8 |
-| iPhone App Preview | `preview/<locale>/iphone-6.5.mp4` | 886 × 1920, 30 fps, 25.4 s, AAC | 1 |
-| iPad 13" App Preview | `preview/<locale>/ipad-13.mp4` | 1200 × 1600, 30 fps, 25.4 s, AAC | 1 |
+| iPhone screenshots | `screenshots/<locale>/iphone-6.5/` | 1242 × 2688 (6.5" slot) | 9 |
+| iPad 13" screenshots | `screenshots/<locale>/ipad-13/` | 2064 × 2752 | 9 |
+| The same with captions | `screenshots-captioned/<locale>/<device>/` | same | 9 + 9 |
+| iPhone App Preview | `preview/<locale>/iphone-6.5.mp4` | 886 × 1920, 30 fps, 28.4 s, AAC | 1 |
+| iPad 13" App Preview | `preview/<locale>/ipad-13.mp4` | 1200 × 1600, 30 fps, 28.4 s, AAC | 1 |
 
 ```bash
-Tools/appstore_media.sh              # screenshots and videos (~25 min)
+Tools/appstore_media.sh              # screenshots and videos (~30 min)
 Tools/appstore_media.sh screenshots  # screenshots only (~12 min)
-Tools/appstore_media.sh video        # videos only (~13 min)
+Tools/appstore_media.sh video        # videos only (~15 min)
 Tools/appstore_captions.sh           # paints captions onto finished screenshots (~2 min)
 ```
 
@@ -47,6 +47,10 @@ repaints finished PNGs and needs no simulator.
 records exactly that**, being 414 × 896 points at 3x. When that simulator is
 installed the pipeline scales nothing at all and the uploaded pixels are the ones
 the game drew. That is why it is first in `IPHONE_CANDIDATES`.
+
+Xcode 27 no longer lists it among its default simulators, but the iOS 27 runtime
+still runs one; create it once with `xcrun simctl create "iPhone 11 Pro Max"
+com.apple.CoreSimulator.SimDeviceType.iPhone-11-Pro-Max`.
 
 The runtimes do drop old devices eventually. The fallback is an *iPhone 17 Pro Max*,
 which records 1320 × 2868; the shell then scales to width and crops eleven rows,
@@ -86,8 +90,11 @@ arguments — the full list is in that file's header. The three worth knowing he
   `touchLocation` pair a real drag sets. That is not a detail: the guns only fire
   while a finger is down, so a still frame of an idle game has no bullets in it at
   all.
-- **`-invincible`** because the bot is not good enough to survive level 45 for
-  twelve seconds, let alone a 25-second recording.
+- **`-invincible`** because the bot is not good enough to survive level 43 for
+  twelve seconds, let alone a 28-second recording.
+- **`-cool`** keeps the heat gauge empty. The bot holds the trigger down for the
+  whole run, which no player does, and since 1.0.8's faster guns unbroken fire
+  locks them out for 1.5 s every nine — a full arsenal with no bullets on screen.
 
 A chain lapses after 1.8 s, a shield lasts five, and the endless round banner is
 gone in under two — so `DebugLaunch` holds those three states rather than setting
@@ -102,32 +109,49 @@ of what five seconds of video needs, where three of those cycles read as a flick
 
 ## The shot list
 
-Eight shots, in this order. The first two carry the listing; everything after them
+Nine shots, in this order. The first two carry the listing; everything after them
 is read by people who have already decided to look. The captions are the ones
 `appstore_captions.sh` paints on.
 
 | # | What is on screen | EN caption | CZ caption |
 |---|---|---|---|
 | 1 | Level 34 mid-wave: eight barrels firing, coins, asteroids, chain lit | Fifty levels. The guns fire themselves. | Padesát úrovní. Zbraně střílejí samy. |
-| 2 | Level 40's boss in its third act — cracked armor, health bar under a third, the screen full of its barrage | Every level ends with a boss | Každá úroveň končí bossem |
-| 3 | The chain meter at x8 with the CHAIN counter high | Chain your kills, score up to x8 | Série zásahů, skóre až osmkrát |
-| 4 | Barrier, shield, rapid fire and magnet all live, their timer bars stacked under the HUD | Thirteen power-ups, eight barrels | Třináct vylepšení, osm zbraní |
-| 5 | The level grid, fifty levels, most of them three-starred | Fifty levels, three stars each | Padesát úrovní, tři hvězdy za každou |
-| 6 | An endless run at round 24, ROUND banner up | Endless: how far can you get? | Nekonečná hra: jak daleko doletíš? |
-| 7 | Level 45: a turret mid-rotation, a laser charging, a formation arriving as one shape | 27 enemies, 12 obstacles | 27 nepřátel, 12 překážek |
-| 8 | Main menu, with the endless record under the ENDLESS button | No ads. No purchases. No account. | Bez reklam. Bez nákupů. Bez účtu. |
+| 2 | Level 40's boss, the Wraith, in its third act — health bar under a third, the screen full of its barrage, the rift's tunnel behind it | Ten bosses. Fifty boss fights. | Deset bossů. Padesát soubojů. |
+| 3 | Level 33's Maw a second after an Overdrive: the guns burning gold, the shockwave ring still on screen | Charge Overdrive, wipe out their fire | Nabij Přepětí a smaž jejich palbu |
+| 4 | The chain meter at x8 with the CHAIN counter high | Chain your kills, score up to x8 | Série zásahů, skóre až osmkrát |
+| 5 | Barrier, shield, rapid fire and magnet all live, their timer bars stacked under the HUD | Thirteen power-ups, eight barrels | Třináct vylepšení, osm zbraní |
+| 6 | The endless upgrade picker after round 25's boss — three cards | Endless: beat a boss, pick an upgrade | Nekonečná hra: vylepšení za bosse |
+| 7 | The level grid, sectors 5 and 6: stars and the three medal pips on every tile, the medal total at the top | Three stars, three medals on every level | Tři hvězdy, tři medaile v každé úrovni |
+| 8 | Level 43: a formation arriving as one shape, its barrage, spinners and a turret | 27 enemies, 12 obstacles | 27 nepřátel, 12 překážek |
+| 9 | Main menu, with the endless record under the ENDLESS button | No ads. No purchases. No account. | Bez reklam. Bez nákupů. Bez účtu. |
 
 Notes on the shots themselves, for when one needs retuning:
 
 - **The settle is per shot, in `SHOTS`,** because these are not the same kind of
   picture. A menu is ready in four seconds; a level needs eleven for the waves to
-  fill the screen; the boss needs fifteen, for its warning, its entrance and the
-  damage burst that puts it into its third act.
+  fill the screen; the boss needs nine — five for its warning, its entrance and the
+  damage burst that puts it into its third act, then a few for the barrage to fill
+  the screen. Not more: eight barrels at 1.0.8's cadence finish it in about seven.
+  The iPad waits twelve (`9/12` in `SHOTS`): its clock runs a few seconds behind,
+  and at ten the Wraith was mid-blink at the edge of the screen in both locales.
+- **Every run starts on freshly booted simulators.** One that has been up for a
+  while starts drawing the home indicator across the bottom of every iPhone frame;
+  a reboot clears it. The shell then waits 45 s, because two simulators fresh out
+  of boot slow the game's clock enough to miss a timed capture.
+- **Seed `-chain 40` on every gameplay shot from level 21 on.** Forty is the chain
+  medal's target there, and earning it lays a MEDAL EARNED banner across the
+  screen. Seeded, it plays in the first second; built honestly, it lands whenever
+  it likes, and on the first run of this list that was during the capture in half
+  the boss shots.
 - **Never shoot the starting ship.** One barrel is what a new player sees and the
   worst thing to advertise, which is why every gameplay shot passes `-guns 8`.
 - **Catch the boss below a third health.** `BossPhaseRules.thresholds` is where the
-  silhouette cracks and the cadence turns up; phase one looks like every other
-  space shooter on the store. `-boss 0.28` lands there.
+  cadence turns up and the deepest attacks join in; act one is a boss warming up.
+  `-boss 0.3` lands there.
+- **The Overdrive shot is timed, not posed.** `-overdrivefire 9` fires it nine
+  seconds in, against a boss at 0.6, and the capture lands a second later — while
+  the shockwave ring is still expanding. The gold lasts six seconds, so the iPad's
+  extra second is no risk.
 - **The game is drawn in light** — bloom, glows, neon vector shapes on black. It is
   the one thing that separates this listing visually from the pixel-art and
   3D-render competition, so favour frames with a lot of it.
@@ -137,8 +161,9 @@ Notes on the shots themselves, for when one needs retuning:
 
 ## The preview
 
-Six clips, cut to 25.4 seconds. In order: a mid-campaign level, a dense wave at x8,
-the lightning power-up clearing the screen, level 40's boss, an endless run at round
+Six clips, cut to 28.4 seconds. In order: a dense wave at x8, an Overdrive fired
+into level 33's Maw (its armour cracking at two-thirds inside the window), the
+lightning power-up clearing the screen, level 40's Wraith, an endless run at round
 24, and the menu.
 
 The cut points are in `CUTS` and both devices share one set, unlike Minigolf's,

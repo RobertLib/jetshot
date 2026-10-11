@@ -17,7 +17,7 @@ import SpriteKit
 /// scene that *calls* it. `LevelCompleteScene.didMove(to:)` is the only place a finished
 /// run is written, so until it is presented nothing here is exercised end to end.
 ///
-/// Every test runs inside `withCleanProgress`, which wipes the store and restores it
+/// Every test runs inside `withCleanProgress`, which isolates memory stores and restores them
 /// afterwards, so the suite is neither order-dependent nor destructive to a developer's
 /// simulator progress.
 @MainActor

@@ -12,13 +12,36 @@ import SpriteKit
 /// collaborator that keeps that state private instead of an extension that would force
 /// the scene's properties open to the module.
 ///
-/// This type is deliberately *only* the HUD. The rule about when a bar may appear at all
-/// — bars are suppressed while a boss is on screen, because the boss health bar owns that
+/// This type is deliberately *only* the HUD. The rule about when the bars may be seen at
+/// all — they are hidden while a boss is on screen, because the boss health bar owns that
 /// corner — stays in `GameScene`, which is what knows about bosses.
 final class PowerUpTimerHUD {
 
     private static let barHeight: CGFloat = 28
     private static let barSpacing: CGFloat = 6
+    private static let barWidth: CGFloat = 150
+    private static let progressWidth: CGFloat = 55
+    private static let labelX: CGFloat = 7
+
+    /// Room for the caption: from its inset to 6pt short of the progress track.
+    ///
+    /// The captions are translated (`L10n.PowerUp`), and Czech runs longer, so they are
+    /// fitted to this rather than trusted to it. Not private: `LocalizationTests`
+    /// checks every caption against it in both languages.
+    static let labelWidth: CGFloat = barWidth - progressWidth - 6 - labelX - 6
+
+    /// A bar's caption, set and fitted the way `show(name:duration:color:icon:)` draws
+    /// it.
+    static func makeLabel(_ text: String) -> SKLabelNode {
+        let label = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        label.text = text
+        label.fontSize = 12
+        label.fontColor = UIColor(white: 0.9, alpha: 0.9)
+        label.verticalAlignmentMode = .center
+        label.horizontalAlignmentMode = .left
+        UITheme.fitLabel(label, toWidth: labelWidth)
+        return label
+    }
 
     /// Ordered rather than keyed: the slot each bar occupies is its index, so the stack
     /// can be re-flowed when one of them expires.
@@ -52,6 +75,24 @@ final class PowerUpTimerHUD {
         set { layer.isPaused = newValue }
     }
 
+    /// Rate the countdowns run at. Driven by the gameplay clock's time scale.
+    ///
+    /// The expiries the bars stand for run on `gameContentNode`, whose `speed` is the
+    /// hit-stop scale; at a fixed 1 the bars kept draining through every hit-stop and
+    /// emptied early — a fraction of a second per heavy kill, most of one across a
+    /// lightning chain or a boss's death.
+    var speed: CGFloat {
+        get { layer.speed }
+        set { layer.speed = newValue }
+    }
+
+    /// Whether the stack is out of sight. The bars keep counting down while hidden, so
+    /// they come back showing the time their power-ups really have left.
+    var isHidden: Bool {
+        get { layer.isHidden }
+        set { layer.isHidden = newValue }
+    }
+
     func install(on parent: SKNode) {
         layer.removeFromParent()
         parent.addChild(layer)
@@ -59,6 +100,7 @@ final class PowerUpTimerHUD {
 
     // MARK: - Bars
 
+    /// - Parameter icon: the bar's caption, already localized.
     func show(name: String, duration: TimeInterval, color: UIColor, icon: String) {
         // Remove existing timer for this powerup if any
         remove(named: name)
@@ -75,7 +117,7 @@ final class PowerUpTimerHUD {
         layout(animated: false)
 
         // Background - minimal and subtle
-        let bgWidth: CGFloat = 150
+        let bgWidth = Self.barWidth
         let background = SKShapeNode(rectOf: CGSize(width: bgWidth, height: Self.barHeight), cornerRadius: 7)
         background.fillColor = UIColor(white: 0.05, alpha: 0.6)
         background.strokeColor = UIColor(white: 0.4, alpha: 0.3)
@@ -83,18 +125,12 @@ final class PowerUpTimerHUD {
         background.position = CGPoint(x: bgWidth / 2, y: 0)
         container.addChild(background)
 
-        // Icon label - smaller and more subtle
-        let iconLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        iconLabel.text = icon
-        iconLabel.fontSize = 12
-        iconLabel.fontColor = UIColor(white: 0.9, alpha: 0.9)
-        iconLabel.verticalAlignmentMode = .center
-        iconLabel.horizontalAlignmentMode = .left
-        iconLabel.position = CGPoint(x: 7, y: 0.5)
+        let iconLabel = Self.makeLabel(icon)
+        iconLabel.position = CGPoint(x: Self.labelX, y: 0.5)
         container.addChild(iconLabel)
 
         // Progress bar container (on the right side) - smaller
-        let barWidth: CGFloat = 55
+        let barWidth = Self.progressWidth
         let barHeight: CGFloat = 7
         let barX: CGFloat = bgWidth - barWidth - 6
 
@@ -162,12 +198,7 @@ final class PowerUpTimerHUD {
         }
     }
 
-    /// Immediately removes all bars without animation.
-    func hideAll() {
-        for entry in bars {
-            entry.node.removeAllActions()
-            entry.node.removeFromParent()
-        }
-        bars.removeAll()
-    }
+    // No hideAll(). Its only callers were the two boss spawns, and deleting the bars
+    // there lost them for good: a shield or magnet still running when an endless boss
+    // round ended came back without a bar. They are hidden instead — see `isHidden`.
 }

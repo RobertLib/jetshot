@@ -8,7 +8,7 @@ import SpriteKit
 @testable import jetshot
 
 /// The figure block — score, personal best, best chain — has to sit centred between the
-/// title above it and the primary button below it, on every results screen.
+/// title's hairline above it and the primary button below it, on every results screen.
 ///
 /// Two things used to break that, and both were invisible in the source:
 ///
@@ -23,8 +23,9 @@ import SpriteKit
 /// asserting on the laid-out positions would have passed throughout the bug.
 final class ResultsPanelCentringTests: XCTestCase {
 
-    /// Long enough for the slowest figure-block entrance to finish (it waits 1.9s on the
-    /// victory screen, then animates for 0.3s).
+    /// Long enough for the slowest figure-block entrance to finish (on the victory
+    /// screen it starts 1.7s in and runs for 0.35s), and for the score to finish
+    /// counting up.
     private let settle: TimeInterval = 3.0
 
     @MainActor
@@ -41,20 +42,18 @@ final class ResultsPanelCentringTests: XCTestCase {
         return view
     }
 
-    /// The results panel, told apart from its glow twin by the fact that the glow is a
-    /// `copy()` taken before any content was added and so has no labels under it.
+    /// The results column. Found by name: it is a plain node holding the rows, with no
+    /// box drawn round it to recognise it by.
     @MainActor
-    private func panel(in scene: SKScene) -> SKShapeNode? {
-        return scene.children
-            .compactMap { $0 as? SKShapeNode }
-            .first { $0.children.contains { $0 is SKLabelNode } }
+    private func panel(in scene: SKScene) -> SKNode? {
+        return scene.childNode(withName: ResultsCard.nodeName)
     }
 
     /// The figure block, by name. Structural matching is not enough: the victory screen
     /// has two more label-only containers above it — the body copy — and picking the
     /// first of them measured the wrong slot entirely.
     @MainActor
-    private func figureBlock(in panel: SKShapeNode) -> SKNode? {
+    private func figureBlock(in panel: SKNode) -> SKNode? {
         return panel.childNode(withName: "figureBlock")
     }
 
@@ -64,7 +63,7 @@ final class ResultsPanelCentringTests: XCTestCase {
     /// child that is. It is the title on three of these screens and a line of body copy
     /// on the fourth.
     @MainActor
-    private func edgeAbove(_ block: SKNode, in panel: SKShapeNode) -> CGFloat? {
+    private func edgeAbove(_ block: SKNode, in panel: SKNode) -> CGFloat? {
         let top = block.calculateAccumulatedFrame().maxY
         return panel.children
             .filter { $0 !== block }
@@ -73,8 +72,8 @@ final class ResultsPanelCentringTests: XCTestCase {
             .min()
     }
 
-    /// A button's own outline, not its accumulated frame — the shadow child hangs 2pt
-    /// below it and the glow further still, neither of which is an edge anyone sees.
+    /// A button's own outline, not its accumulated frame — the light brackets on its
+    /// corners spill a few points past it, which is not an edge anyone reads.
     @MainActor
     private func outline(of button: SKShapeNode) -> (top: CGFloat, bottom: CGFloat)? {
         guard let box = button.path?.boundingBoxOfPath else { return nil }
@@ -94,7 +93,7 @@ final class ResultsPanelCentringTests: XCTestCase {
         defer { view.presentScene(nil) }
 
         guard let panel = panel(in: scene) else {
-            return XCTFail("\(label): no results panel", file: file, line: line)
+            return XCTFail("\(label): no results column", file: file, line: line)
         }
         guard let block = figureBlock(in: panel) else {
             return XCTFail("\(label): no figure block", file: file, line: line)

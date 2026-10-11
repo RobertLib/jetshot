@@ -64,35 +64,13 @@ enum FormationPattern {
 
         case .diamond:
             // Diamond/rhombus shape
-            if count == 1 {
-                positions.append(CGPoint(x: centerX, y: startY))
-            } else if count == 3 {
+            if count == 3 {
                 // Simple diamond with 3
                 positions.append(CGPoint(x: centerX, y: startY)) // Top
                 positions.append(CGPoint(x: centerX - spacing, y: startY - spacing)) // Left
                 positions.append(CGPoint(x: centerX + spacing, y: startY - spacing)) // Right
             } else {
-                // Larger diamond
-                let layers = (count + 3) / 4
-                var index = 0
-                for layer in 0..<layers {
-                    if layer == 0 {
-                        // Top point
-                        positions.append(CGPoint(x: centerX, y: startY))
-                        index += 1
-                    } else {
-                        // Sides
-                        let layerY = startY - CGFloat(layer) * spacing
-                        let layerWidth = CGFloat(layer) * spacing
-                        positions.append(CGPoint(x: centerX - layerWidth, y: layerY))
-                        index += 1
-                        if index < count {
-                            positions.append(CGPoint(x: centerX + layerWidth, y: layerY))
-                            index += 1
-                        }
-                    }
-                    if index >= count { break }
-                }
+                positions = Self.diamondPositions(count: count, centerX: centerX, startY: startY, spacing: spacing)
             }
 
         case .box:
@@ -126,57 +104,80 @@ enum FormationPattern {
             }
 
         case .cross:
-            // Cross/plus formation
-            if count == 1 {
-                positions.append(CGPoint(x: centerX, y: startY))
-            } else if count <= 5 {
-                // Simple cross with center
-                positions.append(CGPoint(x: centerX, y: startY)) // Center
-                if count > 1 {
-                    positions.append(CGPoint(x: centerX, y: startY + spacing)) // Top
-                }
-                if count > 2 {
-                    positions.append(CGPoint(x: centerX, y: startY - spacing)) // Bottom
-                }
-                if count > 3 {
-                    positions.append(CGPoint(x: centerX - spacing, y: startY)) // Left
-                }
-                if count > 4 {
-                    positions.append(CGPoint(x: centerX + spacing, y: startY)) // Right
-                }
-            } else {
-                // Extended cross
-                let armLength = (count - 1) / 4
-                positions.append(CGPoint(x: centerX, y: startY)) // Center
-                var index = 1
-
-                // Vertical arm (up)
-                for i in 1...armLength {
-                    if index >= count { break }
-                    positions.append(CGPoint(x: centerX, y: startY + CGFloat(i) * spacing))
-                    index += 1
-                }
-                // Vertical arm (down)
-                for i in 1...armLength {
-                    if index >= count { break }
-                    positions.append(CGPoint(x: centerX, y: startY - CGFloat(i) * spacing))
-                    index += 1
-                }
-                // Horizontal arm (left)
-                for i in 1...armLength {
-                    if index >= count { break }
-                    positions.append(CGPoint(x: centerX - CGFloat(i) * spacing, y: startY))
-                    index += 1
-                }
-                // Horizontal arm (right)
-                for i in 1...armLength {
-                    if index >= count { break }
-                    positions.append(CGPoint(x: centerX + CGFloat(i) * spacing, y: startY))
-                    index += 1
-                }
-            }
+            positions = Self.crossPositions(count: count, centerX: centerX, startY: startY, spacing: spacing)
         }
 
+        return positions
+    }
+
+    /// A diamond for any count: rings of lattice points one, two, three steps out from a
+    /// centre, filled from the inside out. The centre is used only for an odd count, so
+    /// what is left for the outermost ring is always even and goes in mirrored pairs —
+    /// its widest points first, then its top and bottom tips, then along its edges — and
+    /// the silhouette stays a diamond, symmetric about the vertical. The top slot sits at
+    /// `startY`, as the old layout's did.
+    ///
+    /// The old layout grew one layer per four enemies but put only two slots in each, so
+    /// it laid out roughly half the formation; the spawner places one enemy per slot, so
+    /// a 14-strong diamond arrived as 7 while the level still waited on the full count.
+    private static func diamondPositions(count: Int, centerX: CGFloat, startY: CGFloat, spacing: CGFloat) -> [CGPoint] {
+        guard count > 0 else { return [] }
+
+        var cells: [(dx: Int, dy: Int)] = count % 2 == 1 ? [(0, 0)] : []
+        var ring = 1
+        while cells.count < count {
+            var pairs: [[(dx: Int, dy: Int)]] = [[(ring, 0), (-ring, 0)], [(0, ring), (0, -ring)]]
+            for step in 1..<ring {
+                pairs.append([(ring - step, step), (step - ring, step)])
+                pairs.append([(ring - step, -step), (step - ring, -step)])
+            }
+            for pair in pairs where cells.count < count {
+                cells.append(contentsOf: pair)
+            }
+            ring += 1
+        }
+
+        let rowStep = spacing * 0.8
+        let top = cells.map(\.dy).max() ?? 0
+        return cells.map {
+            CGPoint(x: centerX + CGFloat($0.dx) * spacing, y: startY - CGFloat(top - $0.dy) * rowStep)
+        }
+    }
+
+    /// A centre and four arms that share the rest round-robin — up, down, left, right,
+    /// the order the small cross always filled in — so every count gets exactly its
+    /// slots. Up to five this is the old small cross unchanged.
+    ///
+    /// The old extended cross gave every arm `(count - 1) / 4` slots and dropped the
+    /// remainder: an 8-strong cross laid out 5. It also kept the centre at `startY`, so a
+    /// long up arm ran off the top of the screen; the centre now drops to keep the top
+    /// of that arm one row above `startY`, and vertical arms past three slots close up
+    /// rather than reach down into the player's space. The horizontal arms are left to
+    /// `fitHorizontally`.
+    private static func crossPositions(count: Int, centerX: CGFloat, startY: CGFloat, spacing: CGFloat) -> [CGPoint] {
+        guard count > 0 else { return [] }
+
+        var arms = [0, 0, 0, 0] // up, down, left, right
+        for index in 0..<(count - 1) {
+            arms[index % 4] += 1
+        }
+
+        let longestVertical = max(arms[0], arms[1])
+        let rowStep = longestVertical > 3 ? spacing * 3 / CGFloat(longestVertical) : spacing
+        let centreY = startY - max(0, CGFloat(arms[0]) * rowStep - spacing)
+
+        var positions = [CGPoint(x: centerX, y: centreY)]
+        let directions: [(dx: CGFloat, dy: CGFloat)] = [(0, 1), (0, -1), (-1, 0), (1, 0)]
+        for (arm, length) in arms.enumerated() where length > 0 {
+            let direction = directions[arm]
+            let step = direction.dy == 0 ? spacing : rowStep
+            for slot in 1...length {
+                positions.append(CGPoint(
+                    x: centerX + direction.dx * CGFloat(slot) * step,
+                    y: centreY + direction.dy * CGFloat(slot) * step
+                ))
+            }
+        }
         return positions
     }
 }
@@ -320,8 +321,9 @@ class FormationManager {
     /// (.bomber, .eliteGuard, .commander, .spinner, .scout), so late-game formations
     /// were spawning the same basic enemy as the early ones and paying out its 25
     /// points instead of the intended value.
-    func spawnFormation(pattern: FormationPattern, types: [EnemyType], attackDelay: TimeInterval, onEnemyComplete: @escaping () -> Void) {
-        guard let scene = scene, !types.isEmpty else { return }
+    @discardableResult
+    func spawnFormation(pattern: FormationPattern, types: [EnemyType], attackDelay: TimeInterval, onEnemyComplete: @escaping () -> Void) -> Formation? {
+        guard let scene = scene, !types.isEmpty else { return nil }
 
         let centerX = scene.size.width / 2
         let startY = scene.size.height - 150  // Lower position - visible on screen
@@ -335,8 +337,9 @@ class FormationManager {
         var enemies: [Enemy] = []
 
         for (index, _) in positions.enumerated() {
-            // `positions` is derived from types.count, but patterns are free to round
-            // their layout, so index defensively rather than trusting the counts match.
+            // Every pattern lays out exactly `types.count` slots (`FormationLayoutTests`
+            // pins that: the spawner places one enemy per slot, so a short layout used to
+            // drop enemies), but index defensively rather than trusting the counts match.
             let type = index < types.count ? types[index] : types[types.count - 1]
             let enemy = Enemy(sceneSize: scene.size, scene: scene, type: type)
 
@@ -412,6 +415,7 @@ class FormationManager {
         )
 
         formations.append(formation)
+        return formation
     }
 
     func update(currentTime: TimeInterval) {
@@ -433,7 +437,8 @@ class Formation {
     private var attackDelay: TimeInterval
     private weak var scene: SKScene?
     private var formationStartTime: TimeInterval?
-    private var hasAttacked: Bool = false
+    /// Set once every member has taken its slot and the attack has begun.
+    private(set) var hasAttacked: Bool = false
     private var onEnemyComplete: (() -> Void)?
 
     var isDestroyed: Bool {

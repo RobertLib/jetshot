@@ -1,6 +1,6 @@
 # Privacy Policy — Jetshot
 
-*Last updated: August 29, 2026*
+*Last updated: October 12, 2026*
 
 ## In short
 
@@ -21,16 +21,18 @@ own frameworks. There is no advertising identifier and no tracking of any sort.
 subscriptions.
 
 **Where your progress is stored.** Completed levels, level scores, star ratings,
-weapon loadouts and your endless-run records are stored on your device using the
-system UserDefaults store.
+weapon loadouts, earned medals and your endless-run records are stored on your
+device using the system UserDefaults store. A progress reset counter
+(`progressEpoch`) is also stored to prevent an older copy on another device from
+restoring erased progress.
 
-**iCloud synchronization.** The same five values are mirrored to Apple's iCloud
-Key-Value Storage so that your progress follows you between your own devices and
-survives reinstalling the app. That data lives in your personal iCloud account,
-is readable only on devices signed in with your Apple ID, and I have no access to
-it — there is no server of mine involved at any point. If you would rather keep
-your progress on one device only, turn iCloud Drive off for Jetshot in Settings →
-your name → iCloud. The game works normally without it.
+**iCloud synchronization.** All the progress values above, including medals and
+the reset counter, are mirrored to Apple's iCloud Key-Value Storage so that your
+progress follows you between your own devices and survives reinstalling the app.
+That data lives in your personal iCloud account, is readable only on devices
+signed in with your Apple ID, and I have no access to it — there is no server of
+mine involved at any point. With no iCloud account signed in, the game works
+normally using local storage.
 
 **Everything else runs offline.** All content — levels, graphics, music and sound
 — ships inside the app. Apart from the iCloud sync above, the app makes no network
@@ -43,10 +45,11 @@ feedback and audio playback.
 **Children.** The app is suitable for all ages. Because it collects no data, no
 data about children is created either.
 
-**Deleting your data.** RESET on the level-select screen erases your progress from
-the device and from iCloud. Deleting the app removes the local copy; the iCloud
-key-value data is removed with the app's iCloud data in Settings → your name →
-iCloud → Manage Storage.
+**Deleting your data.** RESET on the level-select screen erases completed levels,
+scores, star ratings, weapon loadouts, medals and endless records from the device
+and from iCloud. The reset counter is retained and incremented so that erased
+progress cannot return from another device. Deleting the app removes the local
+copy; it does not by itself erase your progress in iCloud.
 
 ## Changes to this policy
 

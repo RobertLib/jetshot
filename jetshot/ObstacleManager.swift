@@ -27,9 +27,13 @@ class ObstacleManager {
     private var waveStartTime: TimeInterval = 0
     private var hasStarted: Bool = false
 
-    // Tracking last spawn positions to avoid clustering
+    // Tracking last spawn positions to avoid clustering. How far apart "similar x" is
+    // comes from the wave's own `minSpacing`; this used to be a fixed 150 pt here, and
+    // every authored spacing (90–200) was ignored.
+    //
+    // Note the window is shorter than every authored `spawnInterval` (1.8 s and up), so
+    // as tuned the check only bites for a wave that spawns faster than that.
     private var lastSpawnPositions: [(x: CGFloat, time: TimeInterval)] = []
-    private let minHorizontalSpacing: CGFloat = 150 // Minimum horizontal distance between obstacles
     private let minTimeSpacing: TimeInterval = 1.5 // Minimum time between obstacles at similar x positions
 
     init(scene: SKScene, waves: [ObstacleWave]) {
@@ -74,13 +78,14 @@ class ObstacleManager {
         // Check if enough time has passed since last spawn
         if currentTime - lastSpawnTime >= currentWave.spawnInterval {
             let obstacleType = currentWave.obstacles[obstaclesSpawnedInWave]
-            spawnObstacle(type: obstacleType, scene: scene, currentTime: currentTime)
+            spawnObstacle(type: obstacleType, scene: scene, currentTime: currentTime,
+                          minSpacing: currentWave.minSpacing)
             lastSpawnTime = currentTime
             obstaclesSpawnedInWave += 1
         }
     }
 
-    private func spawnObstacle(type: ObstacleType, scene: SKScene, currentTime: TimeInterval) {
+    private func spawnObstacle(type: ObstacleType, scene: SKScene, currentTime: TimeInterval, minSpacing: CGFloat) {
         let sceneWidth = scene.size.width
         let sceneHeight = scene.size.height
 
@@ -102,7 +107,7 @@ class ObstacleManager {
             let tooClose = lastSpawnPositions.contains { lastPos in
                 let distance = abs(spawnX - lastPos.x)
                 let timeDiff = currentTime - lastPos.time
-                return distance < minHorizontalSpacing && timeDiff < minTimeSpacing
+                return distance < minSpacing && timeDiff < minTimeSpacing
             }
 
             if !tooClose {
@@ -139,22 +144,24 @@ class ObstacleManager {
     // `gameScene.gameContentNode`, so the enumeration matched nothing.
 
 
-    /// Adds more waves to a manager that may already have drained its queue.
+    /// Drops whatever is still queued and starts `newWaves` from now.
     ///
     /// For endless mode, which has no authored level to draw a fixed hazard track from —
-    /// `GameScene` tops this up a round at a time so the hazards keep escalating with the
-    /// run instead of running out. Same shape, and the same `waveStartTime` repair, as
-    /// `EnemyManager.appendWaves(_:currentTime:)`.
-    func appendWaves(_ newWaves: [ObstacleWave], currentTime: TimeInterval) {
-        guard !newWaves.isEmpty else { return }
+    /// `GameScene` hands over a fresh track every round so the hazards escalate with the
+    /// run. This used to *append*, which queued each round's walls behind the unfinished
+    /// track of the rounds before it; only a boss round's `stopSpawning()` ever cleared
+    /// that backlog. Same reasoning as `AsteroidManager.replaceWaves(_:currentTime:)`.
+    func replaceWaves(_ newWaves: [ObstacleWave], currentTime: TimeInterval) {
+        waves = newWaves
+        currentWaveIndex = 0
+        obstaclesSpawnedInWave = 0
+        waveStartTime = currentTime
+        lastSpawnTime = currentTime
+    }
 
-        let hadFinished = currentWaveIndex >= waves.count
-        waves.append(contentsOf: newWaves)
-
-        if hadFinished {
-            waveStartTime = currentTime
-            lastSpawnTime = currentTime
-        }
+    /// Waves not yet finished spawning, for `jetshotTests`.
+    var queuedWaveCount: Int {
+        return max(0, waves.count - currentWaveIndex)
     }
 
     func stopSpawning() {

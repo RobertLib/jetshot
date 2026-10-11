@@ -154,8 +154,13 @@ final class LevelConfigTests: XCTestCase {
             let config = LevelManager.shared.getLevelConfig(for: level)
 
             for (index, wave) in config.waves.enumerated() where !wave.isFormation {
+                // Swarm waves (meteors, kamikazes) have their own lower floor; see
+                // `LevelManager.isSwarmWave(_:)`.
+                let floor = LevelManager.isSwarmWave(wave)
+                    ? LevelManager.swarmMinSpawnInterval
+                    : GameConfiguration.minSpawnInterval
                 XCTAssertGreaterThanOrEqual(
-                    wave.spawnInterval, GameConfiguration.minSpawnInterval,
+                    wave.spawnInterval, floor,
                     "level \(level) wave \(index) spawns below the readable floor"
                 )
                 XCTAssertGreaterThanOrEqual(

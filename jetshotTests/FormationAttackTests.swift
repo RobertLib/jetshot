@@ -22,12 +22,14 @@ final class FormationAttackTests: XCTestCase {
     private let timerFiringTypes: [EnemyType] = [
         .basic, .fast, .heavy, .zigzag, .striker, .sniper, .tank,
         .formation, .scout, .eliteGuard, .bomber, .spinner, .commander,
-        .flanker, .ghost, .shield, .splitter, .laser, .bouncer, .teleporter
+        .flanker, .ghost, .shield, .splitter, .bouncer, .teleporter
     ]
 
-    /// Types that drive their own fire from their movement routine instead.
+    /// Types that drive their own fire from their movement routine instead. The laser
+    /// fires only from the stops in its descent: on the timer as well, it could start a
+    /// beam mid-flight.
     private let selfDrivenTypes: [EnemyType] = [
-        .kamikaze, .turret, .turretSpiral, .mine, .meteorSwarm, .vortex, .mirror
+        .kamikaze, .turret, .turretSpiral, .mine, .meteorSwarm, .vortex, .mirror, .laser
     ]
 
     @MainActor

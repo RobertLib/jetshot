@@ -215,6 +215,23 @@ class CoinManager {
         isBossFight = active
     }
 
+    /// Coins still allowed to spawn before the cap stops the spawner.
+    var remainingAllowance: Int {
+        return max(0, targetCoinsForLevel - totalCoinsSpawned)
+    }
+
+    /// Grants a fresh level's worth of coins on top of what has already spawned.
+    ///
+    /// For endless mode, which is one "level" that never ends. The cap above is sized
+    /// for a campaign level and was applied to the whole run, so coins dried up 20–40 s
+    /// in and never came back — which also made the MAGNET CORE perk, offered after the
+    /// first boss, a card with nothing left to pull. `GameScene` calls this once per
+    /// round. Unused allowance is not carried over, so a boss round (no coins) does not
+    /// bank a flood for the round after it.
+    func refreshAllowance() {
+        targetCoinsForLevel = totalCoinsSpawned + Int.random(in: spawnConfig.minCoins...spawnConfig.maxCoins)
+    }
+
     // Get total coins that spawned in this level
     func getTotalCoinsForLevel() -> Int {
         return totalCoinsSpawned

@@ -6,586 +6,239 @@
 //
 
 import SpriteKit
+import simd
 
-// Boss shape types
-enum BossShape {
-    case hexagonal
-    case diamond
-    case triangle
-    case star
-    case pentagon
-    case cross
-    case octagon
-    case arrow
-}
+/// A piece of a boss's hardware the player can shoot off: a gun pod, a satellite, a
+/// brood bay, a segment of the serpent.
+///
+/// It is a hit volume and a health counter, nothing more — the piece itself is drawn by
+/// the boss's wireframe (`BossArt`), which also reports where it has turned to each frame
+/// so the volume can follow. Every round that lands on a part still comes off the boss's
+/// own health too, so taking the guns off never makes the fight longer: it only makes
+/// the boss fire less.
+final class BossPart: SKNode {
+    weak var boss: Boss?
+    let index: Int
+    private(set) var health: Int
 
-// Boss configuration for each level
-struct BossConfig {
-    let maxHealth: Int
-    let movementSpeed: TimeInterval
-    let size: CGFloat
-    let attackPatterns: [BossAttackPattern]
-    let color: UIColor
-    let strokeColor: UIColor
-    let points: Int
-    let shape: BossShape
+    var isDestroyed: Bool { health <= 0 }
 
-    /// Each arm's `attackPatterns` runs lightest to heaviest, and that ordering is
-    /// load-bearing rather than cosmetic: `BossPhaseRules.patternCount(forPhase:
-    /// totalPatterns:)` takes a *prefix* of this list, so a boss opens with the front of
-    /// its array and only earns the back of it once it is wounded. Append a heavy attack
-    /// in the middle and it will show up in the opening act.
-    ///
-    /// The lists also differ per milestone, which they did not use to. Every arm from
-    /// level 8 to level 50 declared the identical fourteen patterns, so thirty-five of
-    /// the fifty bosses in the game were the same fight with a longer health bar — the
-    /// single largest piece of repetition left in the game, sitting at the climax of
-    /// every level. Each is now a signature of eight to fifteen patterns with a
-    /// recognisable bias: level 20 hunts (aimed, homing, sweeps), level 25 floods the
-    /// screen from the sides (zigzag, cascade, rain), level 30 is a laser platform, and
-    /// only level 50 draws on effectively everything.
-    static func config(for level: Int) -> BossConfig {
-        switch level {
-        case 1:
-            return BossConfig(
-                maxHealth: 20,
-                movementSpeed: 3.0,
-                size: 80,
-                attackPatterns: [.straightShot, .doubleShot],
-                color: UIColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.5, blue: 0.5, alpha: 1.0),
-                points: 500,
-                shape: .hexagonal
-            )
-        case 2:
-            return BossConfig(
-                maxHealth: 35,
-                movementSpeed: 2.5,
-                size: 90,
-                attackPatterns: [.straightShot, .tripleShot, .spread],
-                color: UIColor(red: 0.6, green: 0.2, blue: 0.6, alpha: 1.0),
-                strokeColor: UIColor(red: 0.9, green: 0.5, blue: 0.9, alpha: 1.0),
-                points: 750,
-                shape: .triangle
-            )
-        case 3:
-            return BossConfig(
-                maxHealth: 50,
-                movementSpeed: 2.2,
-                size: 100,
-                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .circularBarrage],
-                color: UIColor(red: 0.2, green: 0.3, blue: 0.7, alpha: 1.0),
-                strokeColor: UIColor(red: 0.5, green: 0.6, blue: 1.0, alpha: 1.0),
-                points: 1000,
-                shape: .diamond
-            )
-        case 4:
-            return BossConfig(
-                maxHealth: 70,
-                movementSpeed: 2.0,
-                size: 110,
-                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .spiral, .cascade, .circularBarrage],
-                color: UIColor(red: 0.7, green: 0.4, blue: 0.1, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.7, blue: 0.4, alpha: 1.0),
-                points: 1250,
-                shape: .pentagon
-            )
-        case 5:
-            return BossConfig(
-                maxHealth: 90,
-                movementSpeed: 1.8,
-                size: 120,
-                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .wave, .spiral, .cascade, .doubleSpiral, .circularBarrage],
-                color: UIColor(red: 0.1, green: 0.6, blue: 0.3, alpha: 1.0),
-                strokeColor: UIColor(red: 0.4, green: 1.0, blue: 0.6, alpha: 1.0),
-                points: 1500,
-                shape: .star
-            )
-        case 6:
-            return BossConfig(
-                maxHealth: 110,
-                movementSpeed: 1.6,
-                size: 130,
-                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .spiral, .burst, .cascade, .doubleSpiral, .circularBarrage, .barrageRain],
-                color: UIColor(red: 0.5, green: 0.1, blue: 0.5, alpha: 1.0),
-                strokeColor: UIColor(red: 0.9, green: 0.4, blue: 0.9, alpha: 1.0),
-                points: 1750,
-                shape: .cross
-            )
-        case 7:
-            return BossConfig(
-                maxHealth: 135,
-                movementSpeed: 1.5,
-                size: 140,
-                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .spiral, .burst, .zigzagPattern, .cascade, .homing, .doubleSpiral, .circularBarrage, .barrageRain],
-                color: UIColor(red: 0.7, green: 0.1, blue: 0.1, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 1.0),
-                points: 2000,
-                shape: .octagon
-            )
-        case 8:
-            return BossConfig(
-                maxHealth: 160,
-                movementSpeed: 1.3,
-                size: 150,
-                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .burst, .homing, .sectorSweep, .laser],
-                color: UIColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0),
-                points: 2500,
-                shape: .arrow
-            )
-        case 10:
-            return BossConfig(
-                maxHealth: 200,
-                movementSpeed: 1.2,
-                size: 155,
-                attackPatterns: [.tripleShot, .spread, .wave, .spiral, .burst, .doubleSpiral, .sectorSweep, .circularBarrage],
-                color: UIColor(red: 0.0, green: 0.2, blue: 0.4, alpha: 1.0),
-                strokeColor: UIColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1.0),
-                points: 3000,
-                shape: .star
-            )
-        case 15:
-            return BossConfig(
-                maxHealth: 250,
-                movementSpeed: 1.1,
-                size: 160,
-                attackPatterns: [.doubleShot, .tripleShot, .spread, .wave, .burst, .cascade, .circularBarrage, .barrageRain],
-                color: UIColor(red: 0.3, green: 0.0, blue: 0.5, alpha: 1.0),
-                strokeColor: UIColor(red: 0.7, green: 0.3, blue: 1.0, alpha: 1.0),
-                points: 3500,
-                shape: .octagon
-            )
-        case 20:
-            return BossConfig(
-                maxHealth: 300,
-                movementSpeed: 1.0,
-                size: 165,
-                attackPatterns: [.tripleShot, .spread, .aimed, .wave, .zigzagPattern, .homing, .sectorSweep, .laser],
-                color: UIColor(red: 0.5, green: 0.5, blue: 0.0, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 1.0, blue: 0.3, alpha: 1.0),
-                points: 4000,
-                shape: .diamond
-            )
-        case 25:
-            return BossConfig(
-                maxHealth: 350,
-                movementSpeed: 1.0,
-                size: 170,
-                attackPatterns: [.doubleShot, .tripleShot, .spread, .wave, .zigzagPattern, .cascade, .doubleSpiral, .barrageRain],
-                color: UIColor(red: 0.0, green: 0.4, blue: 0.4, alpha: 1.0),
-                strokeColor: UIColor(red: 0.3, green: 1.0, blue: 1.0, alpha: 1.0),
-                points: 4500,
-                shape: .cross
-            )
-        case 30:
-            return BossConfig(
-                maxHealth: 400,
-                movementSpeed: 1.0,
-                size: 175,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .burst, .sectorSweep, .circularBarrage, .laser],
-                color: UIColor(red: 0.5, green: 0.2, blue: 0.0, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.6, blue: 0.2, alpha: 1.0),
-                points: 5000,
-                shape: .arrow
-            )
-        case 35:
-            return BossConfig(
-                maxHealth: 450,
-                movementSpeed: 1.0,
-                size: 180,
-                attackPatterns: [.tripleShot, .spread, .wave, .burst, .cascade, .doubleSpiral, .circularBarrage, .barrageRain],
-                color: UIColor(red: 0.6, green: 0.0, blue: 0.3, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.3, blue: 0.7, alpha: 1.0),
-                points: 5500,
-                shape: .hexagonal
-            )
-        case 40:
-            return BossConfig(
-                maxHealth: 500,
-                movementSpeed: 1.0,
-                size: 185,
-                attackPatterns: [.tripleShot, .spread, .aimed, .spiral, .zigzagPattern, .homing, .sectorSweep, .barrageRain, .laser],
-                color: UIColor(red: 0.2, green: 0.5, blue: 0.2, alpha: 1.0),
-                strokeColor: UIColor(red: 0.5, green: 1.0, blue: 0.5, alpha: 1.0),
-                points: 6000,
-                shape: .pentagon
-            )
-        case 45:
-            return BossConfig(
-                maxHealth: 550,
-                movementSpeed: 1.0,
-                size: 190,
-                attackPatterns: [.tripleShot, .spread, .wave, .spiral, .burst, .cascade, .homing, .doubleSpiral, .circularBarrage, .laser],
-                color: UIColor(red: 0.4, green: 0.0, blue: 0.6, alpha: 1.0),
-                strokeColor: UIColor(red: 0.8, green: 0.4, blue: 1.0, alpha: 1.0),
-                points: 6500,
-                shape: .triangle
-            )
-        case 50:
-            return BossConfig(
-                maxHealth: 600,
-                movementSpeed: 1.0,
-                size: 200,
-                attackPatterns: [.straightShot, .tripleShot, .spread, .aimed, .wave, .spiral, .burst, .zigzagPattern, .cascade, .homing, .doubleSpiral, .sectorSweep, .circularBarrage, .barrageRain, .laser],
-                color: UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0),
-                strokeColor: UIColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0),
-                points: 7500,
-                shape: .star
-            )
-        default:
-            // Interpolate for levels between milestones
-            let milestones = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-            let lower = milestones.last(where: { $0 <= level }) ?? 1
-            return config(for: lower)
-        }
-    }
-}
-
-// Boss attack patterns.
-//
-// `nonisolated` like `PhysicsCategory` and `ExplosionSize`: a bare enum of cases carries
-// no state and has no business on the main actor. `BossPhaseRules` slices these lists per
-// phase and is pure, so it cannot see a main-actor type — and nor can `jetshotTests`.
-//
-// The order of the cases is not load-bearing, but the order *within each config's
-// `attackPatterns` array* is: see `BossPhaseRules.patternCount(forPhase:totalPatterns:)`,
-// which takes a prefix and so expects each list to run lightest to heaviest.
-nonisolated enum BossAttackPattern {
-    case straightShot   // Single bullet straight down
-    case doubleShot     // Two bullets side by side
-    case tripleShot     // Three bullets
-    case spread         // Wide spread of bullets
-    case aimed          // Aimed at player position
-    case spiral         // Rotating spiral pattern
-    case wave           // Wave pattern
-    case burst          // Quick burst of bullets
-    case homing         // Slower bullets that track player
-    case laser          // Brief warning then laser beam
-
-    // NEW HARDER ATTACK PATTERNS
-    case circularBarrage // Dense circle of bullets around boss
-    case cascade         // Cascading bullets falling down from left to right
-    case doubleSpiral    // Two spirals rotating in opposite directions
-    case barrageRain     // Dense rain of bullets across screen width
-    case zigzagPattern   // Zigzag pattern of bullets
-    case sectorSweep     // Sweeping sector fire (rotating barrage)
-}
-
-class Boss: SKShapeNode {
-    private var currentHealth: Int
-    private let config: BossConfig
-    private var healthBar: SKShapeNode!
-    private var healthBarFill: SKShapeNode!
-    private var isActive: Bool = false
-    private var movementAction: SKAction?
-
-    // Damage visual effects
-    private var damageLevel: Int = 0  // 0 = no damage, 1-3 = increasing damage
-    // No `damageParts` array here on purpose. It used to collect every chunk and scorch
-    // mark and was never read back — write-only state that just held strong references.
-    // Both kinds of node already retire themselves: chunks end their fly-off with
-    // removeFromParent(), and scorch marks are children of the boss.
-    private var cracksLayer: SKNode?
-    // No `lastDamageEffectHealth` either, for the same reason: it was set once in init
-    // and never read. Re-application of the damage visuals is already gated by
-    // `damageLevel` in `applyDamageVisuals(healthPercent:)`.
-
-    init(config: BossConfig, sceneSize: CGSize) {
-        self.config = config
-        self.currentHealth = config.maxHealth
-
+    init(index: Int, radius: CGFloat, health: Int) {
+        self.index = index
+        self.health = max(1, health)
         super.init()
+        name = "bossPart"
 
-        setupBossShape()
-        setupHealthBar(sceneSize: sceneSize)
-        self.name = "boss"
-
-        // Position at top center
-        self.position = CGPoint(x: sceneSize.width / 2, y: sceneSize.height + config.size)
-        self.zPosition = 10
-
-        // Physics
-        let physicsBody = SKPhysicsBody(circleOfRadius: config.size * 0.4)
-        physicsBody.categoryBitMask = PhysicsCategory.enemy
-        physicsBody.contactTestBitMask = PhysicsCategory.bullet
-        physicsBody.collisionBitMask = PhysicsCategory.none
-        physicsBody.isDynamic = false
-        self.physicsBody = physicsBody
-
-        // Initialize cracks layer
-        let cracks = SKNode()
-        cracks.zPosition = 1
-        cracksLayer = cracks
-        addChild(cracks)
+        let body = SKPhysicsBody(circleOfRadius: radius)
+        body.categoryBitMask = PhysicsCategory.enemy
+        body.contactTestBitMask = PhysicsCategory.bullet
+        body.collisionBitMask = PhysicsCategory.none
+        body.isDynamic = false
+        physicsBody = body
     }
 
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private func createShapePath(for shape: BossShape, size: CGFloat) -> CGMutablePath {
-        let path = CGMutablePath()
+    /// Takes a hit; true if it was the one that destroyed the part.
+    fileprivate func absorb(_ amount: Int) -> Bool {
+        guard health > 0 else { return false }
+        health -= max(1, amount)
+        guard health <= 0 else { return false }
+        health = 0
+        physicsBody = nil
+        return true
+    }
+}
 
-        switch shape {
-        case .hexagonal:
-            path.move(to: CGPoint(x: 0, y: size * 0.5))
-            path.addLine(to: CGPoint(x: -size * 0.3, y: size * 0.2))
-            path.addLine(to: CGPoint(x: -size * 0.4, y: -size * 0.2))
-            path.addLine(to: CGPoint(x: -size * 0.2, y: -size * 0.5))
-            path.addLine(to: CGPoint(x: size * 0.2, y: -size * 0.5))
-            path.addLine(to: CGPoint(x: size * 0.4, y: -size * 0.2))
-            path.addLine(to: CGPoint(x: size * 0.3, y: size * 0.2))
-            path.closeSubpath()
+/// The machine at the end of a level: one of the archetypes in `BossCatalog`, drawn in
+/// 3D wireframe by `BossArt`, flying its archetype's path between attacks, carrying its
+/// shootable hardware as `BossPart`s. `BossManager` decides what it fires and when;
+/// this node owns how it looks, moves, takes damage and dies.
+class Boss: SKNode {
+    private var currentHealth: Int
+    let config: BossConfig
 
-        case .diamond:
-            path.move(to: CGPoint(x: 0, y: size * 0.5))
-            path.addLine(to: CGPoint(x: -size * 0.45, y: 0))
-            path.addLine(to: CGPoint(x: 0, y: -size * 0.5))
-            path.addLine(to: CGPoint(x: size * 0.45, y: 0))
-            path.closeSubpath()
+    /// Health actually fought through: the authored figure scaled to the current fire
+    /// rate (see `CombatRules.bossHealthScale`). Every fraction — the bar, the phases,
+    /// the damage visuals — is taken against this, never against `config.maxHealth`,
+    /// which stays the authored number the configs and their tests are written in.
+    let maxHealthPoints: Int
 
-        case .triangle:
-            path.move(to: CGPoint(x: 0, y: size * 0.5))
-            path.addLine(to: CGPoint(x: -size * 0.5, y: -size * 0.4))
-            path.addLine(to: CGPoint(x: size * 0.5, y: -size * 0.4))
-            path.closeSubpath()
+    /// When the per-hit dressing (flash, debris, sparks) last ran, in real time.
+    ///
+    /// A full arsenal lands dozens of rounds a second on a boss. The damage itself is
+    /// applied per round; the dressing is capped to a rate the eye can actually separate.
+    private var lastHitDressing: CFTimeInterval = 0
+    private static let hitDressingInterval: CFTimeInterval = 0.07
+    private var healthBar: SKShapeNode!
+    private var healthBarFill: SKShapeNode!
+    /// The charge's width at full health. Kept rather than recomputed from the scene on
+    /// each hit, so the charge always drains inside the frame it was built for.
+    private var healthFillWidth: CGFloat = 0
+    private var isActive: Bool = false
+    private var damageLevel: Int = 0
 
-        case .star:
-            let points = 5
-            let outerRadius = size * 0.5
-            let innerRadius = size * 0.2
-            for i in 0..<(points * 2) {
-                let angle = CGFloat(i) * .pi / CGFloat(points) - .pi / 2
-                let radius = i % 2 == 0 ? outerRadius : innerRadius
-                let x = cos(angle) * radius
-                let y = sin(angle) * radius
-                if i == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-            path.closeSubpath()
+    /// Everything the wireframe needs to know this frame, and what it reports back.
+    /// Internal so `BossManager` can drive the parts of it its attacks animate — the
+    /// mantis sweeping its arms back for a dive, the wraith fading out.
+    let look: BossLook
+    /// The drawn boss. Shakes, pulses and wind-ups move this rather than the boss node,
+    /// so none of them disturbs the hit volumes or the flight path.
+    private let hull = SKNode()
+    private var wire: WireBody?
+    private(set) var parts: [BossPart] = []
 
-        case .pentagon:
-            let points = 5
-            let radius = size * 0.5
-            for i in 0..<points {
-                let angle = CGFloat(i) * 2 * .pi / CGFloat(points) - .pi / 2
-                let x = cos(angle) * radius
-                let y = sin(angle) * radius
-                if i == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-            path.closeSubpath()
+    /// The ship, for the eyes that follow it.
+    weak var target: SKNode?
 
-        case .cross:
-            let thickness = size * 0.2
-            let length = size * 0.5
-            // Vertical bar
-            path.move(to: CGPoint(x: -thickness, y: length))
-            path.addLine(to: CGPoint(x: thickness, y: length))
-            path.addLine(to: CGPoint(x: thickness, y: thickness))
-            path.addLine(to: CGPoint(x: length, y: thickness))
-            path.addLine(to: CGPoint(x: length, y: -thickness))
-            path.addLine(to: CGPoint(x: thickness, y: -thickness))
-            path.addLine(to: CGPoint(x: thickness, y: -length))
-            path.addLine(to: CGPoint(x: -thickness, y: -length))
-            path.addLine(to: CGPoint(x: -thickness, y: -thickness))
-            path.addLine(to: CGPoint(x: -length, y: -thickness))
-            path.addLine(to: CGPoint(x: -length, y: thickness))
-            path.addLine(to: CGPoint(x: -thickness, y: thickness))
-            path.closeSubpath()
+    // MARK: Flight
 
-        case .octagon:
-            let points = 8
-            let radius = size * 0.5
-            for i in 0..<points {
-                let angle = CGFloat(i) * 2 * .pi / CGFloat(points) - .pi / 2
-                let x = cos(angle) * radius
-                let y = sin(angle) * radius
-                if i == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-            path.closeSubpath()
+    /// Where the boss may fly: its sweep across the screen and its station height.
+    private(set) var arena = (minX: CGFloat(0), maxX: CGFloat(0), baseY: CGFloat(0))
+    private var flightClock: TimeInterval = 0
+    private var lastFlightElapsed: CGFloat = 0
+    private var previousX: CGFloat = 0
+    /// Set while an attack is steering the boss itself — a dive, a blink.
+    private(set) var isManoeuvring = false
+    private var blendFrom: CGPoint?
+    private var blend: CGFloat = 1
+    /// The tesseract's stations and its progress between them.
+    private var station = 2
+    private var stationTimer: TimeInterval = 0
+    /// A slide between stations. Both ends are full points: alternate stations sit at
+    /// different heights, and the height has to travel with the slide.
+    private var slide: (from: CGPoint, to: CGPoint)?
+    /// The serpent's wake: where its head has been, oldest first.
+    private var wake: [CGPoint] = []
+    /// The physics body, parked while the boss is out of phase.
+    private var parkedBody: SKPhysicsBody?
 
-        case .arrow:
-            path.move(to: CGPoint(x: 0, y: size * 0.5))
-            path.addLine(to: CGPoint(x: -size * 0.4, y: size * 0.1))
-            path.addLine(to: CGPoint(x: -size * 0.2, y: size * 0.1))
-            path.addLine(to: CGPoint(x: -size * 0.2, y: -size * 0.5))
-            path.addLine(to: CGPoint(x: size * 0.2, y: -size * 0.5))
-            path.addLine(to: CGPoint(x: size * 0.2, y: size * 0.1))
-            path.addLine(to: CGPoint(x: size * 0.4, y: size * 0.1))
-            path.closeSubpath()
+    init(config: BossConfig, sceneSize: CGSize) {
+        self.config = config
+        self.maxHealthPoints = CombatRules.bossHealth(authored: config.maxHealth)
+        self.currentHealth = maxHealthPoints
+        self.look = BossLook(archetype: config.archetype, tier: config.tier, palette: config.palette,
+                             unit: Float(config.size / 2))
+
+        super.init()
+
+        self.name = "boss"
+        self.position = CGPoint(x: sceneSize.width / 2, y: sceneSize.height + config.size)
+        self.zPosition = 10
+
+        buildBody()
+        setupHealthBar(sceneSize: sceneSize)
+
+        // The core, fitted to the hull (see `BossArt.coreVolume`). Hardware outside it is
+        // hit through its own `BossPart`s.
+        let unit = config.size / 2
+        let shapes = BossArt.coreVolume(for: config.archetype, tier: config.tier).map {
+            SKPhysicsBody(circleOfRadius: $0.radius * unit,
+                          center: CGPoint(x: $0.center.x * unit, y: $0.center.y * unit))
         }
+        let physicsBody = shapes.count == 1 ? shapes[0] : SKPhysicsBody(bodies: shapes)
+        physicsBody.categoryBitMask = PhysicsCategory.enemy
+        physicsBody.contactTestBitMask = PhysicsCategory.bullet
+        physicsBody.collisionBitMask = PhysicsCategory.none
+        physicsBody.isDynamic = false
+        self.physicsBody = physicsBody
 
-        return path
+        let count = look.partAlive.count
+        let partHealth = BossPhaseRules.partHealth(bossHealth: maxHealthPoints, partCount: count)
+        for i in 0..<count {
+            let radius = BossArt.partRadius(for: config.archetype, index: i, count: count) * config.size / 2
+            let part = BossPart(index: i, radius: radius, health: partHealth)
+            part.boss = self
+            part.position = look.partPoints[i]
+            addChild(part)
+            parts.append(part)
+        }
     }
 
-    private func setupBossShape() {
-        let size = config.size
-        let path = createShapePath(for: config.shape, size: size)
-
-        self.path = path
-        self.fillColor = config.color
-        self.strokeColor = config.strokeColor
-        self.lineWidth = 3
-
-        // Add glow effect using GlowHelper (no glowWidth)
-        GlowHelper.addEnhancedGlow(to: self, color: config.color, intensity: 1.2)
-
-        // Add details
-        addBossDetails()
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 
-    private func addBossDetails() {
+    private func buildBody() {
         let size = config.size
 
-        // Add cockpit/core
-        let core = SKShapeNode(circleOfRadius: size * 0.15)
-        core.fillColor = .red
-        core.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.5, alpha: 1.0)
-        core.lineWidth = 2
-        addChild(core)
+        // A pool of shadow under the hull so the world's lines do not run through it,
+        // and a faint wash of its own light around it.
+        let shadow = NeonFX.radialGlow(radius: size * 0.66, color: .black, softness: 0.8, additive: false)
+        shadow.alpha = 0.75
+        shadow.zPosition = -10
+        addChild(shadow)
 
-        // Add glow to core
-        GlowHelper.addEnhancedGlow(to: core, color: .red, intensity: 1.0)
+        let aura = NeonFX.radialGlow(radius: size * 0.72, color: config.palette.hull, softness: 0.6)
+        aura.alpha = 0.14
+        aura.zPosition = -9
+        addChild(aura)
+        aura.run(.repeatForever(.sequence([
+            .fadeAlpha(to: 0.2, duration: 1.4),
+            .fadeAlpha(to: 0.11, duration: 1.4)
+        ])))
 
-        // Pulsing animation for core
-        let pulse = SKAction.sequence([
-            SKAction.scale(to: 1.2, duration: 0.5),
-            SKAction.scale(to: 1.0, duration: 0.5)
-        ])
-        core.run(SKAction.repeatForever(pulse))
-
-        // Add wings/cannons
-        let leftCannon = createCannon()
-        leftCannon.position = CGPoint(x: -size * 0.35, y: 0)
-        addChild(leftCannon)
-
-        let rightCannon = createCannon()
-        rightCannon.position = CGPoint(x: size * 0.35, y: 0)
-        addChild(rightCannon)
-
-        // Add 3D vector effects based on boss configuration
-        add3DVectorEffects()
+        addChild(hull)
+        let extent = size / 2 * BossArt.extent(for: config.archetype)
+        let body = WireBody(extent: extent, perspective: 4.5) { [weak self] frame in
+            self?.drawFrame(frame)
+        }
+        look.cameraDistance = body.distance
+        hull.addChild(body)
+        wire = body
     }
 
-    /// Adds pseudo-3D vector effects to boss
-    private func add3DVectorEffects() {
-        let size = config.size
-        let level = getCurrentLevel()
-
-        // Energy core for all bosses (gets more complex with levels)
-        let coreRadius = size * 0.25
-        let coreLayers = min(3 + level / 3, 6) // More layers for higher levels
-        let energyCore = VectorFX3D.createEnergyCore(
-            radius: coreRadius,
-            color: config.strokeColor,
-            layers: coreLayers
-        )
-        energyCore.zPosition = -2
-        addChild(energyCore)
-
-        // Force field for levels 3+
-        if level >= 3 {
-            let forceField = VectorFX3D.createForceField(
-                radius: size * 0.6,
-                color: config.color.withAlphaComponent(0.6)
-            )
-            forceField.zPosition = -3
-            addChild(forceField)
+    private func drawFrame(_ frame: WireBody.Frame) {
+        look.health = Float(healthFraction)
+        if let target = target, target.parent === parent {
+            let d = SIMD2<Float>(Float(target.position.x - position.x), Float(target.position.y - position.y))
+            let length = simd_length(d)
+            if length > 1 {
+                let blended = look.gaze + (d / length - look.gaze) * 0.12
+                let l = simd_length(blended)
+                if l > 1e-3 { look.gaze = blended / l }
+            }
         }
+        if config.archetype == .serpent { look.trail = trailOffsets() }
 
-        // Rotating cannons for levels 4+
-        if level >= 4 {
-            let cannonCount = min(4 + (level - 4), 8)
-            let cannons = VectorFX3D.createRotatingCannons(
-                count: cannonCount,
-                radius: size * 0.45,
-                color: config.strokeColor
-            )
-            cannons.zPosition = -1
-            addChild(cannons)
-        }
+        BossArt.render(look, frame.canvas, t: frame.t)
 
-        // Orbital defense for levels 5+
-        if level >= 5 {
-            let orbitalDefense = VectorFX3D.createOrbitalDefense(
-                count: 6,
-                radius: size * 0.7,
-                color: config.strokeColor.withAlphaComponent(0.8)
-            )
-            orbitalDefense.zPosition = -4
-            addChild(orbitalDefense)
-        }
-
-        // Radar sweep for levels 7+
-        if level >= 7 {
-            let radar = VectorFX3D.createRadarSweep(
-                radius: size * 0.8,
-                color: UIColor.red.withAlphaComponent(0.5)
-            )
-            radar.zPosition = -5
-            addChild(radar)
-        }
-
-        // Massive shield sphere for final bosses (level 15+)
-        if level >= 15 {
-            let shield = VectorFX3D.createShieldSphere(
-                radius: size * 0.9,
-                color: config.color.withAlphaComponent(0.4),
-                persistent: true
-            )
-            shield.zPosition = -6
-            addChild(shield)
+        for part in parts where part.index < look.partPoints.count {
+            part.position = look.partPoints[part.index]
         }
     }
 
-    /// Gets current level from config
-    private func getCurrentLevel() -> Int {
-        // Determine level based on boss health/points
-        switch config.maxHealth {
-        case 20: return 1
-        case 35: return 2
-        case 50: return 3
-        case 70: return 4
-        case 90: return 5
-        case 110: return 6
-        case 135: return 7
-        case 160: return 8
-        case 200: return 10
-        case 250: return 15
-        case 300: return 20
-        default: return max(1, config.maxHealth / 20)
-        }
+    // MARK: - Muzzles
+
+    private func toContent(_ local: CGPoint) -> CGPoint {
+        CGPoint(x: position.x + hull.position.x + local.x * hull.xScale,
+                y: position.y + hull.position.y + local.y * hull.yScale)
     }
 
-    private func createCannon() -> SKShapeNode {
-        let size = config.size * 0.15
-        let path = CGMutablePath()
+    /// Where shots leave the boss when nothing else does: its eye, its emitter, the
+    /// lip of its hole. In the coordinates of the boss's parent.
+    var coreMuzzle: CGPoint { toContent(look.corePoint) }
 
-        path.move(to: CGPoint(x: -size * 0.3, y: size * 0.5))
-        path.addLine(to: CGPoint(x: size * 0.3, y: size * 0.5))
-        path.addLine(to: CGPoint(x: size * 0.2, y: -size * 0.5))
-        path.addLine(to: CGPoint(x: -size * 0.2, y: -size * 0.5))
-        path.closeSubpath()
+    /// How many weapon muzzles the archetype has, destroyed ones included, so an
+    /// attack can address them by index.
+    var muzzleCount: Int { look.muzzlePoints.count }
 
-        let cannon = SKShapeNode(path: path)
-        cannon.fillColor = config.color.withAlphaComponent(0.8)
-        cannon.strokeColor = config.strokeColor
-        cannon.lineWidth = 1.5
-
-        return cannon
+    /// A weapon muzzle, or nil if the hardware carrying it has been shot off.
+    func muzzle(_ index: Int) -> CGPoint? {
+        guard index >= 0, index < look.muzzlePoints.count, look.muzzleAlive[index] else { return nil }
+        return toContent(look.muzzlePoints[index])
     }
+
+    /// The indices of the weapon muzzles still able to fire, left to right.
+    func liveMuzzles() -> [Int] {
+        look.muzzlePoints.indices
+            .filter { look.muzzleAlive[$0] }
+            .sorted { look.muzzlePoints[$0].x < look.muzzlePoints[$1].x }
+    }
+
+    // MARK: - Health bar
 
     /// How far below the HUD margin the health bar hangs.
     ///
@@ -605,40 +258,99 @@ class Boss: SKShapeNode {
     /// The split is forced by the safe-area inset. This runs from `init`, where the boss
     /// is not in a scene yet, so it has no view to ask — the lookup that used to sit here
     /// read `self.scene?.view` and could therefore only ever return nil, pinning the
-    /// margin to `minTopMargin` on every device. On a notched iPhone that pulled the bar
-    /// ~40pt up into the HUD band and took the "⚡ BOSS ⚡" label with it, right under the
-    /// score and lives.
+    /// margin to `minTopMargin` on every device.
     private func setupHealthBar(sceneSize: CGSize) {
-        // Health bar background
         let barWidth: CGFloat = sceneSize.width * 0.8
         let barHeight: CGFloat = 20
 
-        healthBar = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 5)
-        healthBar.fillColor = UIColor(white: 0.2, alpha: 0.8)
-        healthBar.strokeColor = .white
-        healthBar.lineWidth = 2
+        // A gauge in the films' instrument style: dark glass in a thin lit frame, the
+        // charge a bar of light, tick marks every tenth like the dial in the opening.
+        healthBar = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 3)
+        healthBar.fillColor = UIColor(red: 0.03, green: 0.0, blue: 0.02, alpha: 0.75)
+        healthBar.strokeColor = UIColor(red: 1.0, green: 0.4, blue: 0.4, alpha: 0.55)
+        healthBar.lineWidth = 1
         healthBar.zPosition = 150
 
-        // Health bar fill
-        healthBarFill = SKShapeNode(rectOf: CGSize(width: barWidth - 4, height: barHeight - 4), cornerRadius: 4)
-        healthBarFill.fillColor = .red
+        healthFillWidth = barWidth - 4
+        healthBarFill = SKShapeNode(rectOf: CGSize(width: healthFillWidth, height: barHeight - 4), cornerRadius: 2)
+        healthBarFill.fillColor = Self.gaugeColor(for: 1)
         healthBarFill.strokeColor = .clear
+        healthBarFill.blendMode = .add
         healthBarFill.position = CGPoint(x: 0, y: 0)
         healthBar.addChild(healthBarFill)
 
-        // Boss name label.
-        //
-        // Positioned relative to healthBar, which is what it is parented to. It used to
-        // be given the same scene-space coordinates as the bar itself, so it landed at
-        // (sceneWidth, 2 * barY + 30) — off the right edge and far above the top of the
-        // screen, i.e. never visible at all.
-        let bossLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        bossLabel.text = L10n.HUD.boss
-        bossLabel.fontSize = 24
-        bossLabel.fontColor = .yellow
-        bossLabel.position = CGPoint(x: 0, y: 30)
+        for tick in 1..<10 {
+            let x = -barWidth / 2 + barWidth * CGFloat(tick) / 10
+            let mark = SKSpriteNode(color: .black, size: CGSize(width: 1.5, height: barHeight - 4))
+            mark.alpha = 0.55
+            mark.position = CGPoint(x: x, y: 0)
+            mark.zPosition = 1
+            healthBar.addChild(mark)
+        }
+        // Where the next act begins: a brighter notch through the frame at each phase
+        // threshold, so the player can see how far there is to go before it changes.
+        // The charge drains from both ends towards the middle, so each threshold is a
+        // pair of notches, one where each end of the charge will be when it is crossed.
+        for x in Self.phaseNotchOffsets(fillWidth: barWidth - 4) {
+            let notch = LightSprite.tube(from: CGPoint(x: x, y: -barHeight / 2 - 4),
+                                         to: CGPoint(x: x, y: barHeight / 2 + 4),
+                                         width: 1.2, color: StoryPalette.sun)
+            notch.name = Self.phaseNotchName
+            notch.zPosition = 2
+            notch.alpha = 0.8
+            healthBar.addChild(notch)
+        }
+        for side: CGFloat in [-1, 1] {
+            let cap = LightSprite.tube(from: CGPoint(x: side * (barWidth / 2 + 4), y: -barHeight / 2 - 3),
+                                       to: CGPoint(x: side * (barWidth / 2 + 4), y: barHeight / 2 + 3),
+                                       width: 1.2, color: StoryPalette.red)
+            healthBar.addChild(cap)
+        }
+
+        // The boss's name, parented to the bar. Its own floor for the shrink-to-fit:
+        // under the default of 24 a 20 pt name could never shrink at all, so any name
+        // longer than the bar ran past both ends of it.
+        let bossLabel = Cinematic.title("⚡ \(config.displayName) ⚡", fontSize: 20,
+                                        color: UIColor(red: 1.0, green: 0.55, blue: 0.5, alpha: 1.0),
+                                        glow: StoryPalette.red, tracking: 6, maxWidth: barWidth, minimumSize: 12)
+        bossLabel.name = Self.nameplateName
+        bossLabel.position = CGPoint(x: 0, y: 26)
         bossLabel.zPosition = 1
         healthBar.addChild(bossLabel)
+    }
+
+    private static let phaseNotchName = "bossPhaseNotch"
+    private static let nameplateName = "bossNameplate"
+
+    /// How wide the boss's name over the bar came out, and the bar itself, for
+    /// `jetshotTests`.
+    var nameplateWidth: CGFloat { healthBar.childNode(withName: Self.nameplateName)?.frame.width ?? 0 }
+    var healthBarWidth: CGFloat { healthBar.path?.boundingBox.width ?? 0 }
+
+    /// Where the phase notches sit across the middle of a health bar whose charge is
+    /// `fillWidth` wide at full health: both ends of the charge at each threshold.
+    static func phaseNotchOffsets(fillWidth: CGFloat) -> [CGFloat] {
+        BossPhaseRules.thresholds.flatMap { [-fillWidth * $0 / 2, fillWidth * $0 / 2] }
+    }
+
+    /// The x of each phase notch, relative to the middle of the bar, for `jetshotTests`.
+    var phaseNotchXs: [CGFloat] {
+        healthBar.children.filter { $0.name == Self.phaseNotchName }.map { $0.position.x }
+    }
+
+    /// Half the width of the charge left in the bar, for `jetshotTests`: where each end
+    /// of it sits, measured from the middle.
+    var healthBarFillHalfWidth: CGFloat {
+        (healthBarFill.path?.boundingBox.width ?? 0) / 2
+    }
+
+    /// The gauge's light: red at full strength, burning down through ember to gold, one
+    /// colour per act. Keyed to `BossPhaseRules` itself — it used to change at 0.6 and
+    /// 0.3, a beat after the notches and the phase change it should announce. Internal
+    /// for `jetshotTests`.
+    static func gaugeColor(for fraction: CGFloat) -> UIColor {
+        let colors = [StoryPalette.red, StoryPalette.ember, StoryPalette.gold]
+        return colors[min(BossPhaseRules.phase(forHealthFraction: fraction), colors.count - 1)]
     }
 
     func addHealthBarToScene(_ scene: GameScene) {
@@ -649,12 +361,7 @@ class Boss: SKShapeNode {
     /// Places the health bar under the HUD.
     ///
     /// Separate from `addHealthBarToScene(_:)` so `GameScene.didChangeSize(_:)` can call
-    /// it too: the bar was placed for whatever the scene measured when the boss spawned,
-    /// and nothing re-flowed it afterwards. Portrait-only plus `UIRequiresFullScreen`
-    /// makes a mid-fight resize hard to reach today, but every other HUD element in that
-    /// method is already re-flowed and this one was the exception.
-    ///
-    /// Position only — the bar's width is baked into its shape path in
+    /// it too. Position only — the bar's width is baked into its shape path in
     /// `setupHealthBar(sceneSize:)` and a resize would need the path rebuilt.
     func layoutHealthBar(in scene: GameScene) {
         healthBar.position = CGPoint(
@@ -664,7 +371,6 @@ class Boss: SKShapeNode {
     }
 
     func removeHealthBarFromScene() {
-        // Remove health bar only if it's still in the scene
         if healthBar.parent != nil {
             healthBar.removeFromParent()
         }
@@ -672,7 +378,7 @@ class Boss: SKShapeNode {
 
     /// Whether the health bar is currently in the scene, for `jetshotTests`.
     ///
-    /// The bar is attached and detached independently of the boss node — `takeDamage()`
+    /// The bar is attached and detached independently of the boss node — `die()`
     /// drops it the instant the boss dies, well before the explosion sequence removes
     /// the boss itself — so "is the boss on screen" does not answer this.
     var isHealthBarAttached: Bool {
@@ -680,279 +386,415 @@ class Boss: SKShapeNode {
     }
 
     /// The health bar's Y in scene coordinates, for `jetshotTests`.
-    ///
-    /// The bar itself stays private and is unnamed, so there is no other way to reach it.
-    /// Its placement is what regressed: computed in `init`, where the node has no view to
-    /// read a safe-area inset from and no scene whose height it can measure against.
     var healthBarY: CGFloat {
         return healthBar.position.y
     }
 
+    // MARK: - Entrance and flight
+
     func enterScene(completion: @escaping () -> Void) {
         guard let scene = self.scene else { return }
 
-        // Position below the HUD. Through `GameConfiguration` rather than the inline
-        // `max(safeAreaTop + 20, 40)` this used to carry: that duplicated
-        // `topMargin(safeAreaTop:)` with its constants copied out, so a change to
-        // `minTopMargin` or `safeAreaTopSpacing` would move the HUD and leave the boss
-        // behind.
+        // Station height: right under the health bar, whatever the boss's size, so the
+        // big ones do not hang down into the ship's half of the screen and the small
+        // ones do not hover far below their own name.
         let topMargin = GameConfiguration.topMargin(in: scene.view)
-        let targetY = scene.size.height - topMargin - config.size - 80 // More margin below UI (increased from 30)
+        let targetY = scene.size.height - topMargin - Self.healthBarDropBelowHUD - 22 - config.size * 0.48
 
-        // Entrance animation
+        // Margin is the boss's *half* width, not `config.size`: `config.size` is the
+        // full silhouette, and insetting each edge by all of it collapsed the sweep of
+        // the late bosses to nothing. Clamped so a boss wider than the screen centres
+        // instead of inverting.
+        let margin = config.size * 0.5 + 8
+        let centre = scene.size.width / 2
+        arena = (minX: min(margin, centre), maxX: max(scene.size.width - margin, centre), baseY: targetY)
+
+        // The hull is lit by a scan line running down it as it arrives.
+        let reveal = SKAction.customAction(withDuration: 1.6) { node, elapsed in
+            (node as? Boss)?.look.reveal = Float(elapsed / 1.6)
+        }
+        run(reveal, withKey: "bossReveal")
+
         let moveIn = SKAction.moveTo(y: targetY, duration: 2.0)
         moveIn.timingMode = .easeOut
 
-        // Weak, like the explosion closures in takeDamage(): SpriteKit holds the action
+        // Weak, like the explosion closures in die(): SpriteKit holds the action
         // on this node, so a strong capture makes node -> action -> closure -> node.
         run(moveIn) { [weak self] in
             guard let self = self else { return }
+            self.look.reveal = 1
             self.isActive = true
-            self.startMovement()
+            self.startFlight()
             completion()
         }
     }
 
-    private func startMovement() {
-        guard let scene = self.scene else { return }
+    private func startFlight() {
+        flightClock = 0
+        lastFlightElapsed = 0
+        previousX = position.x
+        station = 2
+        stationTimer = 0
+        // Ease onto the path from wherever the entrance left the boss. Several paths do
+        // not start at the station height — the serpent's figure of eight is 40 points
+        // below it — and taking the first point literally was a visible jump.
+        blendFrom = position
+        blend = 0
+        run(.repeatForever(.customAction(withDuration: 60) { node, elapsed in
+            (node as? Boss)?.flightTick(elapsed: elapsed)
+        }), withKey: "bossFlight")
+    }
 
-        // Margin is the boss's *half* width, not `config.size`.
-        //
-        // `config.size` is the full silhouette — `createShapePath` spans -size/2 to
-        // +size/2 — so insetting each edge by the whole diameter reserved twice the
-        // room needed and collapsed the patrol it is supposed to define. It never
-        // crashed, because `moveTo` accepts any coordinate, so the late-game bosses
-        // simply stopped moving: on a 402pt iPhone the level 50 boss (size 200) swept
-        // between x=200 and x=202, two points, and on a 375pt screen the range
-        // inverted outright (200 -> 175) and parked it right of centre.
-        let margin = config.size * 0.5 + 8
+    private func flightTick(elapsed: CGFloat) {
+        var dt = TimeInterval(elapsed - lastFlightElapsed)
+        if elapsed < lastFlightElapsed { dt = TimeInterval(elapsed) }
+        lastFlightElapsed = elapsed
+        dt = min(max(dt, 0), 0.1)
 
-        // Clamped so a boss wider than the screen centres instead of inverting, the
-        // same fallback `CoinManager.place` uses for over-wide formations.
-        let centre = scene.size.width / 2
-        let minX = min(margin, centre)
-        let maxX = max(scene.size.width - margin, centre)
+        if config.archetype == .serpent { recordWake() }
 
-        // Create side-to-side movement
-        let moveLeft = SKAction.moveTo(x: minX, duration: config.movementSpeed)
-        moveLeft.timingMode = .easeInEaseOut
+        // Lean into the direction of travel.
+        let vx = dt > 0 ? (position.x - previousX) / CGFloat(dt) : 0
+        previousX = position.x
+        let lean = Float(max(-0.5, min(0.5, -vx * 0.004)))
+        look.bank += (lean - look.bank) * Float(min(1, dt * 6))
 
-        let moveRight = SKAction.moveTo(x: maxX, duration: config.movementSpeed)
-        moveRight.timingMode = .easeInEaseOut
+        guard !isManoeuvring else { return }
+        flightClock += dt
+        var target = flightTarget(dt: dt)
+        if blend < 1, let from = blendFrom {
+            blend = min(1, blend + CGFloat(dt / 0.6))
+            let e = blend * blend * (3 - 2 * blend)
+            target = CGPoint(x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e)
+        }
+        position = target
+    }
 
-        let sequence = SKAction.sequence([moveLeft, moveRight])
-        movementAction = SKAction.repeatForever(sequence)
+    /// Where the flight path puts the boss now. Every style stays at or below the
+    /// station height, so nothing ever rises into the health bar.
+    private func flightTarget(dt: TimeInterval) -> CGPoint {
+        let cx = (arena.minX + arena.maxX) / 2
+        let range = (arena.maxX - arena.minX) / 2
+        let leg = max(0.6, config.movementSpeed)
+        let t = flightClock
+        let y0 = arena.baseY
 
-        if let movement = movementAction {
-            run(movement)
+        switch config.archetype.flight {
+        case .patrol:
+            let w = Double.pi / leg
+            return CGPoint(x: cx + range * CGFloat(sin(w * t)), y: y0 - 5 + 5 * CGFloat(sin(t * 1.3)))
+        case .weave:
+            let w = Double.pi / leg
+            return CGPoint(x: cx + range * CGFloat(sin(w * t)), y: y0 - 16 + 16 * CGFloat(cos(2 * w * t)))
+        case .orbit:
+            let w = Double.pi / (leg * 1.6)
+            return CGPoint(x: cx + range * CGFloat(sin(w * t)), y: y0 - 22 + 22 * CGFloat(cos(2 * w * t)))
+        case .drift:
+            let w = Double.pi / (leg * 1.3)
+            return CGPoint(x: cx + range * 0.8 * CGFloat(sin(w * t)), y: y0 - 10 + 10 * CGFloat(sin(t * 0.8)))
+        case .snake:
+            // A figure of eight: at each end of the sweep the head is still moving
+            // vertically, so the body behind it loops round instead of folding back
+            // onto itself.
+            let w = Double.pi / leg
+            return CGPoint(x: cx + range * CGFloat(sin(w * t)), y: y0 - 40 + 40 * CGFloat(sin(2 * w * t)))
+        case .haunt:
+            let w = Double.pi / (leg * 1.4)
+            return CGPoint(x: cx + range * 0.75 * CGFloat(sin(w * t)), y: y0 - 14 + 14 * CGFloat(sin(t * 1.7)))
+        case .shift:
+            return shiftTarget(dt: dt)
         }
     }
 
-    func takeDamage() -> Bool {
-        currentHealth -= 1
+    /// The stations the tesseract snaps between, left to right.
+    private var stations: [CGFloat] {
+        let count = arena.maxX - arena.minX > 120 ? 5 : 3
+        return (0..<count).map { arena.minX + (arena.maxX - arena.minX) * CGFloat($0) / CGFloat(count - 1) }
+    }
 
-        // Check if defeated first
-        if currentHealth <= 0 {
-            currentHealth = 0  // Ensure health doesn't go negative
-            isActive = false
-            removeAllActions()
+    /// Where the tesseract holds at station `index`: alternate stations sit a little lower.
+    private func stationPoint(_ index: Int, of stops: [CGFloat]) -> CGPoint {
+        CGPoint(x: stops[index], y: arena.baseY - (index % 2 == 0 ? 0 : 18))
+    }
 
-            // Immediately hide health bar
-            healthBar.removeFromParent()
+    private func shiftTarget(dt: TimeInterval) -> CGPoint {
+        let stops = stations
+        station = min(max(station, 0), stops.count - 1)
+        stationTimer += dt
 
-            // Create sequence of explosion actions
-            var explosionActions: [SKAction] = []
-            let explosionCount = 8
-
-            for i in 0..<explosionCount {
-                let wait = SKAction.wait(forDuration: 0.2)
-                let explode = SKAction.run { [weak self] in
-                    guard let self = self else { return }
-                    self.createExplosion(offset: CGPoint(
-                        x: CGFloat.random(in: -self.config.size/2...self.config.size/2),
-                        y: CGFloat.random(in: -self.config.size/2...self.config.size/2)
-                    ))
-                    // Play explosion sound for each mini-explosion
-                    if let scene = self.scene as? GameScene {
-                        SoundManager.shared.playExplosionSound(on: scene)
-                    }
-                }
-
-                if i > 0 {
-                    explosionActions.append(wait)
-                }
-                explosionActions.append(explode)
+        if let slide = slide {
+            let f = CGFloat(min(1, stationTimer / 0.32))
+            let e = f * f * (3 - 2 * f)
+            if f >= 1 {
+                self.slide = nil
+                stationTimer = 0
             }
+            return CGPoint(x: slide.from.x + (slide.to.x - slide.from.x) * e,
+                           y: slide.from.y + (slide.to.y - slide.from.y) * e)
+        }
+        let hold = max(0.9, 1.6 - 0.12 * Double(config.tier))
+        if stationTimer >= hold {
+            var next = Int.random(in: 0..<stops.count)
+            if next == station { next = (next + 2) % stops.count }
+            let from = position
+            slide = (from: from, to: stationPoint(next, of: stops))
+            station = next
+            stationTimer = 0
+            return from
+        }
+        return stationPoint(station, of: stops)
+    }
 
-            // Final explosion and removal
-            let finalWait = SKAction.wait(forDuration: 0.2)
-            let finalExplosion = SKAction.run { [weak self] in
+    /// A station for the tesseract to fold across to: away from where it is.
+    func distantStation() -> CGPoint {
+        let stops = stations
+        let far = stops.indices.filter { abs(stops[$0] - position.x) > (arena.maxX - arena.minX) * 0.3 }
+        let index = far.randomElement() ?? (station + 2) % stops.count
+        return stationPoint(index, of: stops)
+    }
+
+    /// Hands the controls to an attack.
+    func beginManoeuvre() {
+        isManoeuvring = true
+        removeAction(forKey: "bossManoeuvre")
+    }
+
+    /// Takes the controls back after an attack has moved the boss, picking the flight
+    /// path up from wherever it was left rather than snapping back to where it was.
+    func endManoeuvre() {
+        guard isManoeuvring else { return }
+        isManoeuvring = false
+        let cx = (arena.minX + arena.maxX) / 2
+        let range = max(1, (arena.maxX - arena.minX) / 2)
+        let leg = max(0.6, config.movementSpeed)
+        let share = Double(max(-1, min(1, (position.x - cx) / range)))
+        switch config.archetype.flight {
+        case .patrol, .weave, .snake:
+            flightClock = asin(share) / (Double.pi / leg)
+        case .orbit:
+            flightClock = asin(share) / (Double.pi / (leg * 1.6))
+        case .drift:
+            flightClock = asin(max(-1, min(1, share / 0.8))) / (Double.pi / (leg * 1.3))
+        case .haunt:
+            flightClock = asin(max(-1, min(1, share / 0.75))) / (Double.pi / (leg * 1.4))
+        case .shift:
+            let stops = stations
+            station = stops.indices.min { abs(stops[$0] - position.x) < abs(stops[$1] - position.x) } ?? 0
+            stationTimer = 0
+            slide = nil
+        }
+        blendFrom = position
+        blend = 0
+    }
+
+    /// Undoes whatever an interrupted attack left half-done: the controls, a fade, a
+    /// sweep, a parked hit volume.
+    func cancelManoeuvre() {
+        removeAction(forKey: "bossManoeuvre")
+        removeAction(forKey: "bossCharge")
+        removeAction(forKey: "bossSpin")
+        look.fade = 1
+        look.sweep = 0
+        look.spin = 1
+        look.charge = 0
+        setTangible(true)
+        endManoeuvre()
+    }
+
+    /// Takes the core's hit volume away while the boss is out of phase, and puts it back.
+    func setTangible(_ tangible: Bool) {
+        if tangible {
+            if let body = parkedBody, physicsBody == nil { physicsBody = body }
+            parkedBody = nil
+        } else if let body = physicsBody {
+            parkedBody = body
+            physicsBody = nil
+        }
+    }
+
+    // MARK: - Serpent
+
+    private func recordWake() {
+        if let last = wake.last, hypot(last.x - position.x, last.y - position.y) < 2 { return }
+        wake.append(position)
+        if wake.count > 700 { wake.removeFirst(wake.count - 700) }
+    }
+
+    /// Each segment's offset from the head, spaced along the path the head has flown.
+    private func trailOffsets() -> [CGPoint] {
+        let count = look.partAlive.count
+        let spacing = config.size / 2 * 0.62
+        var result: [CGPoint] = []
+        result.reserveCapacity(count)
+        var goal = spacing
+        var travelled: CGFloat = 0
+        var previous = position
+        var i = wake.count - 1
+        while result.count < count {
+            if i >= 0 {
+                let p = wake[i]
+                let d = hypot(p.x - previous.x, p.y - previous.y)
+                if travelled + d >= goal, d > 0 {
+                    let f = (goal - travelled) / d
+                    result.append(CGPoint(x: previous.x + (p.x - previous.x) * f - position.x,
+                                          y: previous.y + (p.y - previous.y) * f - position.y))
+                    goal += spacing
+                    continue
+                }
+                travelled += d
+                previous = p
+                i -= 1
+            } else {
+                let last = result.last ?? .zero
+                result.append(CGPoint(x: last.x, y: last.y + spacing))
+            }
+        }
+        return result
+    }
+
+    // MARK: - Fighting
+
+    /// Takes a hit; true if it was the one that killed the boss.
+    ///
+    /// A boss that is not fightable — still flying in, or already dead — takes nothing.
+    /// That used to be left to every caller to check, and a caller that forgot would have
+    /// run `die()` a second time and been told "defeated" again: the bounty paid twice
+    /// and the explosion sequence restarted over the first.
+    func takeDamage(amount: Int = 1) -> Bool {
+        guard isAlive() else { return false }
+        currentHealth -= max(1, amount)
+
+        if currentHealth <= 0 {
+            currentHealth = 0
+            isActive = false
+            die()
+            return true
+        }
+
+        // Update health bar only if boss is still alive
+        let healthPercent = CGFloat(currentHealth) / CGFloat(maxHealthPoints)
+        guard scene != nil else { return false }
+        let newSize = CGSize(width: healthFillWidth * healthPercent, height: 16)
+
+        healthBarFill.path = CGPath(
+            roundedRect: CGRect(x: -newSize.width / 2, y: -newSize.height / 2, width: newSize.width, height: newSize.height),
+            cornerWidth: min(2, newSize.width / 2),
+            cornerHeight: 2,
+            transform: nil
+        )
+        healthBarFill.fillColor = Self.gaugeColor(for: healthPercent)
+
+        let now = CACurrentMediaTime()
+        guard now - lastHitDressing >= Self.hitDressingInterval else { return false }
+        lastHitDressing = now
+
+        // Armour taking a round goes white hot for a moment.
+        look.hitFlash = 1
+        applyDamageVisuals(healthPercent: healthPercent)
+
+        // No sound here: `GameScene` plays the boss-hit cue for the same impact.
+        return false
+    }
+
+    /// A round landing on a part. Returns true if it destroyed the part. The boss's own
+    /// health is taken separately, by `takeDamage(amount:)`.
+    func damagePart(_ part: BossPart, amount: Int) -> Bool {
+        guard part.boss === self, isActive, part.absorb(amount) else { return false }
+        guard part.index < look.partAlive.count else { return true }
+        look.partAlive[part.index] = false
+        partExplosion(at: toContent(part.position))
+        return true
+    }
+
+    private func partExplosion(at point: CGPoint) {
+        guard let scene = scene as? GameScene, let content = scene.gameContentNode else { return }
+        let multiplier = GameConfiguration.particleMultiplier(for: UIDevice.current.userInterfaceIdiom)
+        let burst = ExplosionFX.burst(size: .large, particleMultiplier: multiplier, tint: config.palette.accent)
+        burst.position = point
+        content.addChild(burst)
+        let ring = LightRing.wave(from: 6, to: config.size * 0.7, width: 2, color: config.palette.accent, duration: 0.45)
+        ring.position = point
+        ring.zPosition = 510
+        content.addChild(ring)
+        splinters(at: point, count: 6, reach: 90)
+        SoundManager.shared.playExplosionSound(on: scene)
+        HapticManager.shared.heavyTap()
+        hull.removeAction(forKey: "bossPhaseFlash")
+        hull.run(.sequence([.scale(to: 1.06, duration: 0.06), .scale(to: 1.0, duration: 0.18)]), withKey: "bossPhaseFlash")
+    }
+
+    private func die() {
+        removeAllActions()
+        isManoeuvring = true
+        // Killed mid-blink or mid-fold, it must still be seen to come apart.
+        look.charge = 0
+        look.fade = 1
+        look.sweep = 0
+        look.spin = 1
+        healthBar.removeFromParent()
+        for part in parts { part.physicsBody = nil }
+
+        // The hull comes apart over the length of the explosions.
+        run(.customAction(withDuration: 1.7) { node, elapsed in
+            (node as? Boss)?.look.dying = Float(elapsed / 1.7)
+        }, withKey: "bossDying")
+
+        var explosionActions: [SKAction] = []
+        let explosionCount = 8
+        for i in 0..<explosionCount {
+            let explode = SKAction.run { [weak self] in
                 guard let self = self else { return }
-                self.createExplosion(offset: .zero, isLarge: true)
-                self.removeHealthBarFromScene()
-                // Play multiple explosion sounds for the final big explosion
+                let spread = self.config.size / 2
+                self.createExplosion(offset: CGPoint(x: CGFloat.random(in: -spread...spread),
+                                                     y: CGFloat.random(in: -spread...spread)))
                 if let scene = self.scene as? GameScene {
                     SoundManager.shared.playExplosionSound(on: scene)
                 }
             }
+            if i > 0 { explosionActions.append(.wait(forDuration: 0.2)) }
+            explosionActions.append(explode)
+        }
 
-            // Additional explosion sounds using SKAction to respect pause state
-            let secondExplosion = SKAction.sequence([
-                SKAction.wait(forDuration: 0.1),
-                SKAction.run { [weak self] in
-                    if let scene = self?.scene as? GameScene {
-                        SoundManager.shared.playExplosionSound(on: scene)
-                    }
+        let finalExplosion = SKAction.run { [weak self] in
+            guard let self = self else { return }
+            self.createExplosion(offset: .zero, isLarge: true)
+            self.removeHealthBarFromScene()
+            if let scene = self.scene as? GameScene {
+                SoundManager.shared.playExplosionSound(on: scene)
+            }
+        }
+
+        // Additional explosion sounds using SKAction to respect pause state
+        for (delay, key) in [(0.1, "bossExplosionSound2"), (0.2, "bossExplosionSound3")] {
+            run(.sequence([.wait(forDuration: delay), .run { [weak self] in
+                if let scene = self?.scene as? GameScene {
+                    SoundManager.shared.playExplosionSound(on: scene)
                 }
-            ])
-            let thirdExplosion = SKAction.sequence([
-                SKAction.wait(forDuration: 0.2),
-                SKAction.run { [weak self] in
-                    if let scene = self?.scene as? GameScene {
-                        SoundManager.shared.playExplosionSound(on: scene)
-                    }
-                }
-            ])
-
-            explosionActions.append(finalWait)
-            explosionActions.append(finalExplosion)
-
-            // Run additional sound effects in parallel
-            run(secondExplosion, withKey: "bossExplosionSound2")
-            run(thirdExplosion, withKey: "bossExplosionSound3")
-
-            // Fade out and remove
-            let fadeOut = SKAction.fadeOut(withDuration: 0.5)
-            let remove = SKAction.removeFromParent()
-
-            explosionActions.append(fadeOut)
-            explosionActions.append(remove)
-
-            // Run the entire sequence
-            run(SKAction.sequence(explosionActions), withKey: "bossDefeat")
-
-            return true // Boss defeated
+            }]), withKey: key)
         }
 
-        // Update health bar only if boss is still alive
-        let healthPercent = CGFloat(currentHealth) / CGFloat(config.maxHealth)
-        guard let scene = scene else { return false }
-        let originalWidth = (scene.size.width * 0.8) - 4
-        let newSize = CGSize(width: originalWidth * healthPercent, height: 16)
-
-        healthBarFill.path = CGPath(
-            roundedRect: CGRect(x: -newSize.width / 2, y: -newSize.height / 2, width: newSize.width, height: newSize.height),
-            cornerWidth: 4,
-            cornerHeight: 4,
-            transform: nil
-        )
-
-        // Change color based on health
-        if healthPercent > 0.6 {
-            healthBarFill.fillColor = .red
-        } else if healthPercent > 0.3 {
-            healthBarFill.fillColor = .orange
-        } else {
-            healthBarFill.fillColor = .yellow
-        }
-
-        // Flash effect
-        let flash = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 0.1),
-            SKAction.fadeAlpha(to: 1.0, duration: 0.1)
-        ])
-        run(flash)
-
-        // Apply visual damage effects (cracks, debris, smoke, etc.)
-        applyDamageVisuals(healthPercent: healthPercent)
-
-        // Damage sound
-        if let scene = self.scene as? GameScene {
-            SoundManager.shared.playHitSound(on: scene)
-        }
-
-        return false // Boss still alive
+        explosionActions.append(.wait(forDuration: 0.2))
+        explosionActions.append(finalExplosion)
+        explosionActions.append(.fadeOut(withDuration: 0.5))
+        explosionActions.append(.removeFromParent())
+        run(.sequence(explosionActions), withKey: "bossDefeat")
     }
 
     private func createExplosion(offset: CGPoint, isLarge: Bool = false) {
-        guard let scene = self.scene as? GameScene else { return }
+        guard let scene = self.scene as? GameScene, let content = scene.gameContentNode else { return }
+        let multiplier = GameConfiguration.particleMultiplier(for: UIDevice.current.userInterfaceIdiom)
+        let tint = isLarge ? StoryPalette.sun : (Bool.random() ? config.palette.hull : config.palette.accent)
+        let burst = ExplosionFX.burst(size: isLarge ? .huge : .large, particleMultiplier: multiplier, tint: tint)
+        burst.position = CGPoint(x: position.x + offset.x, y: position.y + offset.y)
+        content.addChild(burst)
+        splinters(at: burst.position, count: isLarge ? 12 : 5, reach: isLarge ? 220 : 120)
 
-        // Use particle emitter instead of SKShapeNode for better performance
-        let explosion = SKEmitterNode()
-        explosion.position = CGPoint(x: position.x + offset.x, y: position.y + offset.y)
-        explosion.zPosition = self.zPosition + 1
-
-        // Create simple particle texture programmatically
-        if explosion.particleTexture == nil {
-            explosion.particleTexture = ParticleTexture.softCircle(diameter: 32)
-        }
-
-        // Particle configuration
-        explosion.particleBirthRate = isLarge ? 800 : 400
-        explosion.numParticlesToEmit = isLarge ? 150 : 80
-        explosion.particleLifetime = 0.5
-        explosion.particleLifetimeRange = 0.25
-
-        // Size and scale
-        explosion.particleScale = isLarge ? 0.4 : 0.25
-        explosion.particleScaleRange = isLarge ? 0.2 : 0.1
-        explosion.particleScaleSpeed = -0.4
-
-        // Colors - orange/yellow gradient
-        if isLarge {
-            explosion.particleColor = .yellow
-            explosion.particleColorBlendFactor = 1.0
-            let colorSequence = SKKeyframeSequence(keyframeValues: [
-                UIColor.white,
-                UIColor.yellow,
-                UIColor.orange,
-                UIColor.red
-            ], times: [0, 0.2, 0.5, 1.0])
-            explosion.particleColorSequence = colorSequence
-        } else {
-            explosion.particleColor = .orange
-            explosion.particleColorBlendFactor = 1.0
-            let colorSequence = SKKeyframeSequence(keyframeValues: [
-                UIColor.yellow,
-                UIColor.orange,
-                UIColor.red,
-                UIColor(white: 0.3, alpha: 1.0)
-            ], times: [0, 0.3, 0.7, 1.0])
-            explosion.particleColorSequence = colorSequence
-        }
-
-        // Alpha
-        explosion.particleAlpha = 1.0
-        explosion.particleAlphaSpeed = -2.0
-
-        // Movement - radial burst
-        explosion.emissionAngle = 0
-        explosion.emissionAngleRange = .pi * 2
-        explosion.particleSpeed = isLarge ? 250 : 180
-        explosion.particleSpeedRange = isLarge ? 120 : 80
-
-        // Physics - slight gravity
-        explosion.xAcceleration = 0
-        explosion.yAcceleration = isLarge ? -40 : -25
-
-        // Blend mode for glow effect
-        explosion.particleBlendMode = .add
-
-        scene.gameContentNode.addChild(explosion)
-
-        // Remove emitter after particles are done
-        let waitAction = SKAction.wait(forDuration: 0.8)
-        let removeAction = SKAction.removeFromParent()
-        explosion.run(SKAction.sequence([waitAction, removeAction]))
-
-        // Haptic feedback
         if isLarge {
             HapticManager.shared.heavyTap()
         } else {
             HapticManager.shared.mediumTap()
         }
     }
-
 
     func getPoints() -> Int {
         return config.points
@@ -962,14 +804,10 @@ class Boss: SKShapeNode {
         return isActive && currentHealth > 0
     }
 
-    func getAttackPatterns() -> [BossAttackPattern] {
-        return config.attackPatterns
-    }
-
     /// Remaining health as a fraction of the boss's maximum, 0...1.
     var healthFraction: CGFloat {
-        guard config.maxHealth > 0 else { return 0 }
-        return CGFloat(currentHealth) / CGFloat(config.maxHealth)
+        guard maxHealthPoints > 0 else { return 0 }
+        return CGFloat(currentHealth) / CGFloat(maxHealthPoints)
     }
 
     /// Which act of the fight the boss is currently in. See `BossPhaseRules`.
@@ -977,275 +815,117 @@ class Boss: SKShapeNode {
         return BossPhaseRules.phase(forHealthFraction: healthFraction)
     }
 
-    /// The attacks available to the boss right now — the prefix of its authored list that
-    /// its current health has unlocked.
+    /// The attacks available to the boss right now: those of the acts its current
+    /// health has reached.
     func availableAttackPatterns() -> [BossAttackPattern] {
-        let all = config.attackPatterns
-        let count = BossPhaseRules.patternCount(
-            forPhase: currentPhase,
-            totalPatterns: all.count
-        )
-        return Array(all.prefix(count))
+        let count = BossPhaseRules.patternCount(forPhase: currentPhase, acts: config.patternActs)
+        return Array(config.attackPatterns.prefix(count))
     }
 
-    /// The boss's own size and stroke colour, for effects `BossManager` builds around it.
+    /// The boss's own size and accent colour, for effects `BossManager` and
+    /// `GameScene` build around it.
     var bossSize: CGFloat { config.size }
-    var telegraphColor: UIColor { config.strokeColor }
+    var telegraphColor: UIColor { config.palette.accent }
 
-    /// Marks a phase change on the boss itself: a lurch outward and a ring thrown off the
-    /// silhouette.
+    /// The wind-up: the hull swells and every muzzle gathers light.
+    func windUp(duration: TimeInterval) {
+        hull.removeAction(forKey: "bossTelegraph")
+        hull.run(.sequence([
+            .scale(to: 1.06, duration: duration * 0.75),
+            .scale(to: 1.0, duration: duration * 0.25)
+        ]), withKey: "bossTelegraph")
+        run(.sequence([
+            .customAction(withDuration: duration) { node, elapsed in
+                (node as? Boss)?.look.charge = Float(elapsed / CGFloat(max(0.01, duration)))
+            },
+            .customAction(withDuration: 0.3) { node, elapsed in
+                (node as? Boss)?.look.charge = Float(1 - elapsed / 0.3)
+            }
+        ]), withKey: "bossCharge")
+    }
+
+    func cancelWindUp() {
+        hull.removeAction(forKey: "bossTelegraph")
+        hull.setScale(1)
+        removeAction(forKey: "bossCharge")
+        look.charge = 0
+    }
+
+    /// Marks a phase change on the boss itself: a lurch outward, the hull flaring white,
+    /// and a ring of light thrown off it.
     ///
     /// Loud on purpose. The transition is the one moment in a fight that tells the player
-    /// they are actually getting somewhere, and against a 600 hit point level 50 boss
-    /// that readout is most of what stops the fight feeling like a wall.
-    ///
-    /// Deliberately no alpha animation: `takeDamage()` runs an unkeyed alpha flash on
-    /// every single hit, and a second, longer one from here would be fighting it for the
-    /// same property throughout the transition.
+    /// they are actually getting somewhere.
     func playPhaseTransitionEffect() {
-        removeAction(forKey: "bossPhaseFlash")
+        hull.removeAction(forKey: "bossPhaseFlash")
+        hull.run(.sequence([
+            .scale(to: 1.18, duration: 0.14),
+            .scale(to: 1.0, duration: 0.22)
+        ]), withKey: "bossPhaseFlash")
+        look.hitFlash = 1
 
-        let flash = SKAction.sequence([
-            SKAction.scale(to: 1.18, duration: 0.14),
-            SKAction.scale(to: 1.0, duration: 0.22)
-        ])
-        run(flash, withKey: "bossPhaseFlash")
-
-        let ring = SKShapeNode(circleOfRadius: config.size * 0.5)
-        ring.strokeColor = config.strokeColor
-        ring.fillColor = .clear
-        ring.lineWidth = 5
-        ring.zPosition = -1
-        ring.blendMode = .add
-        addChild(ring)
-        ring.run(SKAction.sequence([
-            SKAction.group([
-                SKAction.scale(to: 2.4, duration: 0.5),
-                SKAction.fadeOut(withDuration: 0.5)
-            ]),
-            SKAction.removeFromParent()
-        ]))
+        for (i, color) in [config.palette.accent, config.palette.hull].enumerated() {
+            let ring = LightRing.wave(from: config.size * 0.4, to: config.size * (1.3 + CGFloat(i) * 0.4),
+                                      width: 3 - CGFloat(i), color: color, duration: 0.5 + Double(i) * 0.15)
+            ring.zPosition = -1
+            addChild(ring)
+        }
     }
 
-    // MARK: - Damage Visual Effects
+    // MARK: - Damage visuals
 
     private func applyDamageVisuals(healthPercent: CGFloat) {
-        // Determine damage level based on health percentage
-        let newDamageLevel: Int
-        if healthPercent > 0.66 {
-            newDamageLevel = 0  // Minor damage
-        } else if healthPercent > 0.33 {
-            newDamageLevel = 1  // Moderate damage
-        } else {
-            newDamageLevel = 2  // Heavy damage
-        }
-
-        // Only apply new visual effects if damage level increased
+        let newDamageLevel = healthPercent > 0.66 ? 0 : (healthPercent > 0.33 ? 1 : 2)
         if newDamageLevel > damageLevel {
             damageLevel = newDamageLevel
-
-            switch damageLevel {
-            case 1:
-                applyModerateDamage()
-            case 2:
-                applyHeavyDamage()
-            default:
-                break
-            }
+            createSmokeTrail(isHeavy: damageLevel == 2)
+            splinters(at: position, count: damageLevel == 2 ? 10 : 6, reach: config.size)
+            HapticManager.shared.mediumTap()
         }
 
-        // Random effects on every hit
-        if Int.random(in: 0...2) == 0 {  // 33% chance
-            createDebris()
+        if Int.random(in: 0...2) == 0 {
+            splinters(at: CGPoint(x: position.x + CGFloat.random(in: -config.size / 3...config.size / 3),
+                                  y: position.y + CGFloat.random(in: -config.size / 3...config.size / 3)),
+                      count: Int.random(in: 1...3), reach: 70)
         }
-
-        // Add impact shake
         applyImpactShake()
-
-        // Add random crack every few hits
-        if currentHealth % 5 == 0 || healthPercent < 0.3 {
-            addCrack()
-        }
-
-        // Spark effects
         createSparks()
     }
 
-    private func applyModerateDamage() {
-        // Add smoke particles
-        createSmokeTrail()
-
-        // Slight deformation
-        let deform = SKAction.sequence([
-            SKAction.scaleX(to: 1.05, y: 0.95, duration: 0.1),
-            SKAction.scale(to: 1.0, duration: 0.2)
-        ])
-        run(deform)
-
-        // Make a part of the boss darker (battle damage)
-        applyScorchMark(position: .random(in: 0...1))
-    }
-
-    private func applyHeavyDamage() {
-        // More intense smoke
-        createSmokeTrail(isHeavy: true)
-
-        // Break off a piece
-        breakOffPart()
-
-        // More visible deformation
-        let deform = SKAction.sequence([
-            SKAction.scaleX(to: 1.08, y: 0.92, duration: 0.15),
-            SKAction.scale(to: 1.0, duration: 0.25)
-        ])
-        run(deform)
-
-        // Multiple scorch marks
-        for _ in 0..<3 {
-            applyScorchMark(position: .random(in: 0...1))
-        }
-    }
-
     private func applyImpactShake() {
-        let shake = SKAction.sequence([
-            SKAction.moveBy(x: 3, y: 2, duration: 0.05),
-            SKAction.moveBy(x: -6, y: -4, duration: 0.05),
-            SKAction.moveBy(x: 3, y: 2, duration: 0.05)
-        ])
-        run(shake)
+        guard hull.action(forKey: "hitShake") == nil else { return }
+        hull.run(.sequence([
+            .moveBy(x: 3, y: 2, duration: 0.05),
+            .moveBy(x: -6, y: -4, duration: 0.05),
+            .moveBy(x: 3, y: 2, duration: 0.05)
+        ]), withKey: "hitShake")
     }
 
-    private func createDebris() {
-        // `gameContentNode`, not the scene: the scene keeps ticking while the game is
-        // paused, so debris used to keep tumbling behind the pause menu. It also means
-        // the positions below — computed from `position`, which is in gameContentNode's
-        // space — land in the space they were measured in rather than working by
-        // coincidence because that node happens to sit at the origin unscaled.
-        guard let scene = self.scene as? GameScene else { return }
-        let debrisParent = scene.gameContentNode ?? scene
+    /// Splinters of the wireframe flying off: short lines of the hull's light, tumbling
+    /// and fading. `gameContentNode`, so they freeze with the pause menu.
+    private func splinters(at point: CGPoint, count: Int, reach: CGFloat) {
+        guard let scene = scene as? GameScene, let content = scene.gameContentNode else { return }
+        for _ in 0..<count {
+            let length = CGFloat.random(in: 6...16)
+            let color = Bool.random() ? config.palette.hull : config.palette.accent
+            let splinter = LightSprite.tube(from: CGPoint(x: -length / 2, y: 0), to: CGPoint(x: length / 2, y: 0),
+                                            width: 1.2, color: color)
+            splinter.position = point
+            splinter.zRotation = CGFloat.random(in: 0...(.pi * 2))
+            splinter.zPosition = zPosition + 1
+            content.addChild(splinter)
 
-        let debrisCount = Int.random(in: 2...5)
-
-        for _ in 0..<debrisCount {
-            let debris = SKShapeNode(rectOf: CGSize(
-                width: CGFloat.random(in: 3...8),
-                height: CGFloat.random(in: 3...8)
-            ))
-            debris.fillColor = config.color.withAlphaComponent(0.8)
-            debris.strokeColor = config.strokeColor
-            debris.lineWidth = 1
-
-            // Random position on boss
-            let offsetX = CGFloat.random(in: -config.size/2...config.size/2)
-            let offsetY = CGFloat.random(in: -config.size/2...config.size/2)
-            debris.position = CGPoint(x: position.x + offsetX, y: position.y + offsetY)
-            debris.zPosition = zPosition - 1
-
-            debrisParent.addChild(debris)
-
-            // Fly away animation
             let angle = CGFloat.random(in: 0...(.pi * 2))
-            let distance = CGFloat.random(in: 50...150)
-            let dx = cos(angle) * distance
-            let dy = sin(angle) * distance
-
-            let flyAway = SKAction.group([
-                SKAction.moveBy(x: dx, y: dy, duration: 1.5),
-                SKAction.rotate(byAngle: .pi * CGFloat.random(in: 2...4), duration: 1.5),
-                SKAction.fadeOut(withDuration: 1.5)
-            ])
-
-            debris.run(SKAction.sequence([
-                flyAway,
-                SKAction.removeFromParent()
+            let distance = CGFloat.random(in: reach * 0.4...reach)
+            let duration = Double.random(in: 0.6...1.1)
+            let fly = SKAction.moveBy(x: cos(angle) * distance, y: sin(angle) * distance, duration: duration)
+            fly.timingMode = .easeOut
+            splinter.run(.sequence([
+                .group([fly, .rotate(byAngle: .pi * CGFloat.random(in: 2...5), duration: duration),
+                        .fadeOut(withDuration: duration)]),
+                .removeFromParent()
             ]))
         }
-    }
-
-    private func breakOffPart() {
-        // See createDebris() for why this is gameContentNode rather than the scene.
-        guard let scene = self.scene as? GameScene else { return }
-        let chunkParent = scene.gameContentNode ?? scene
-
-        // Create a visible chunk that breaks off
-        let chunk = SKShapeNode(circleOfRadius: config.size * 0.15)
-        chunk.fillColor = config.color
-        chunk.strokeColor = config.strokeColor
-        chunk.lineWidth = 2
-
-        // Position on edge of boss
-        let angle = CGFloat.random(in: 0...(.pi * 2))
-        let offsetX = cos(angle) * config.size * 0.4
-        let offsetY = sin(angle) * config.size * 0.4
-        chunk.position = CGPoint(x: position.x + offsetX, y: position.y + offsetY)
-        chunk.zPosition = zPosition
-
-        chunkParent.addChild(chunk)
-
-        // Small explosion at break point
-        createSmallExplosion(at: chunk.position)
-
-        // Fly off animation
-        let flyDirection = CGPoint(x: offsetX * 3, y: offsetY * 3)
-        let flyOff = SKAction.group([
-            SKAction.moveBy(x: flyDirection.x, y: flyDirection.y, duration: 2.0),
-            SKAction.rotate(byAngle: .pi * 4, duration: 2.0),
-            SKAction.fadeOut(withDuration: 2.0)
-        ])
-
-        chunk.run(SKAction.sequence([
-            flyOff,
-            SKAction.removeFromParent()
-        ]))
-
-        HapticManager.shared.mediumTap()
-    }
-
-    private func addCrack() {
-        guard let cracksLayer = cracksLayer else { return }
-
-        let path = CGMutablePath()
-        let startX = CGFloat.random(in: -config.size/3...config.size/3)
-        let startY = CGFloat.random(in: -config.size/3...config.size/3)
-        path.move(to: CGPoint(x: startX, y: startY))
-
-        // Create jagged crack line
-        let segments = Int.random(in: 3...6)
-        for _ in 0..<segments {
-            let endX = startX + CGFloat.random(in: -config.size/4...config.size/4)
-            let endY = startY + CGFloat.random(in: -config.size/4...config.size/4)
-            path.addLine(to: CGPoint(x: endX, y: endY))
-        }
-
-        let crack = SKShapeNode(path: path)
-        crack.strokeColor = UIColor.black.withAlphaComponent(0.6)
-        crack.lineWidth = 2
-        crack.lineCap = .round
-        crack.alpha = 0
-
-        cracksLayer.addChild(crack)
-
-        // Fade in crack
-        crack.run(SKAction.fadeIn(withDuration: 0.2))
-    }
-
-    private func applyScorchMark(position: CGFloat) {
-        let scorch = SKShapeNode(circleOfRadius: config.size * CGFloat.random(in: 0.1...0.2))
-        scorch.fillColor = UIColor.black.withAlphaComponent(0.4)
-        scorch.strokeColor = .clear
-
-        let angle = position * .pi * 2
-        let distance = config.size * CGFloat.random(in: 0.2...0.4)
-        scorch.position = CGPoint(
-            x: cos(angle) * distance,
-            y: sin(angle) * distance
-        )
-        scorch.zPosition = 0.5
-        scorch.alpha = 0
-
-        addChild(scorch)
-
-        scorch.run(SKAction.fadeAlpha(to: 0.6, duration: 0.3))
     }
 
     private func createSmokeTrail(isHeavy: Bool = false) {
@@ -1254,121 +934,56 @@ class Boss: SKShapeNode {
         let smoke = SKEmitterNode()
         smoke.position = position
         smoke.zPosition = zPosition - 1
-
-        if smoke.particleTexture == nil {
-            smoke.particleTexture = ParticleTexture.softCircle(diameter: 32)
-        }
-
+        smoke.particleTexture = ParticleTexture.softCircle(diameter: 32)
         smoke.particleBirthRate = isHeavy ? 40 : 20
         smoke.numParticlesToEmit = isHeavy ? 30 : 15
         smoke.particleLifetime = 1.5
         smoke.particleLifetimeRange = 0.5
-
         smoke.particleScale = 0.3
         smoke.particleScaleRange = 0.1
         smoke.particleScaleSpeed = 0.2
-
-        smoke.particleColor = UIColor.gray
+        smoke.particleColor = UIColor(white: 0.35, alpha: 1)
         smoke.particleColorBlendFactor = 1.0
-        smoke.particleAlpha = 0.6
-        smoke.particleAlphaSpeed = -0.4
-
+        smoke.particleAlpha = 0.5
+        smoke.particleAlphaSpeed = -0.35
         smoke.emissionAngle = .pi / 2
         smoke.emissionAngleRange = .pi / 4
         smoke.particleSpeed = 30
         smoke.particleSpeedRange = 20
-
         smoke.yAcceleration = 20
 
         scene.gameContentNode.addChild(smoke)
-
-        let waitAction = SKAction.wait(forDuration: 2.0)
-        let removeAction = SKAction.removeFromParent()
-        smoke.run(SKAction.sequence([waitAction, removeAction]))
+        smoke.run(.sequence([.wait(forDuration: 2.0), .removeFromParent()]))
     }
 
     private func createSparks() {
         guard let scene = self.scene as? GameScene else { return }
 
         let sparks = SKEmitterNode()
-        let sparkX = position.x + CGFloat.random(in: -config.size/2...config.size/2)
-        let sparkY = position.y + CGFloat.random(in: -config.size/2...config.size/2)
+        let sparkX = position.x + CGFloat.random(in: -config.size / 2...config.size / 2)
+        let sparkY = position.y + CGFloat.random(in: -config.size / 2...config.size / 2)
         sparks.position = CGPoint(x: sparkX, y: sparkY)
         sparks.zPosition = zPosition + 1
-
-        if sparks.particleTexture == nil {
-            sparks.particleTexture = ParticleTexture.softCircle(diameter: 32)
-        }
-
+        sparks.particleTexture = ParticleTexture.softCircle(diameter: 32)
         sparks.particleBirthRate = 200
         sparks.numParticlesToEmit = 10
         sparks.particleLifetime = 0.3
         sparks.particleLifetimeRange = 0.1
-
         sparks.particleScale = 0.08
         sparks.particleScaleRange = 0.04
         sparks.particleScaleSpeed = -0.2
-
-        sparks.particleColor = .yellow
+        sparks.particleColor = StoryPalette.mix(config.palette.accent, .white, 0.4)
         sparks.particleColorBlendFactor = 1.0
         sparks.particleAlpha = 1.0
         sparks.particleAlphaSpeed = -3.0
-
         sparks.emissionAngle = 0
         sparks.emissionAngleRange = .pi * 2
         sparks.particleSpeed = 80
         sparks.particleSpeedRange = 40
-
         sparks.yAcceleration = -150
         sparks.particleBlendMode = .add
 
         scene.gameContentNode.addChild(sparks)
-
-        let waitAction = SKAction.wait(forDuration: 0.5)
-        let removeAction = SKAction.removeFromParent()
-        sparks.run(SKAction.sequence([waitAction, removeAction]))
-    }
-
-    private func createSmallExplosion(at position: CGPoint) {
-        guard let scene = self.scene as? GameScene else { return }
-
-        // Play explosion sound when parts break off
-        SoundManager.shared.playExplosionSound(on: scene)
-
-        let explosion = SKEmitterNode()
-        explosion.position = position
-        explosion.zPosition = zPosition + 1
-
-        if explosion.particleTexture == nil {
-            explosion.particleTexture = ParticleTexture.softCircle(diameter: 32)
-        }
-
-        explosion.particleBirthRate = 300
-        explosion.numParticlesToEmit = 30
-        explosion.particleLifetime = 0.4
-        explosion.particleLifetimeRange = 0.15
-
-        explosion.particleScale = 0.2
-        explosion.particleScaleRange = 0.1
-        explosion.particleScaleSpeed = -0.3
-
-        explosion.particleColor = .orange
-        explosion.particleColorBlendFactor = 1.0
-        explosion.particleAlpha = 1.0
-        explosion.particleAlphaSpeed = -2.5
-
-        explosion.emissionAngle = 0
-        explosion.emissionAngleRange = .pi * 2
-        explosion.particleSpeed = 120
-        explosion.particleSpeedRange = 60
-
-        explosion.yAcceleration = -30
-        explosion.particleBlendMode = .add
-
-        scene.gameContentNode.addChild(explosion)
-
-        let waitAction = SKAction.wait(forDuration: 0.6)
-        let removeAction = SKAction.removeFromParent()
-        explosion.run(SKAction.sequence([waitAction, removeAction]))
+        sparks.run(.sequence([.wait(forDuration: 0.5), .removeFromParent()]))
     }
 }

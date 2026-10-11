@@ -55,10 +55,15 @@ enum GameSetting: CaseIterable {
 
 /// Modal settings panel, presentable from any scene.
 ///
-/// Owns its own hit-testing: the host scene forwards a tapped node name to
-/// `handleTap(named:)` and gets back whether the overlay consumed it. That keeps the
-/// scenes from having to know anything about the panel's internals, and matches the
-/// name-based touch dispatch the rest of the game already uses.
+/// Drawn as a HUD readout rather than a dialog: dark glass inside lit corner brackets,
+/// a tracked title with a hairline drawn out under it, and one row per switch with a
+/// lamp that is lit when the channel is on.
+///
+/// Owns its own hit-testing: the host scene forwards every tap's location to
+/// `handleTap(at:)` while the panel is up. Rows and the close button are found by
+/// their geometry, not by asking the scene which named node is on top — that answer
+/// depends on draw order, and with the scrim, the glass and the rows all under the
+/// finger it is not one a modal should be built on.
 final class SettingsOverlay: SKNode {
 
     static let nodeName = "settingsOverlay"
@@ -68,11 +73,26 @@ final class SettingsOverlay: SKNode {
     /// Called after the overlay has finished animating out and removed itself.
     private var onDismiss: (() -> Void)?
 
-    private var pillNodes: [GameSetting: SKShapeNode] = [:]
-    private var pillLabels: [GameSetting: SKLabelNode] = [:]
+    private var rows: [GameSetting: SKShapeNode] = [:]
+    private var lamps: [GameSetting: SKShapeNode] = [:]
+    private var lampGlows: [GameSetting: SKSpriteNode] = [:]
+    private var stateLabels: [GameSetting: SKLabelNode] = [:]
+    private var panelFrame: CGRect = .zero
 
     /// Guards against a second dismissal while the exit animation is still running.
     private var isDismissing = false
+
+    /// How long after opening the panel ignores taps.
+    ///
+    /// It opens on a tap, right over the button that opened it: in the menu SETTINGS
+    /// sits under CLOSE whenever ENDLESS is not unlocked, and in the pause menu it sits
+    /// by the HAPTICS row and CLOSE. So the second tap of a double tap landed on a panel
+    /// still scaling in, and closed it again or flipped a switch nobody had seen.
+    static let openingGrace: CFTimeInterval = 0.25
+
+    /// Real time rather than the host scene's clock: the pause menu hosts the panel over
+    /// frozen gameplay.
+    private let openedAt = CACurrentMediaTime()
 
     // MARK: - Construction
 
@@ -94,166 +114,197 @@ final class SettingsOverlay: SKNode {
     }
 
     private func buildScrim(sceneSize: CGSize) {
-        let scrim = SKShapeNode(rectOf: sceneSize)
-        scrim.fillColor = UIColor.black.withAlphaComponent(0.7)
-        scrim.strokeColor = .clear
+        let scrim = SKSpriteNode(color: .black, size: CGSize(width: sceneSize.width + 4, height: sceneSize.height + 4))
         scrim.position = CGPoint(x: sceneSize.width / 2, y: sceneSize.height / 2)
-        // Named so a tap on the backdrop closes the panel, matching the pause overlay.
         scrim.name = "settingsScrim"
         scrim.alpha = 0
+        scrim.zPosition = -10
         addChild(scrim)
-
-        scrim.run(SKAction.fadeIn(withDuration: UITheme.Animations.durationQuick))
+        scrim.run(SKAction.fadeAlpha(to: 0.78, duration: 0.2))
     }
 
     private func buildPanel(sceneSize: CGSize) {
-        let rowHeight: CGFloat = 46
-        let rowSpacing: CGFloat = 12
-        let panelWidth = min(sceneSize.width - 60, 320)
+        let accent = StoryPalette.cyan
+        let rowHeight: CGFloat = 52
+        let width = min(sceneSize.width / FilmUI.uiScale(for: sceneSize) - 48, 320)
         let rowsHeight = CGFloat(GameSetting.allCases.count) * rowHeight
-            + CGFloat(GameSetting.allCases.count - 1) * rowSpacing
-        let panelHeight = rowsHeight + 178
+        // Title block, the rows, the close button, and the air between them.
+        let height = 30 + 30 + 26 + rowsHeight + 26 + UITheme.Dimensions.buttonHeightSecondary + 26
 
-        let panel = SKShapeNode(
-            rectOf: CGSize(width: panelWidth, height: panelHeight),
-            cornerRadius: UITheme.Dimensions.cornerRadiusLarge
-        )
-        panel.fillColor = UIColor(red: 0.15, green: 0.15, blue: 0.2, alpha: 1.0)
-        panel.strokeColor = UITheme.Colors.primaryCyan
-        panel.lineWidth = UITheme.Dimensions.lineWidthThick
-        panel.position = CGPoint(x: sceneSize.width / 2, y: sceneSize.height / 2)
-        panel.setScale(0.8)
+        let scale = FilmUI.uiScale(for: sceneSize)
+        let centre = CGPoint(x: sceneSize.width / 2, y: sceneSize.height / 2)
+        panelFrame = CGRect(x: centre.x - width * scale / 2, y: centre.y - height * scale / 2,
+                            width: width * scale, height: height * scale)
+
+        let panel = SKNode()
+        panel.position = centre
+        panel.name = "settingsPanel"
         panel.alpha = 0
+        panel.setScale(scale * 0.96)
         addChild(panel)
 
-        GlowHelper.addEnhancedGlow(to: panel, color: UITheme.Colors.primaryCyan, intensity: 0.5)
+        // Near opaque: over the pause menu, anything more and its lit type shows through.
+        //
+        // And a few steps below everything else on the panel. The view ignores sibling
+        // order, and the lamps' glow and the title's bloom each hang one step *below*
+        // the node they light — so with the glass on the same z as the rows, both drew
+        // under 97% of it and the lit state had no halo at all.
+        let glass = SKSpriteNode(color: FilmUI.glass, size: CGSize(width: width, height: height))
+        glass.alpha = 0.97
+        glass.zPosition = -3
+        glass.name = "settingsGlass"
+        panel.addChild(glass)
 
-        let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = L10n.Settings.title
-        title.fontSize = UITheme.Typography.sizeMedium
-        title.fontColor = UITheme.Colors.primaryCyanLight
-        title.horizontalAlignmentMode = .center
-        title.verticalAlignmentMode = .center
-        title.position = CGPoint(x: 0, y: panelHeight / 2 - 38)
+        let frame = SKShapeNode(rectOf: CGSize(width: width, height: height))
+        frame.fillColor = .clear
+        frame.strokeColor = accent.withAlphaComponent(0.16)
+        frame.lineWidth = 1
+        panel.addChild(frame)
+        FilmUI.addBrackets(to: panel, size: CGSize(width: width, height: height), arm: 18, color: accent, width: 1.5)
+
+        // Title, and the hairline that draws out under it.
+        var y = height / 2 - 30 - 15
+        let title = FilmUI.title(L10n.Settings.title, size: 26, color: UITheme.Colors.primaryCyanLight,
+                                 glow: accent, tracking: 6, maxWidth: width - 40)
+        title.position = CGPoint(x: 0, y: y)
         panel.addChild(title)
 
-        // Rows, stacked from just under the title.
-        let rowWidth = panelWidth - 44
-        var rowY = panelHeight / 2 - 86 - rowHeight / 2
+        y -= 15 + 14
+        let rule = FilmUI.drawnRule(width: width - 48, color: accent, alpha: 0.45, delay: 0.1)
+        rule.position = CGPoint(x: 0, y: y)
+        panel.addChild(rule)
 
-        for setting in GameSetting.allCases {
+        // Rows, hung from just under the rule.
+        y -= 12 + rowHeight / 2
+        let rowWidth = width - 32
+        for (index, setting) in GameSetting.allCases.enumerated() {
             let row = buildRow(setting, width: rowWidth, height: rowHeight)
-            row.position = CGPoint(x: 0, y: rowY)
+            row.position = CGPoint(x: 0, y: y)
             panel.addChild(row)
-            rowY -= rowHeight + rowSpacing
+            rows[setting] = row
+
+            // A hairline between rows, so the list reads as a readout, not a form.
+            if index < GameSetting.allCases.count - 1 {
+                let divider = FilmUI.hairline(width: rowWidth, color: .white, alpha: 0.08)
+                divider.position = CGPoint(x: 0, y: y - rowHeight / 2)
+                panel.addChild(divider)
+            }
+            y -= rowHeight
         }
 
         let closeButton = UITheme.createButton(
             text: L10n.Settings.close,
-            color: UITheme.Colors.primaryCyan,
-            width: 160,
-            name: Self.closeButtonName,
-            height: 44
+            color: accent,
+            width: UITheme.Dimensions.buttonWidthSmall,
+            name: Self.closeButtonName
         )
-        closeButton.position = CGPoint(x: 0, y: -panelHeight / 2 + 46)
+        closeButton.position = CGPoint(x: 0, y: -height / 2 + 26 + UITheme.Dimensions.buttonHeightSecondary / 2)
         panel.addChild(closeButton)
 
-        panel.run(SKAction.group([
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationQuick),
-            SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationQuick)
-        ]))
+        let open = SKAction.scale(to: scale, duration: 0.25)
+        open.timingMode = .easeOut
+        panel.run(.group([.fadeIn(withDuration: 0.2), open]))
     }
 
-    /// One settings row: label on the left, ON/OFF pill on the right.
+    /// One settings row: the channel's name on the left, its state on the right as a
+    /// lamp and a word.
     ///
-    /// The whole row is the hit target rather than just the pill — a 46pt-tall strip is
-    /// far easier to hit than the pill alone, and there is nothing else in the row to
-    /// tap by mistake.
-    private func buildRow(_ setting: GameSetting, width: CGFloat, height: CGFloat) -> SKNode {
-        let row = SKShapeNode(rectOf: CGSize(width: width, height: height), cornerRadius: UITheme.Dimensions.cornerRadiusSmall)
-        row.fillColor = UIColor(white: 1.0, alpha: 0.05)
-        row.strokeColor = UIColor(white: 1.0, alpha: 0.12)
-        row.lineWidth = 1
+    /// The whole row is the hit target rather than just the lamp — a 52pt-tall strip is
+    /// far easier to hit, and there is nothing else in it to tap by mistake.
+    private func buildRow(_ setting: GameSetting, width: CGFloat, height: CGFloat) -> SKShapeNode {
+        let row = SKShapeNode(rectOf: CGSize(width: width, height: height))
+        row.fillColor = .clear
+        row.strokeColor = .clear
         row.name = setting.nodeName
 
-        let label = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        label.text = setting.title
-        label.fontSize = UITheme.Typography.sizeSmall
-        label.fontColor = UITheme.Colors.textLabel
+        let label = FilmUI.label(setting.title, size: 17, color: UITheme.Colors.textBody,
+                                 tracking: 2.5, maxWidth: width - 120)
         label.horizontalAlignmentMode = .left
-        label.verticalAlignmentMode = .center
-        label.position = CGPoint(x: -width / 2 + 16, y: 0)
-        // Child labels must not swallow the row's identity: the host scene walks up
-        // from the hit node to find a name, so giving these the row's name keeps the
-        // lookup working wherever inside the row the tap lands.
-        label.name = setting.nodeName
+        label.position = CGPoint(x: -width / 2 + 8, y: 0)
+        UITheme.centerOnCapBand(label)
         row.addChild(label)
 
-        let pillWidth: CGFloat = 62
-        let pill = SKShapeNode(
-            rectOf: CGSize(width: pillWidth, height: 26),
-            cornerRadius: 13
-        )
-        pill.position = CGPoint(x: width / 2 - pillWidth / 2 - 12, y: 0)
-        pill.name = setting.nodeName
-        row.addChild(pill)
-        pillNodes[setting] = pill
+        // The switch: a lamp in a small frame, and the state spelled out after it.
+        let lampX = width / 2 - 74
+        let lampGlow = NeonFX.radialGlow(radius: 14, color: StoryPalette.green)
+        lampGlow.position = CGPoint(x: lampX, y: 0)
+        lampGlow.zPosition = -1
+        row.addChild(lampGlow)
+        lampGlows[setting] = lampGlow
 
-        let pillLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        pillLabel.fontSize = 14
-        pillLabel.horizontalAlignmentMode = .center
-        pillLabel.verticalAlignmentMode = .center
-        pillLabel.name = setting.nodeName
-        pill.addChild(pillLabel)
-        pillLabels[setting] = pillLabel
+        let lamp = SKShapeNode(rectOf: CGSize(width: 9, height: 9))
+        lamp.position = CGPoint(x: lampX, y: 0)
+        lamp.lineWidth = 1
+        row.addChild(lamp)
+        lamps[setting] = lamp
 
-        applyPillStyle(for: setting)
+        let state = SKLabelNode()
+        state.horizontalAlignmentMode = .left
+        state.verticalAlignmentMode = .center
+        state.position = CGPoint(x: lampX + 14, y: 0)
+        row.addChild(state)
+        stateLabels[setting] = state
 
+        let switchFrame = CGSize(width: 82, height: 28)
+        let box = SKShapeNode(rectOf: switchFrame)
+        box.position = CGPoint(x: width / 2 - switchFrame.width / 2 - 4, y: 0)
+        box.fillColor = .clear
+        box.strokeColor = UIColor.white.withAlphaComponent(0.12)
+        box.lineWidth = 1
+        box.name = "switchFrame"
+        row.addChild(box)
+
+        applyState(for: setting)
         return row
     }
 
-    private func applyPillStyle(for setting: GameSetting) {
-        guard let pill = pillNodes[setting], let label = pillLabels[setting] else { return }
+    private func applyState(for setting: GameSetting) {
+        guard let lamp = lamps[setting], let state = stateLabels[setting] else { return }
 
         let isOn = setting.isEnabled
-        let tint = isOn ? UITheme.Colors.successGreenLight : UITheme.Colors.textLabelInactive
+        let tint = isOn ? StoryPalette.green : FilmUI.neutral
 
-        pill.fillColor = tint.withAlphaComponent(isOn ? 0.22 : 0.12)
-        pill.strokeColor = tint
-        pill.lineWidth = UITheme.Dimensions.lineWidthThin
-        label.text = isOn ? L10n.Settings.on : L10n.Settings.off
-        label.fontColor = tint
+        lamp.fillColor = isOn ? tint : .clear
+        lamp.strokeColor = tint.withAlphaComponent(isOn ? 1 : 0.6)
+        lampGlows[setting]?.alpha = isOn ? 0.55 : 0
+        FilmUI.set(state, isOn ? L10n.Settings.on : L10n.Settings.off,
+                   font: UITheme.Typography.fontNumeric, size: 13,
+                   color: isOn ? StoryPalette.mix(tint, .white, 0.3) : tint.withAlphaComponent(0.75),
+                   tracking: 2)
     }
 
     // MARK: - Interaction
 
-    /// Handles a tap on `nodeName`.
-    /// - Returns: `true` if the overlay consumed the tap, so the host scene can stop.
-    @discardableResult
-    func handleTap(named nodeName: String?) -> Bool {
-        guard let nodeName = nodeName else {
-            // A tap that hit no named node still landed on the modal scrim, so swallow
-            // it rather than letting it reach the scene underneath.
-            return true
+    /// Handles a tap at `location`, in the coordinates of the scene the overlay is in.
+    /// Every tap is the overlay's while it is up: a row toggles, CLOSE or anywhere off
+    /// the panel dismisses, and anything else on the panel is swallowed — as is every
+    /// tap in the first `openingGrace` seconds.
+    func handleTap(at location: CGPoint) {
+        guard !isDismissing, CACurrentMediaTime() - openedAt >= Self.openingGrace,
+              let scene = scene else { return }
+        let point = scene.convert(location, to: self)
+
+        for setting in GameSetting.allCases {
+            guard let row = rows[setting], let box = row.path?.boundingBoxOfPath else { continue }
+            if box.contains(scene.convert(location, to: row)) {
+                toggle(setting)
+                return
+            }
         }
 
-        if let setting = GameSetting.allCases.first(where: { $0.nodeName == nodeName }) {
-            toggle(setting)
-            return true
-        }
-
-        if nodeName == Self.closeButtonName || nodeName == "settingsScrim" {
+        if FilmUI.button(at: location, under: self, names: [Self.closeButtonName]) != nil {
             dismiss()
-            return true
+            return
         }
 
-        // Anything else was inside the panel but not interactive — still ours.
-        return true
+        if !panelFrame.contains(point) {
+            dismiss()
+        }
     }
 
     private func toggle(_ setting: GameSetting) {
         setting.isEnabled.toggle()
-        applyPillStyle(for: setting)
+        applyState(for: setting)
 
         // Feedback has to come *after* the flip so the player hears/feels the state
         // they just switched into — and so turning a channel off doesn't then play a
@@ -268,13 +319,13 @@ final class SettingsOverlay: SKNode {
             SoundManager.shared.playButtonClickSound(on: scene)
         }
 
-        // A brief press on the pill, so the row acknowledges the tap.
-        if let pill = pillNodes[setting] {
-            pill.removeAction(forKey: "pillPress")
-            pill.run(SKAction.sequence([
-                SKAction.scale(to: 1.12, duration: UITheme.Animations.durationFast),
-                SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationFast)
-            ]), withKey: "pillPress")
+        // The lamp blinks as it changes, so the row acknowledges the tap.
+        if let lamp = lamps[setting] {
+            lamp.removeAction(forKey: "press")
+            lamp.run(.sequence([
+                .scale(to: 1.5, duration: 0.06),
+                .scale(to: 1.0, duration: 0.14)
+            ]), withKey: "press")
         }
     }
 
@@ -282,13 +333,20 @@ final class SettingsOverlay: SKNode {
         guard !isDismissing else { return }
         isDismissing = true
 
+        if let close = FilmUI.descendant(of: self, named: Self.closeButtonName) {
+            close.run(UITheme.createButtonPressAnimation {})
+        }
+        if let scene = scene {
+            SoundManager.shared.playButtonClickSound(on: scene)
+        }
+
         let completion = onDismiss
         onDismiss = nil
 
         // Completion block rather than an SKAction.run appended after
         // removeFromParent(): a node that has left the tree stops being updated, so
         // actions sequenced *after* its own removal never fire.
-        run(SKAction.fadeOut(withDuration: UITheme.Animations.durationQuick)) { [weak self] in
+        run(SKAction.fadeOut(withDuration: 0.2)) { [weak self] in
             self?.removeFromParent()
             completion?()
         }

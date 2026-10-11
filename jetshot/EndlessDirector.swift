@@ -56,8 +56,12 @@ nonisolated enum EndlessRules {
     /// The floor is `GameConfiguration.minSpawnInterval`, the same one the campaign's
     /// pacing pass respects, so an endless wave can never clump tighter than a level 50
     /// wave can.
+    ///
+    /// Opens at 0.83 s rather than the original 1.12: the first rounds were the slowest
+    /// stretch of the whole mode, and with enemies now soaking a few rounds each and the
+    /// guns firing a stream, round one emptied faster than it filled.
     static func spawnInterval(forRound round: Int) -> TimeInterval {
-        return max(GameConfiguration.minSpawnInterval, 1.15 - 0.03 * TimeInterval(round))
+        return max(GameConfiguration.minSpawnInterval, 0.85 - 0.025 * TimeInterval(round))
     }
 
     /// Every third round closes on a formation, for the same reason the campaign's levels
@@ -113,21 +117,43 @@ final class EndlessDirector {
         return Array(tiers.prefix(tier + 1).joined())
     }
 
+    /// What a round's loose wave draws from: the unlocked types that fly themselves.
+    ///
+    /// The scout, bomber, elite guard and spinner only move under `FormationManager`.
+    /// Drawn into the loose wave, they used to be handed to `Enemy.startMovement`, which
+    /// did nothing with them — so they parked just above the screen, out of reach and
+    /// still firing, and the round, which ends only when the playfield is empty, never
+    /// ended. Tier 0 is all line fighters, so this is never empty.
+    static func looseRoster(forRound round: Int) -> [EnemyType] {
+        return roster(forRound: round).filter { !$0.isFormationOnly }
+    }
+
+    /// What a round's formation draws from: the unlocked types that can fly in one.
+    ///
+    /// It used to be the whole roster, and `FormationManager` never runs a type's own
+    /// movement routine — a turret in formation never docked or fired its bursts, a
+    /// bouncer never bounced, a teleporter never teleported. See
+    /// `EnemyType.canFlyInFormation`.
+    static func formationRoster(forRound round: Int) -> [EnemyType] {
+        return roster(forRound: round).filter { $0.canFlyInFormation }
+    }
+
     /// The waves for one round.
     ///
     /// Deliberately drawn from the *whole* unlocked roster rather than only the newest
     /// tier: an endless run should keep every enemy the player has learned in circulation,
     /// so that what makes round 30 hard is the combination rather than simply the fact
-    /// that round 30's enemies are new.
+    /// that round 30's enemies are new. The loose wave draws from `looseRoster`, the
+    /// formation from `formationRoster`.
     static func waves(forRound round: Int) -> [EnemyWave] {
-        let roster = roster(forRound: round)
-        guard !roster.isEmpty else { return [] }
+        let loose = looseRoster(forRound: round)
+        guard !loose.isEmpty else { return [] }
 
         let interval = EndlessRules.spawnInterval(forRound: round)
         var waves: [EnemyWave] = []
 
         let main = (0..<EndlessRules.enemyCount(forRound: round)).map { _ in
-            roster.randomElement() ?? .basic
+            loose.randomElement() ?? .basic
         }
         waves.append(
             EnemyWave(enemies: main, spawnDelay: GameConfiguration.minWaveDelay, spawnInterval: interval)
@@ -135,7 +161,7 @@ final class EndlessDirector {
 
         if EndlessRules.hasFormation(inRound: round) {
             // One type per formation, so it reads as a single object arriving.
-            let type = roster.randomElement() ?? .basic
+            let type = formationRoster(forRound: round).randomElement() ?? .basic
             let patterns: [FormationPattern] = [.vShape, .arrow, .line, .arc, .diamond, .circle]
             waves.append(
                 EnemyWave(

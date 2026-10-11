@@ -15,7 +15,8 @@ struct PowerUpSpawnConfig {
 
 class PowerUpManager {
     private weak var scene: SKScene?
-    private var spawnConfig: PowerUpSpawnConfig
+    /// Readable so `GameScene` can show `jetshotTests` which table is live.
+    private(set) var spawnConfig: PowerUpSpawnConfig
     private var lastSpawnTime: TimeInterval = 0
     private var nextSpawnDelay: TimeInterval = 0
 
@@ -23,6 +24,16 @@ class PowerUpManager {
         self.scene = scene
         self.spawnConfig = config
         self.nextSpawnDelay = config.spawnInterval
+    }
+
+    /// Swaps the spawn table for an endless run's next round, which draws its power-ups
+    /// from deeper and deeper campaign levels the way its hazards do.
+    ///
+    /// The countdown to the next drop is left alone: the new interval applies from the
+    /// drop after it, so a round change neither fires a power-up early nor resets the
+    /// wait for one.
+    func updateConfig(_ config: PowerUpSpawnConfig) {
+        spawnConfig = config
     }
 
     func update(currentTime: TimeInterval) {

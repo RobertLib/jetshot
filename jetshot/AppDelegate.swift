@@ -29,6 +29,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Initialize iCloud storage (this will start synchronization)
         _ = CloudStorageManager.shared
 
+        // Before any scene can make a sound: the manager puts the audio session in
+        // `.ambient` as it comes up, and until then it is `.soloAmbient`, which stops
+        // the player's own music at the first effect. See
+        // `SoundManager.configureAudioSession()`.
+        _ = SoundManager.shared
+
         // Optional: Print iCloud status for debugging
         #if DEBUG
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {

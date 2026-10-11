@@ -1,6 +1,6 @@
 # Zásady ochrany osobních údajů — Jetshot
 
-*Naposledy aktualizováno: 29. srpna 2026*
+*Naposledy aktualizováno: 12. října 2026*
 
 ## Stručně
 
@@ -22,16 +22,17 @@ nesleduje.
 předplatné.
 
 **Kde je uložený váš postup.** Dokončené úrovně, skóre za úrovně, hvězdy,
-výzbroj lodi a rekordy z nekonečné hry se ukládají na vaše zařízení do systémového
-úložiště UserDefaults.
+výzbroj lodi, získané medaile a rekordy z nekonečné hry se ukládají na vaše zařízení
+do systémového úložiště UserDefaults. Ukládá se také čítač resetování postupu
+(`progressEpoch`), který brání tomu, aby starší kopie na jiném zařízení obnovila
+smazaný postup.
 
-**Synchronizace přes iCloud.** Stejných pět hodnot se zrcadlí do Apple iCloud
-Key-Value Storage, aby vás postup provázel mezi vašimi zařízeními a přežil
-přeinstalaci aplikace. Tato data leží ve vašem osobním účtu iCloud, přečíst je lze
-jen na zařízeních přihlášených vaším Apple ID a já k nim přístup nemám — žádný můj
-server v tom v žádné chvíli nefiguruje. Pokud chcete postup držet jen na jednom
-zařízení, vypněte pro Jetshot iCloud Drive v Nastavení → vaše jméno → iCloud. Hra
-funguje normálně i bez něj.
+**Synchronizace přes iCloud.** Všechny uvedené údaje o postupu včetně medailí
+a čítače resetování se zrcadlí do Apple iCloud Key-Value Storage, aby vás postup
+provázel mezi vašimi zařízeními a přežil přeinstalaci aplikace. Tato data leží ve
+vašem osobním účtu iCloud, přečíst je lze jen na zařízeních přihlášených vaším
+Apple ID a já k nim přístup nemám — žádný můj server v tom v žádné chvíli
+nefiguruje. Bez přihlášeného účtu iCloud hra funguje normálně s místním úložištěm.
 
 **Všechno ostatní běží offline.** Veškerý obsah — úrovně, grafika, hudba i zvuky —
 je uvnitř aplikace. Kromě výše popsané synchronizace s iCloudem aplikace
@@ -44,10 +45,11 @@ odezvu a přehrávání zvuku.
 **Děti.** Aplikace je vhodná pro všechny věkové kategorie. Protože nesbírá žádná
 data, nevznikají ani žádná data o dětech.
 
-**Smazání dat.** Tlačítko RESET na obrazovce výběru úrovně smaže postup ze
-zařízení i z iCloudu. Odinstalace aplikace odstraní lokální kopii; data v iCloudu
-smažete spolu s daty aplikace v Nastavení → vaše jméno → iCloud → Spravovat
-úložiště.
+**Smazání dat.** Tlačítko RESET na obrazovce výběru úrovně smaže dokončené
+úrovně, skóre, hvězdy, výzbroj, medaile a rekordy ze zařízení i z iCloudu. Čítač
+resetování zůstává uložený a zvýší se, aby se smazaný postup nevrátil z jiného
+zařízení. Odinstalace aplikace odstraní lokální kopii; sama o sobě nesmaže postup
+v iCloudu.
 
 ## Změny těchto zásad
 

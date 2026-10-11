@@ -2,425 +2,225 @@
 //  VectorFX3D.swift
 //  jetshot
 //
-//  Pseudo-3D vector effects for shields, scanning, and visual enhancements
+//  3D vector furniture for shields, cores, auras and targeting.
+//
+//  These used to be *pseudo*-3D: circles squashed by a fixed 0.3 to suggest depth,
+//  each dot and ring its own SKShapeNode with its own repeating action — a shield
+//  sphere alone was 140 nodes. They are now real wireframe in perspective, drawn by
+//  `WireBody` with the story films' light-tube lines, so the hardware on an enemy is
+//  built the same way as the world behind it and the entities in the opening film.
 //
 
 import SpriteKit
+import simd
 
-/// Generates pseudo-3D vector effects using wireframe projections
+/// Generates 3D vector effects for ships, enemies and bosses.
 class VectorFX3D {
+
+    // MARK: - Meshes
+
+    private static let sphere = WireMesh.geodesic(radius: 1, subdivisions: 1)
+    private static let coarseSphere = WireMesh.geodesic(radius: 1, subdivisions: 0)
+    private static let octa = WireMesh.octahedron(radius: 1)
+    private static let spikes = WireMesh.spiked(radius: 1, spike: 1.8)
+    private static let cube = WireMesh.box(Vec3(1, 1, 1))
+
+    /// A turning, slightly random start, so a group built together does not move in step.
+    private static func seed() -> Float { Float.random(in: 0...100) }
 
     // MARK: - Shield Sphere Effect
 
-    /// Creates an expanding sphere shield made of dots/particles
+    /// A geodesic shield bubble, its far side faint behind its near side.
+    ///
     /// - Parameters:
-    ///   - radius: Base radius of the shield
-    ///   - color: Color of the shield particles
-    ///   - persistent: If true, shield stays; if false, it expands and fades
-    /// - Returns: SKNode containing the shield effect
+    ///   - radius: Radius of the bubble.
+    ///   - color: Shield colour.
+    ///   - persistent: If false it flashes outwards and fades instead of staying.
     static func createShieldSphere(radius: CGFloat, color: UIColor, persistent: Bool = true) -> SKNode {
-        let container = SKNode()
-        container.name = "vectorShield"
-
-        // Create multiple latitude circles to simulate 3D sphere
-        let latitudes = 6
-        let pointsPerCircle = 20
-
-        for i in 0...latitudes {
-            let lat = CGFloat(i) / CGFloat(latitudes) * .pi
-            let y = cos(lat) * radius
-            let circleRadius = sin(lat) * radius
-
-            // Create circle of points at this latitude
-            for j in 0..<pointsPerCircle {
-                let angle = CGFloat(j) / CGFloat(pointsPerCircle) * 2 * .pi
-                let x = cos(angle) * circleRadius
-                let z = sin(angle) * circleRadius
-
-                // Project 3D to 2D (simple orthographic projection)
-                let point = SKShapeNode(circleOfRadius: 1.5)
-                point.fillColor = color
-                point.strokeColor = .clear
-                point.position = CGPoint(x: x, y: y - z * 0.3) // Slight z-depth effect
-                point.alpha = 0.6
-
-                // Pulsing animation
-                if persistent {
-                    let pulse = SKAction.sequence([
-                        SKAction.fadeAlpha(to: 0.3, duration: 0.8),
-                        SKAction.fadeAlpha(to: 0.8, duration: 0.8)
-                    ])
-                    point.run(SKAction.repeatForever(pulse))
-
-                    // Slight rotation for depth
-                    let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 4.0)
-                    container.run(SKAction.repeatForever(rotate))
-                }
-
-                container.addChild(point)
-            }
+        let r = Float(radius)
+        let body = WireBody(extent: radius * 1.1, perspective: 5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            let q = rotation(frame.t * 0.35, Vec3(0.3, 1, 0.15))
+            c.mesh(sphere, rotation: q, scale: r, color: color, alpha: 0.5, width: 1, backAlpha: 0.22)
+            // The rim, where a real bubble is brightest.
+            c.polyline(StoryScenery.circle(center: .zero, radius: r * 1.02, u: Vec3(1, 0, 0), v: Vec3(0, 1, 0), segments: 40),
+                       color: color, alpha: 0.55 + 0.15 * sin(frame.t * 3), width: 1.3)
+            // A highlight sweeping over the surface.
+            let a = frame.t * 1.3
+            c.glow(Vec3(cos(a) * r * 0.6, sin(a * 0.7) * r * 0.5, r * 0.6), radius: r * 0.22, color: StoryPalette.white, alpha: 0.18)
         }
+        body.name = "vectorShield"
 
         if !persistent {
-            // Expanding and fading animation
-            let expand = SKAction.scale(to: 2.5, duration: 0.5)
-            let fade = SKAction.fadeOut(withDuration: 0.5)
-            let group = SKAction.group([expand, fade])
-            let remove = SKAction.removeFromParent()
-            container.run(SKAction.sequence([group, remove]))
+            body.run(.sequence([.group([.scale(to: 2.5, duration: 0.5), .fadeOut(withDuration: 0.5)]), .removeFromParent()]))
         }
-
-        return container
+        return body
     }
 
     // MARK: - Scanning Cone Effect
 
-    /// Creates a 3D scanning cone effect (for enemies detecting player)
-    /// - Parameters:
-    ///   - length: Length of the cone
-    ///   - angle: Opening angle of the cone
-    ///   - color: Color of the scan lines
-    ///   - direction: Direction vector (normalized)
-    /// - Returns: SKNode containing the scanning cone
+    /// A 3D scanning cone (for enemies detecting player), with a ring of light
+    /// running down it.
     static func createScanCone(length: CGFloat, angle: CGFloat, color: UIColor, direction: CGPoint = CGPoint(x: 0, y: -1)) -> SKNode {
         let container = SKNode()
         container.name = "scanCone"
+        container.zRotation = atan2(direction.y, direction.x) + .pi / 2
 
-        // Rotate container to match direction
-        let targetAngle = atan2(direction.y, direction.x) - .pi / 2
-        container.zRotation = targetAngle
-
-        let rings = 8
-        let linesPerRing = 12
-
-        for i in 1...rings {
-            let ringDistance = CGFloat(i) / CGFloat(rings) * length
-            let ringRadius = tan(angle / 2) * ringDistance
-
-            // Create wireframe ring
-            for j in 0..<linesPerRing {
-                let theta = CGFloat(j) / CGFloat(linesPerRing) * 2 * .pi
-                let x1 = cos(theta) * ringRadius
-                let z1 = sin(theta) * ringRadius
-                let y1 = -ringDistance
-
-                let theta2 = CGFloat(j + 1) / CGFloat(linesPerRing) * 2 * .pi
-                let x2 = cos(theta2) * ringRadius
-                let z2 = sin(theta2) * ringRadius
-
-                // Project to 2D
-                let point1 = CGPoint(x: x1, y: y1 + z1 * 0.3)
-                let point2 = CGPoint(x: x2, y: y1 + z2 * 0.3)
-
-                let line = createLine(from: point1, to: point2, color: color, width: 1.0)
-                line.alpha = 0.4 + CGFloat(i) / CGFloat(rings) * 0.4
-                container.addChild(line)
+        let l = Float(length)
+        let spread = tan(Float(angle) / 2)
+        let body = WireBody(extent: length * 0.6, perspective: 4, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            // Apex at the top of the body, opening downwards, tilted towards the camera.
+            let tilt = rotation(0.5, Vec3(1, 0, 0))
+            let apex = Vec3(0, l * 0.5, 0)
+            func ring(_ d: Float) -> [Vec3] {
+                (0...14).map { s in
+                    let a = Float(s) / 14 * 2 * .pi + frame.t * 0.6
+                    return apex + tilt.act(Vec3(cos(a) * d * spread, -d, sin(a) * d * spread))
+                }
             }
+            for i in 1...4 {
+                c.polyline(ring(l * Float(i) / 4), color: color, alpha: 0.25 + 0.12 * Float(i), width: 1)
+            }
+            let far = ring(l)
+            for s in stride(from: 0, to: 14, by: 2) {
+                c.line(apex, far[s], color: color, alpha: 0.3, width: 1)
+            }
+            let sweep = (frame.t / 1.5).truncatingRemainder(dividingBy: 1)
+            c.polyline(ring(l * sweep), color: StoryPalette.white, alpha: (1 - sweep) * 0.8, width: 1.4)
         }
-
-        // Animated scanning wave
-        let wave = SKShapeNode(circleOfRadius: 3)
-        wave.fillColor = color
-        wave.strokeColor = color.withAlphaComponent(0.8)
-        wave.lineWidth = 2
-        wave.alpha = 0.8
-
-        let moveDown = SKAction.moveBy(x: 0, y: -length, duration: 1.5)
-        let scaleUp = SKAction.scale(to: tan(angle / 2) * length / 3, duration: 1.5)
-        let fade = SKAction.fadeOut(withDuration: 1.5)
-        let group = SKAction.group([moveDown, scaleUp, fade])
-        // [weak wave]: the node runs this action forever, so a strong capture would
-        // close the loop node -> action -> closure -> node and the wave could never
-        // be deallocated, not even once its parent is torn down.
-        let reset = SKAction.run { [weak wave] in
-            guard let wave = wave else { return }
-            wave.position = .zero
-            wave.setScale(1.0)
-            wave.alpha = 0.8
-        }
-        wave.run(SKAction.repeatForever(SKAction.sequence([group, reset])))
-
-        container.addChild(wave)
-
-        // Pulse the whole cone
-        let pulse = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 0.6),
-            SKAction.fadeAlpha(to: 0.7, duration: 0.6)
-        ])
-        container.run(SKAction.repeatForever(pulse))
-
+        // The apex sits on the container's origin and the cone opens down its -Y.
+        body.position = CGPoint(x: 0, y: -length / 2)
+        container.addChild(body)
         return container
     }
 
     // MARK: - PowerUp Burst Effect
 
-    /// Creates an explosive 3D particle burst when collecting powerup
-    /// - Parameters:
-    ///   - position: Center position
-    ///   - color: Primary color
-    ///   - particleCount: Number of particles
-    /// - Returns: SKNode that self-removes
+    /// A spiral burst of light when a power-up is collected. Self-removing.
     static func createPowerUpBurst(at position: CGPoint, color: UIColor, particleCount: Int = 40) -> SKNode {
         let container = SKNode()
         container.position = position
         container.name = "powerUpBurst"
 
-        // Create 3D spiral explosion
         for i in 0..<particleCount {
-            let particle = SKShapeNode(circleOfRadius: 2)
-            particle.fillColor = color
-            particle.strokeColor = color.withAlphaComponent(0.8)
-            particle.glowWidth = 2
+            let particle = LightSprite.star(size: 9, color: i % 3 == 0 ? .white : color)
 
-            // Calculate 3D trajectory
-            let theta = CGFloat(i) / CGFloat(particleCount) * .pi * 4 // Multiple spirals
+            // A shell of points thrown out on a double spiral, seen in perspective.
+            let theta = CGFloat(i) / CGFloat(particleCount) * .pi * 4
             let phi = CGFloat(i) / CGFloat(particleCount) * .pi * 2
-
             let distance: CGFloat = 80
             let x = cos(theta) * sin(phi) * distance
             let y = cos(phi) * distance
             let z = sin(theta) * sin(phi) * distance
+            let depth = 1 + z / 240
+            let target = CGPoint(x: x * depth, y: y * depth)
 
-            // Project to 2D
-            let targetPoint = CGPoint(x: x, y: y - z * 0.4)
-
-            // Animate
-            let move = SKAction.move(to: targetPoint, duration: 0.8)
+            let move = SKAction.move(to: target, duration: 0.8)
             move.timingMode = .easeOut
-            let fade = SKAction.fadeOut(withDuration: 0.8)
-            let scale = SKAction.scale(to: 0.5, duration: 0.8)
-            let group = SKAction.group([move, fade, scale])
-            let remove = SKAction.removeFromParent()
-
-            particle.run(SKAction.sequence([group, remove]))
+            particle.setScale(depth)
+            particle.run(.sequence([.group([move, .fadeOut(withDuration: 0.8), .scale(to: 0.4, duration: 0.8)]),
+                                    .removeFromParent()]))
             container.addChild(particle)
         }
 
-        // Add central flash
-        let flash = SKShapeNode(circleOfRadius: 15)
-        flash.fillColor = .white
-        flash.strokeColor = color
-        flash.lineWidth = 3
-        flash.glowWidth = 8
+        let ring = LightSprite.ring(radius: 14, color: color)
+        ring.run(.sequence([.group([.scale(to: 4, duration: 0.45), .fadeOut(withDuration: 0.45)]), .removeFromParent()]))
+        container.addChild(ring)
 
-        let flashAnim = SKAction.group([
-            SKAction.scale(to: 3, duration: 0.4),
-            SKAction.fadeOut(withDuration: 0.4)
-        ])
-        flash.run(SKAction.sequence([flashAnim, SKAction.removeFromParent()]))
+        let flash = LightSprite.star(size: 70, color: .white)
+        flash.run(.sequence([.group([.scale(to: 2.4, duration: 0.35), .fadeOut(withDuration: 0.35)]), .removeFromParent()]))
         container.addChild(flash)
 
-        // Container self-destructs
-        container.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.0),
-            SKAction.removeFromParent()
-        ]))
-
+        container.run(.sequence([.wait(forDuration: 1.0), .removeFromParent()]))
         return container
     }
 
     // MARK: - Vector Aura (Enemy Special)
 
-    /// Creates rotating vector circles/hexagons around enemy
-    /// - Parameters:
-    ///   - radius: Base radius
-    ///   - color: Color of the aura
-    ///   - style: Shape style (.circle, .hexagon, .octagon)
-    /// - Returns: SKNode with animated aura
+    /// Rings of the given shape wheeling round an enemy on tilted axes — a gyroscope.
     static func createVectorAura(radius: CGFloat, color: UIColor, style: AuraStyle = .hexagon) -> SKNode {
-        let container = SKNode()
-        container.name = "vectorAura"
-
-        // Create multiple rings
-        let ringCount = 3
-
-        for i in 0..<ringCount {
-            let ringRadius = radius + CGFloat(i) * 12
-            let ring: SKShapeNode
-
-            switch style {
-            case .circle:
-                ring = SKShapeNode(circleOfRadius: ringRadius)
-            case .hexagon:
-                ring = createPolygon(sides: 6, radius: ringRadius)
-            case .octagon:
-                ring = createPolygon(sides: 8, radius: ringRadius)
-            case .triangle:
-                ring = createPolygon(sides: 3, radius: ringRadius)
-            }
-
-            ring.strokeColor = color
-            ring.lineWidth = 1.5
-            ring.fillColor = .clear
-            ring.alpha = 0.6 - CGFloat(i) * 0.15
-            ring.glowWidth = 1
-
-            // Rotate each ring differently
-            let rotationSpeed = 2.0 + Double(i) * 0.5
-            let direction = i % 2 == 0 ? 1.0 : -1.0
-            let rotate = SKAction.rotate(byAngle: .pi * 2 * CGFloat(direction), duration: rotationSpeed)
-            ring.run(SKAction.repeatForever(rotate))
-
-            // Pulse
-            let pulse = SKAction.sequence([
-                SKAction.fadeAlpha(to: 0.3, duration: 0.8),
-                SKAction.fadeAlpha(to: 0.7, duration: 0.8)
-            ])
-            ring.run(SKAction.repeatForever(pulse))
-
-            container.addChild(ring)
+        let sides: Int
+        switch style {
+        case .circle: sides = 28
+        case .hexagon: sides = 6
+        case .octagon: sides = 8
+        case .triangle: sides = 3
         }
-
-        // Add corner points for extra detail
-        if style == .hexagon || style == .octagon {
-            let sides = style == .hexagon ? 6 : 8
-            for i in 0..<sides {
-                let angle = CGFloat(i) / CGFloat(sides) * .pi * 2
-                let x = cos(angle) * radius
-                let y = sin(angle) * radius
-
-                let dot = SKShapeNode(circleOfRadius: 2)
-                dot.fillColor = color
-                dot.strokeColor = .clear
-                dot.position = CGPoint(x: x, y: y)
-                dot.glowWidth = 2
-
-                let pulse = SKAction.sequence([
-                    SKAction.fadeAlpha(to: 0.5, duration: 0.5),
-                    SKAction.fadeAlpha(to: 1.0, duration: 0.5)
-                ])
-                dot.run(SKAction.repeatForever(pulse))
-
-                container.addChild(dot)
+        let r = Float(radius)
+        let axes = [Vec3(1, 0.3, 0), Vec3(-0.3, 1, 0.2), Vec3(0.2, 0.2, 1)]
+        let body = WireBody(extent: radius + 26, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            for (i, axis) in axes.enumerated() {
+                let q = rotation(frame.t * (0.9 + Float(i) * 0.35) * (i % 2 == 0 ? 1 : -1), axis)
+                let (u, v) = StoryScenery.basis(q.act(simd_normalize(axis)))
+                let ringRadius = r + Float(i) * 8
+                let points = (0..<sides).map { s -> Vec3 in
+                    let a = Float(s) / Float(sides) * 2 * .pi
+                    return (u * cos(a) + v * sin(a)) * ringRadius
+                }
+                c.polyline(points, closed: true, color: color, alpha: 0.55 - Float(i) * 0.12, width: 1.1)
+                if sides <= 8 && i == 0 {
+                    for p in points { c.dot(p, size: 5, color: color, alpha: 0.8) }
+                }
             }
         }
-
-        return container
+        body.name = "vectorAura"
+        return body
     }
 
     // MARK: - Targeting Reticle
 
-    /// Creates a 3D targeting reticle (for sniper enemies)
-    /// - Parameters:
-    ///   - target: Target position
-    ///   - color: Reticle color
-    ///   - lockDuration: Time to lock on
-    /// - Returns: Animated targeting reticle
+    /// A lock-on: brackets closing on the target, then a flash, then gone — the node
+    /// removes itself once the flash has played out.
+    ///
+    /// It used to be left for the caller to remove, and the only caller (the sniper)
+    /// never did: every lock-on stayed on the playfield for the rest of the level.
     static func createTargetingReticle(at target: CGPoint, color: UIColor, lockDuration: TimeInterval = 1.0) -> SKNode {
         let container = SKNode()
         container.position = target
         container.name = "targetingReticle"
 
-        // Outer ring
-        let outerRing = SKShapeNode(circleOfRadius: 20)
-        outerRing.strokeColor = color
-        outerRing.lineWidth = 1.5
-        outerRing.fillColor = .clear
-        container.addChild(outerRing)
-
-        // Inner ring
-        let innerRing = SKShapeNode(circleOfRadius: 12)
-        innerRing.strokeColor = color
-        innerRing.lineWidth = 1.0
-        innerRing.fillColor = .clear
-        container.addChild(innerRing)
-
-        // Crosshairs
-        let crosshairLength: CGFloat = 25
-        for angle in [0, CGFloat.pi / 2, CGFloat.pi, CGFloat.pi * 1.5] {
-            let x1 = cos(angle) * 8
-            let y1 = sin(angle) * 8
-            let x2 = cos(angle) * crosshairLength
-            let y2 = sin(angle) * crosshairLength
-
-            let line = createLine(
-                from: CGPoint(x: x1, y: y1),
-                to: CGPoint(x: x2, y: y2),
-                color: color,
-                width: 1.5
-            )
-            container.addChild(line)
+        let half: CGFloat = 22, arm: CGFloat = 9
+        for (sx, sy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] as [(CGFloat, CGFloat)] {
+            let corner = SKNode()
+            corner.position = CGPoint(x: half * sx, y: half * sy)
+            corner.addChild(LightSprite.tube(from: .zero, to: CGPoint(x: -arm * sx, y: 0), width: 1.4, color: color))
+            corner.addChild(LightSprite.tube(from: .zero, to: CGPoint(x: 0, y: -arm * sy), width: 1.4, color: color))
+            let close = SKAction.move(to: CGPoint(x: half * 0.45 * sx, y: half * 0.45 * sy), duration: lockDuration)
+            close.timingMode = .easeIn
+            corner.run(close)
+            container.addChild(corner)
         }
 
-        // Center dot
-        let center = SKShapeNode(circleOfRadius: 2)
-        center.fillColor = color
-        center.strokeColor = .clear
-        center.glowWidth = 2
-        container.addChild(center)
+        let ring = LightSprite.ring(radius: 14, color: color)
+        ring.alpha = 0.6
+        ring.run(.group([.scale(to: 0.7, duration: lockDuration),
+                         .repeat(.sequence([.fadeAlpha(to: 0.2, duration: 0.12), .fadeAlpha(to: 0.7, duration: 0.12)]),
+                                 count: max(1, Int(lockDuration / 0.24)))]))
+        container.addChild(ring)
 
-        // Lock-on animation
-        let spin = SKAction.rotate(byAngle: .pi * 2, duration: 0.5)
-        outerRing.run(SKAction.repeatForever(spin))
+        for angle in [0, CGFloat.pi / 2, .pi, .pi * 1.5] {
+            container.addChild(LightSprite.tube(from: CGPoint(x: cos(angle) * 6, y: sin(angle) * 6),
+                                                to: CGPoint(x: cos(angle) * 12, y: sin(angle) * 12),
+                                                width: 1.1, color: color))
+        }
+        container.addChild(LightSprite.star(size: 10, color: .white))
 
-        let spinInner = SKAction.rotate(byAngle: -.pi * 2, duration: 0.7)
-        innerRing.run(SKAction.repeatForever(spinInner))
-
-        // Converge animation (getting lock)
-        let converge = SKAction.scale(to: 0.7, duration: lockDuration)
-        let pulse = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 0.15),
-            SKAction.fadeAlpha(to: 1.0, duration: 0.15)
-        ])
-        let pulsing = SKAction.repeat(pulse, count: Int(lockDuration / 0.3))
-
-        container.run(SKAction.group([converge, pulsing]))
-
-        // Flash when locked
-        container.run(SKAction.sequence([
-            SKAction.wait(forDuration: lockDuration),
-            SKAction.run {
-                let flash = SKShapeNode(circleOfRadius: 30)
-                flash.strokeColor = .red
-                flash.lineWidth = 3
-                flash.fillColor = .clear
-                flash.glowWidth = 5
-                container.addChild(flash)
-
-                flash.run(SKAction.sequence([
-                    SKAction.group([
-                        SKAction.scale(to: 0.5, duration: 0.2),
-                        SKAction.fadeOut(withDuration: 0.2)
-                    ]),
-                    SKAction.removeFromParent()
-                ]))
-            }
+        container.run(.sequence([
+            .wait(forDuration: lockDuration),
+            .run { [weak container] in
+                let flash = LightSprite.ring(radius: 30, color: StoryPalette.red)
+                flash.run(.sequence([.group([.scale(to: 0.5, duration: 0.2), .fadeOut(withDuration: 0.2)]), .removeFromParent()]))
+                container?.addChild(flash)
+            },
+            .fadeOut(withDuration: 0.2),
+            .removeFromParent()
         ]))
-
         return container
     }
 
-    // MARK: - Helper Functions
-
-    private static func createLine(from: CGPoint, to: CGPoint, color: UIColor, width: CGFloat) -> SKShapeNode {
-        let path = CGMutablePath()
-        path.move(to: from)
-        path.addLine(to: to)
-
-        let line = SKShapeNode(path: path)
-        line.strokeColor = color
-        line.lineWidth = width
-        return line
-    }
-
-    private static func createPolygon(sides: Int, radius: CGFloat) -> SKShapeNode {
-        let path = CGMutablePath()
-
-        for i in 0...sides {
-            let angle = CGFloat(i) / CGFloat(sides) * .pi * 2 - .pi / 2
-            let x = cos(angle) * radius
-            let y = sin(angle) * radius
-            let point = CGPoint(x: x, y: y)
-
-            if i == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-
-        return SKShapeNode(path: path)
-    }
+    // MARK: - Helpers
 
     enum AuraStyle {
         case circle
@@ -431,402 +231,224 @@ class VectorFX3D {
 
     // MARK: - Energy Core Effect
 
-    /// Creates a pulsing 3D energy core (for bosses and powerful enemies)
-    /// - Parameters:
-    ///   - radius: Size of the core
-    ///   - color: Primary color
-    ///   - layers: Number of concentric layers
-    /// - Returns: Animated energy core node
+    /// Nested wireframe shells turning against each other round a white-hot point —
+    /// the film's epicentre, at the scale of one machine.
     static func createEnergyCore(radius: CGFloat, color: UIColor, layers: Int = 3) -> SKNode {
-        let container = SKNode()
-        container.name = "energyCore"
-
-        // Create multiple concentric rotating spheres
-        for layer in 0..<layers {
-            let layerRadius = radius * (1.0 - CGFloat(layer) * 0.25)
-            let sphere = createWireframeSphere(radius: layerRadius, color: color, segments: 8)
-            sphere.alpha = 0.7 - CGFloat(layer) * 0.2
-
-            // Each layer rotates differently
-            let rotationDuration = 2.0 + Double(layer) * 0.5
-            let direction = layer % 2 == 0 ? 1.0 : -1.0
-            let rotate = SKAction.rotate(byAngle: .pi * 2 * CGFloat(direction), duration: rotationDuration)
-            sphere.run(SKAction.repeatForever(rotate))
-
-            container.addChild(sphere)
-        }
-
-        // Central bright point
-        let core = SKShapeNode(circleOfRadius: 4)
-        core.fillColor = .white
-        core.strokeColor = color
-        core.lineWidth = 2
-        core.glowWidth = 6
-
-        let pulse = SKAction.sequence([
-            SKAction.scale(to: 1.5, duration: 0.6),
-            SKAction.scale(to: 1.0, duration: 0.6)
-        ])
-        core.run(SKAction.repeatForever(pulse))
-        container.addChild(core)
-
-        return container
-    }
-
-    // MARK: - Wireframe Sphere
-
-    private static func createWireframeSphere(radius: CGFloat, color: UIColor, segments: Int) -> SKNode {
-        let container = SKNode()
-
-        // Horizontal circles (latitudes)
-        for i in 0...segments {
-            let lat = CGFloat(i) / CGFloat(segments) * .pi
-            let y = cos(lat) * radius
-            let circleRadius = sin(lat) * radius
-
-            let circle = SKShapeNode(circleOfRadius: circleRadius)
-            circle.strokeColor = color
-            circle.lineWidth = 1
-            circle.fillColor = .clear
-            circle.position = CGPoint(x: 0, y: y)
-            circle.alpha = 0.5
-            container.addChild(circle)
-        }
-
-        // Vertical circles (longitudes)
-        for i in 0..<4 {
-            let angle = CGFloat(i) * .pi / 2
-            let ellipse = createRotatedCircle(radius: radius, angle: angle, color: color)
-            container.addChild(ellipse)
-        }
-
-        return container
-    }
-
-    private static func createRotatedCircle(radius: CGFloat, angle: CGFloat, color: UIColor) -> SKShapeNode {
-        let path = CGMutablePath()
-        let segments = 30
-
-        for i in 0...segments {
-            let t = CGFloat(i) / CGFloat(segments) * 2 * .pi
-            let x = cos(t) * radius * cos(angle)
-            let y = sin(t) * radius
-            let z = cos(t) * radius * sin(angle)
-
-            let point = CGPoint(x: x, y: y - z * 0.3)
-
-            if i == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
+        let r = Float(radius)
+        let shells = max(1, min(layers, 6))
+        let body = WireBody(extent: radius * 1.15, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            for layer in 0..<shells {
+                let k = Float(layer)
+                let mesh = layer == 0 ? coarseSphere : (layer % 2 == 1 ? octa : cube)
+                let scale = r * (1 - k * 0.2) * (layer == 2 ? 0.6 : 1)
+                let q = rotation(frame.t * (0.7 + k * 0.4) * (layer % 2 == 0 ? 1 : -1), Vec3(0.3 + k * 0.2, 1, 0.2))
+                c.mesh(mesh, rotation: q, scale: scale, color: layer == 1 ? StoryPalette.white : color,
+                       alpha: 0.75 - k * 0.1, width: 1.1, backAlpha: 0.3)
             }
+            let pulse: Float = 1 + 0.2 * sin(frame.t * 5)
+            c.glow(.zero, radius: r * 0.7 * pulse, color: color, alpha: 0.45)
+            c.glow(.zero, radius: r * 0.25 * pulse, color: StoryPalette.white, alpha: 0.9)
         }
-
-        let circle = SKShapeNode(path: path)
-        circle.strokeColor = color
-        circle.lineWidth = 1
-        circle.fillColor = .clear
-        circle.alpha = 0.5
-        return circle
+        body.name = "energyCore"
+        return body
     }
 
     // MARK: - Rotating Cannon Barrels
 
-    /// Creates rotating 3D cannon barrels visualization
-    /// - Parameters:
-    ///   - count: Number of barrels
-    ///   - radius: Distance from center
-    ///   - color: Barrel color
-    /// - Returns: Animated cannon array
+    /// A ring of barrels on a turning hub, laid in a tilted plane.
     static func createRotatingCannons(count: Int, radius: CGFloat, color: UIColor) -> SKNode {
-        let container = SKNode()
-        container.name = "rotatingCannons"
-
-        for i in 0..<count {
-            let angle = CGFloat(i) / CGFloat(count) * .pi * 2
-            let x = cos(angle) * radius
-            let y = sin(angle) * radius
-
-            let barrel = SKShapeNode(rectOf: CGSize(width: 4, height: 15), cornerRadius: 2)
-            barrel.fillColor = color
-            barrel.strokeColor = color.withAlphaComponent(0.6)
-            barrel.lineWidth = 1
-            barrel.position = CGPoint(x: x, y: y)
-            barrel.zRotation = angle + .pi / 2
-
-            // Muzzle flash indicator
-            let muzzle = SKShapeNode(circleOfRadius: 2)
-            muzzle.fillColor = .white.withAlphaComponent(0.8)
-            muzzle.strokeColor = .clear
-            muzzle.position = CGPoint(x: 0, y: 7.5)
-            barrel.addChild(muzzle)
-
-            container.addChild(barrel)
+        let r = Float(radius)
+        let n = max(1, count)
+        let body = WireBody(extent: radius + 14, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            let tilt = rotation(0.55, Vec3(1, 0, 0))
+            let spin = frame.t * (2 * .pi / 4)
+            var hub: [Vec3] = []
+            for i in 0..<n {
+                let a = Float(i) / Float(n) * 2 * .pi + spin
+                let dir = tilt.act(Vec3(cos(a), sin(a), 0))
+                let base = dir * r
+                c.line(base, base + dir * 9, color: color, alpha: 0.95, width: 1.6)
+                c.dot(base + dir * 10, size: 5, color: StoryPalette.white, alpha: 0.8)
+                hub.append(base)
+            }
+            if hub.count > 2 { c.polyline(hub, closed: true, color: color, alpha: 0.45, width: 1) }
         }
-
-        // Rotate entire cannon array
-        let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 4.0)
-        container.run(SKAction.repeatForever(rotate))
-
-        return container
+        body.name = "rotatingCannons"
+        return body
     }
 
     // MARK: - Force Field Effect
 
-    /// Creates a force field with animated lines
-    /// - Parameters:
-    ///   - radius: Field radius
-    ///   - color: Field color
-    /// - Returns: Animated force field
+    /// A dashed field ring turning in a tilted plane, with faint spokes.
     static func createForceField(radius: CGFloat, color: UIColor) -> SKNode {
-        let container = SKNode()
-        container.name = "forceField"
-
-        // Create radial lines
-        let lineCount = 16
-        for i in 0..<lineCount {
-            let angle = CGFloat(i) / CGFloat(lineCount) * .pi * 2
-            let endX = cos(angle) * radius
-            let endY = sin(angle) * radius
-
-            let line = createLine(
-                from: .zero,
-                to: CGPoint(x: endX, y: endY),
-                color: color,
-                width: 1.5
-            )
-            line.alpha = 0.4
-            container.addChild(line)
+        let r = Float(radius)
+        let body = WireBody(extent: radius * 1.1, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            let tilt = rotation(0.9, Vec3(1, 0, 0.15)) * rotation(frame.t * 0.25, Vec3(0, 0, 1))
+            let u = tilt.act(Vec3(1, 0, 0)), v = tilt.act(Vec3(0, 1, 0))
+            let breathe: Float = 0.55 + 0.2 * sin(frame.t * 4)
+            StoryScenery.dashedRing(c, center: .zero, radius: r, u: u, v: v, phase: frame.t * 1.2, dashes: 10, fill: 0.62,
+                                    color: color, alpha: breathe, width: 1.3)
+            for s in 0..<8 {
+                let a = Float(s) / 8 * 2 * .pi + frame.t * 0.6
+                let dir = u * cos(a) + v * sin(a)
+                c.line(dir * r * 0.55, dir * r * 0.95, color: color, alpha: breathe * 0.4, width: 1)
+            }
         }
-
-        // Outer ring
-        let ring = SKShapeNode(circleOfRadius: radius)
-        ring.strokeColor = color
-        ring.lineWidth = 2
-        ring.fillColor = .clear
-        ring.glowWidth = 2
-        container.addChild(ring)
-
-        // Pulse animation
-        let pulse = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 0.8),
-            SKAction.fadeAlpha(to: 0.7, duration: 0.8)
-        ])
-        container.run(SKAction.repeatForever(pulse))
-
-        // Rotation
-        let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 6.0)
-        container.run(SKAction.repeatForever(rotate))
-
-        return container
+        body.name = "forceField"
+        return body
     }
 
     // MARK: - Charge Up Effect
 
-    /// Creates charging energy effect (for attacks)
-    /// - Parameters:
-    ///   - position: Center position
-    ///   - color: Energy color
-    ///   - duration: Charge duration
-    /// - Returns: Self-removing charge effect
+    /// Light converging on a point before an attack. Self-removing.
     static func createChargeEffect(at position: CGPoint, color: UIColor, duration: TimeInterval = 1.0) -> SKNode {
         let container = SKNode()
         container.position = position
         container.name = "chargeEffect"
 
-        // Create converging particles
-        let particleCount = 20
+        let particleCount = 18
         for i in 0..<particleCount {
             let angle = CGFloat(i) / CGFloat(particleCount) * .pi * 2
             let distance: CGFloat = 60
-            let startX = cos(angle) * distance
-            let startY = sin(angle) * distance
-
-            let particle = SKShapeNode(circleOfRadius: 2)
-            particle.fillColor = color
-            particle.strokeColor = .white
-            particle.lineWidth = 1
-            particle.position = CGPoint(x: startX, y: startY)
-            particle.glowWidth = 2
-
-            // Move toward center
+            let start = CGPoint(x: cos(angle) * distance, y: sin(angle) * distance)
+            // A short streak pointing at the centre, so it reads as being drawn in.
+            let streak = LightSprite.tube(from: start, to: CGPoint(x: start.x * 0.82, y: start.y * 0.82), width: 1.3, color: color)
             let move = SKAction.move(to: .zero, duration: duration)
             move.timingMode = .easeIn
-            let fade = SKAction.fadeOut(withDuration: duration)
-            let group = SKAction.group([move, fade])
-            particle.run(SKAction.sequence([group, SKAction.removeFromParent()]))
-
-            container.addChild(particle)
+            streak.run(.sequence([.group([move, .fadeOut(withDuration: duration)]), .removeFromParent()]))
+            container.addChild(streak)
         }
 
-        // Central glow
-        let glow = SKShapeNode(circleOfRadius: 5)
-        glow.fillColor = color
-        glow.strokeColor = .white
-        glow.lineWidth = 2
-        glow.glowWidth = 8
-        glow.alpha = 0
+        let ring = LightSprite.ring(radius: 26, color: color)
+        ring.alpha = 0
+        ring.run(.sequence([.group([.fadeAlpha(to: 0.7, duration: duration * 0.3), .scale(to: 0.25, duration: duration)]),
+                            .fadeOut(withDuration: 0.1)]))
+        container.addChild(ring)
 
-        let appear = SKAction.fadeIn(withDuration: duration)
-        let scale = SKAction.scale(to: 2.0, duration: duration)
-        glow.run(SKAction.group([appear, scale]))
+        let glow = LightSprite.star(size: 18, color: color)
+        glow.alpha = 0
+        glow.run(.group([.fadeIn(withDuration: duration), .scale(to: 2.4, duration: duration)]))
         container.addChild(glow)
 
-        // Self-destruct
-        container.run(SKAction.sequence([
-            SKAction.wait(forDuration: duration + 0.5),
-            SKAction.removeFromParent()
-        ]))
-
+        container.run(.sequence([.wait(forDuration: duration + 0.5), .removeFromParent()]))
         return container
     }
 
     // MARK: - Radar Sweep
 
-    /// Creates a radar sweep effect (for detection)
-    /// - Parameters:
-    ///   - radius: Sweep radius
-    ///   - color: Sweep color
-    /// - Returns: Animated radar sweep
+    /// A radar dish seen in perspective: rings, and a sweep with a fading wake.
     static func createRadarSweep(radius: CGFloat, color: UIColor) -> SKNode {
-        let container = SKNode()
-        container.name = "radarSweep"
-
-        // Radar circle
-        let circle = SKShapeNode(circleOfRadius: radius)
-        circle.strokeColor = color
-        circle.lineWidth = 2
-        circle.fillColor = .clear
-        circle.alpha = 0.5
-        container.addChild(circle)
-
-        // Sweep line
-        let sweepLine = createLine(
-            from: .zero,
-            to: CGPoint(x: 0, y: radius),
-            color: color.withAlphaComponent(0.9),
-            width: 3
-        )
-        sweepLine.glowWidth = 2
-        container.addChild(sweepLine)
-
-        // Sweep animation
-        let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 2.0)
-        sweepLine.run(SKAction.repeatForever(rotate))
-
-        // Pulse rings
-        for i in 1...3 {
-            let ring = SKShapeNode(circleOfRadius: radius * 0.3 * CGFloat(i))
-            ring.strokeColor = color
-            ring.lineWidth = 1
-            ring.fillColor = .clear
-            ring.alpha = 0.3
-            container.addChild(ring)
-
-            let pulse = SKAction.sequence([
-                SKAction.wait(forDuration: Double(i) * 0.3),
-                SKAction.scale(to: 1.2, duration: 0.5),
-                SKAction.fadeOut(withDuration: 0.5),
-                // [weak ring] — see the note in createScanCone: `ring` runs this
-                // sequence forever, so capturing it strongly would leak it.
-                SKAction.run { [weak ring] in
-                    ring?.setScale(1.0)
-                    ring?.alpha = 0.3
-                }
-            ])
-            ring.run(SKAction.repeatForever(pulse))
+        let r = Float(radius)
+        let body = WireBody(extent: radius * 1.1, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            let tilt = rotation(0.75, Vec3(1, 0, 0))
+            let u = tilt.act(Vec3(1, 0, 0)), v = tilt.act(Vec3(0, 1, 0))
+            c.polyline(StoryScenery.circle(center: .zero, radius: r, u: u, v: v, segments: 36), color: color, alpha: 0.5, width: 1.1)
+            let pulse = (frame.t * 0.8).truncatingRemainder(dividingBy: 1)
+            c.polyline(StoryScenery.circle(center: .zero, radius: r * pulse, u: u, v: v, segments: 28),
+                       color: color, alpha: (1 - pulse) * 0.5, width: 1)
+            let sweep = frame.t * .pi
+            for k in 0..<5 {
+                let a = sweep - Float(k) * 0.12
+                c.line(.zero, (u * cos(a) + v * sin(a)) * r, color: color, alpha: 0.9 - Float(k) * 0.18, width: 1.3)
+            }
         }
-
-        return container
+        body.name = "radarSweep"
+        return body
     }
 
     // MARK: - Energy Beam Charger
 
-    /// Creates charging beam effect (before laser fires)
-    /// - Parameters:
-    ///   - length: Beam length
-    ///   - color: Beam color
-    /// - Returns: Charging beam effect
+    /// Lines of light converging down the line a beam is about to take.
     static func createBeamCharger(length: CGFloat, color: UIColor) -> SKNode {
         let container = SKNode()
         container.name = "beamCharger"
 
-        // Multiple converging lines
         for i in 0..<8 {
             let offset = CGFloat(i - 4) * 3
-            let line = createLine(
-                from: CGPoint(x: offset, y: 0),
-                to: CGPoint(x: 0, y: -length),
-                color: color,
-                width: 2
-            )
-            line.alpha = 0.6
+            let line = LightSprite.tube(from: CGPoint(x: offset, y: 0), to: CGPoint(x: 0, y: -length), width: 1.2, color: color)
+            line.alpha = 0.45
             container.addChild(line)
 
-            // Animated particles moving down the line
-            let particle = SKShapeNode(circleOfRadius: 1.5)
-            particle.fillColor = .white
-            particle.strokeColor = .clear
+            let particle = LightSprite.star(size: 7, color: .white)
             particle.position = CGPoint(x: offset, y: 0)
-            particle.glowWidth = 2
-
-            let move = SKAction.moveTo(y: -length, duration: 0.5)
-            let fade = SKAction.fadeOut(withDuration: 0.5)
+            let move = SKAction.move(to: CGPoint(x: 0, y: -length), duration: 0.5)
             // [weak particle] — runs forever; a strong capture would leak the node.
             let reset = SKAction.run { [weak particle] in
-                particle?.position.y = 0
+                particle?.position = CGPoint(x: offset, y: 0)
                 particle?.alpha = 1.0
             }
-            let sequence = SKAction.sequence([
-                SKAction.group([move, fade]),
-                reset
-            ])
-            particle.run(SKAction.repeatForever(sequence))
+            particle.run(.repeatForever(.sequence([.group([move, .fadeOut(withDuration: 0.5)]), reset])))
             container.addChild(particle)
         }
-
         return container
     }
 
     // MARK: - Orbital Defense
 
-    /// Creates orbiting defense nodes (for tank/heavy enemies)
-    /// - Parameters:
-    ///   - count: Number of orbital nodes
-    ///   - radius: Orbital radius
-    ///   - color: Node color
-    /// - Returns: Orbital defense system
+    /// Defence nodes riding an orbit tilted out of the screen, so they pass in front
+    /// of the hull and behind it.
     static func createOrbitalDefense(count: Int, radius: CGFloat, color: UIColor) -> SKNode {
-        let container = SKNode()
-        container.name = "orbitalDefense"
-
-        for i in 0..<count {
-            let angle = CGFloat(i) / CGFloat(count) * .pi * 2
-            let x = cos(angle) * radius
-            let y = sin(angle) * radius
-
-            // Defense node
-            let node = SKShapeNode(circleOfRadius: 4)
-            node.fillColor = color
-            node.strokeColor = .white
-            node.lineWidth = 2
-            node.position = CGPoint(x: x, y: y)
-            node.glowWidth = 2
-
-            // Small orbit trail
-            let trail = SKShapeNode(circleOfRadius: radius)
-            trail.strokeColor = color.withAlphaComponent(0.2)
-            trail.lineWidth = 1
-            trail.fillColor = .clear
-            container.addChild(trail)
-
-            container.addChild(node)
+        let r = Float(radius)
+        let n = max(1, count)
+        let body = WireBody(extent: radius + 10, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            let tilt = rotation(1.0, Vec3(1, 0, 0.2))
+            let u = tilt.act(Vec3(1, 0, 0)), v = tilt.act(Vec3(0, 1, 0))
+            StoryScenery.dashedRing(c, center: .zero, radius: r, u: u, v: v, phase: 0, dashes: 24, fill: 0.5,
+                                    color: color, alpha: 0.3, width: 1)
+            let spin = frame.t * (2 * .pi / 3)
+            for i in 0..<n {
+                let a = Float(i) / Float(n) * 2 * .pi + spin
+                let p = (u * cos(a) + v * sin(a)) * r
+                let near = 0.6 + 0.4 * clamp01(p.z / r * 0.5 + 0.5)
+                c.mesh(octa, at: p, rotation: rotation(frame.t * 3, Vec3(0, 1, 0.3)), scale: 4.5,
+                       color: color, alpha: near, width: 1.2)
+                c.glow(p, radius: 5, color: StoryPalette.white, alpha: near * 0.6)
+            }
         }
+        body.name = "orbitalDefense"
+        return body
+    }
 
-        // Rotate entire system
-        let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 3.0)
-        container.run(SKAction.repeatForever(rotate))
+    // MARK: - Small 3D cores
 
-        return container
+    enum CoreShape {
+        case octahedron
+        case spiked
+        case cage
+        case sphere
+    }
+
+    /// The beating heart of an enemy: a small turning crystal with a white-hot centre.
+    /// The shapes are the film's hostile entities, so what the player shoots at is
+    /// recognisably what the opening showed guarding the way.
+    static func createCore(radius: CGFloat, shape: CoreShape, color: UIColor) -> SKNode {
+        let r = Float(radius)
+        let mesh: WireMesh
+        switch shape {
+        case .octahedron: mesh = octa
+        case .spiked: mesh = spikes
+        case .cage: mesh = cube
+        case .sphere: mesh = coarseSphere
+        }
+        let meshScale: Float = shape == .spiked ? r * 0.55 : (shape == .cage ? r * 0.62 : r)
+        let speed = Float.random(in: 1.1...1.7)
+        let body = WireBody(extent: radius * 1.2, perspective: 4.5, interval: 1.0 / 30, seed: seed()) { frame in
+            let c = frame.canvas
+            let q = rotation(frame.t * speed, Vec3(0.4, 1, 0.25))
+            c.mesh(mesh, rotation: q, scale: meshScale, color: color, alpha: 1, width: 1.2, backAlpha: 0.4)
+            if shape == .cage {
+                c.mesh(octa, rotation: q.inverse, scale: r * 0.45, color: StoryPalette.white, alpha: 0.8, width: 1)
+            }
+            let beat: Float = 0.75 + 0.25 * sin(frame.t * 4)
+            c.glow(.zero, radius: r * 0.55 * beat, color: color, alpha: 0.6)
+            c.glow(.zero, radius: r * 0.22, color: StoryPalette.white, alpha: 0.95)
+        }
+        body.name = "core3D"
+        return body
     }
 }

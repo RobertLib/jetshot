@@ -321,6 +321,9 @@ enum NeonFX {
     // MARK: - Impact & explosion primitives
 
     /// Expanding thin ring. Reads as a pressure wave rather than a growing disc.
+    ///
+    /// Built from light-tube segments (see `LightRing`), so the line keeps the films'
+    /// hot-core-in-a-halo profile and stays thin as it travels instead of fattening.
     static func shockwave(
         at position: CGPoint,
         startRadius: CGFloat,
@@ -329,31 +332,14 @@ enum NeonFX {
         lineWidth: CGFloat = 3,
         duration: TimeInterval = 0.45
     ) -> SKNode {
-        let ring = SKShapeNode(circleOfRadius: startRadius)
+        let ring = LightRing.wave(from: startRadius, to: endRadius, width: max(1, lineWidth * 0.6),
+                                  color: color, duration: duration)
         ring.position = position
-        ring.fillColor = .clear
-        ring.strokeColor = color
-        ring.lineWidth = lineWidth
-        ring.blendMode = .add
-        ring.glowWidth = 1.5
-
-        let scaleTo = max(startRadius, 0.01)
-        let grow = SKAction.scale(to: endRadius / scaleTo, duration: duration)
-        grow.timingMode = .easeOut
-        // Thin the stroke as it grows so the wave dissipates instead of bloating.
-        let thin = SKAction.customAction(withDuration: duration) { node, elapsed in
-            guard let shape = node as? SKShapeNode else { return }
-            let t = elapsed / CGFloat(duration)
-            shape.lineWidth = lineWidth * (1 - t * 0.85)
-        }
-        let fade = SKAction.fadeOut(withDuration: duration)
-        fade.timingMode = .easeIn
-
-        ring.run(.sequence([.group([grow, thin, fade]), .removeFromParent()]))
         return ring
     }
 
     /// Directional spark streaks with drag — the cheapest way to sell an impact.
+    /// Each one is a single light-tube sprite.
     static func sparks(
         at position: CGPoint,
         count: Int,
@@ -372,11 +358,9 @@ enum NeonFX {
             let velocity = speed * CGFloat.random(in: 0.55...1.0)
             let life = lifetime * Double.random(in: 0.7...1.15)
 
-            let streak = SKShapeNode(rectOf: CGSize(width: 1.8, height: length), cornerRadius: 0.9)
-            streak.fillColor = color
-            streak.strokeColor = .clear
-            streak.blendMode = .add
-            streak.zRotation = angle - .pi / 2
+            let streak = LightSprite.tube(from: CGPoint(x: -length / 2, y: 0), to: CGPoint(x: length / 2, y: 0),
+                                          width: 1.3, color: color)
+            streak.zRotation = angle
 
             // Ease-out travel imitates air drag on the debris.
             let travel = SKAction.move(
@@ -384,7 +368,7 @@ enum NeonFX {
                 duration: life
             )
             travel.timingMode = .easeOut
-            let shrink = SKAction.scaleY(to: 0.25, duration: life)
+            let shrink = SKAction.scaleX(to: 0.25, duration: life)
             let fade = SKAction.fadeOut(withDuration: life)
             fade.timingMode = .easeIn
 

@@ -1,9 +1,16 @@
-Endless mode, a chain multiplier, and a pass over all fifty boss fights.
+Ten new bosses, Overdrive, medals, endless upgrades and a faster, denser fight — with new controls and a sharper look.
 
-• ENDLESS — a run with no finish line, unlocked once you clear level 1. Rounds grow and tighten, the enemy roster widens every third round and a boss arrives every fifth. It keeps your best score and the deepest round you have reached.
-• Kills landing close together now build a chain that multiplies your score up to x8. One hit taken and it is gone, and the window shortens as the chain grows.
-• Bosses fight in three acts. As the armour cracks at two-thirds and one-third health they attack faster and reach deeper into their repertoire, so the fight now reads the way it looks.
-• From level 8 to level 50 every boss used to declare the identical fourteen attack patterns — forty-three of the fifty were the same fight with a longer health bar. The seventeen identities behind them now each have a signature of their own.
-• Levels are paced instead of empty. Waves land roughly a third faster and the second half of a level replays the first, tighter, so there is always something in front of you.
-• An overheat no longer costs you the chain you were holding: the cooldown is down from three seconds to a second and a half, and the guns cool half again as fast between bursts.
-• Czech localisation, throughout the game and the story.
+• TEN NEW BOSSES — the one boss is gone. In its place stand ten machines, each drawn in wireframe like your ship, with its own way of moving, its own signature attack and hardware you can shoot off it: the warden, the diving mantis, the orbital gyre, the mine-laying hive, the crystal lancer, the serpent, the blinking wraith, the tesseract, the maw — and, at the end of the route, the epicentre itself. Every fight runs in three acts marked on its health bar, and later sectors bring them back better armed.
+• OVERDRIVE — every kill bursts into energy shards that stream into your ship. Fill the meter, then fire it with a second finger or a double tap: every enemy bullet on screen dissolves into shards and your guns burn gold for six seconds. Or hold it — a full meter fires itself to absorb a hit.
+• MEDALS — every level now holds three: no hits, a long chain, and 85% of its enemies destroyed. They show on the level select and on each level's intro card, as goals for the next attempt.
+• ENDLESS UPGRADES — every boss you beat in endless lets you pick one of three upgrades for the rest of the run: faster guns, a longer Overdrive, a wider graze ring, an extra life and more. Stack them into a build.
+• GRAZE — the ship now has a small core hitbox, drawn on the hull whenever fire is close. Bullets that skim past without touching it pay points, charge the Overdrive and cool your guns.
+• Relative controls — the ship moves with your finger instead of jumping to it, so your thumb can rest anywhere and never covers the ship. A held finger fires wherever it is.
+• A real stream of fire: the guns shoot more than twice as fast and enemies take several hits, flashing white and sparking as they do. The toughest show a health bar, and heavy kills land with a hit-stop that clears the fire around them.
+• Faster levels — waves arrive tighter, the boss turns up sooner, and every boss phase break clears the screen in a shower of shards.
+• All enemy fire is now one colour — hot pink with a white core — so it reads at a glance against explosions, coins and your own shots. Aimed shots fly slower and fairer.
+• Snipers finally snipe: a bug meant their locked-on shot never fired.
+• Bigger enemies, laser bolts instead of dashes, distant planets that no longer look like asteroids, and a sky that rushes past faster.
+• A new look between the levels: the menu, the level select, the pause screen and the results now share the story's film frame — letterbox bars, viewfinder corners and type drawn as light.
+• Sound no longer piles up into noise when the screen gets busy.
+• Fixes: an endless run you quit from the pause menu now counts towards your record, and a progress reset now holds on every device signed in to the same iCloud.

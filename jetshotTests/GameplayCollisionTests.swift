@@ -28,7 +28,9 @@ final class GameplayCollisionTests: XCTestCase {
         harness.startPlaying()
         defer { harness.teardown() }
 
-        let enemy = harness.addEnemy(.basic, at: CGPoint(x: 200, y: 500))
+        // `.fast` because it is one of the one-hit enemies; see `EnemyType.maxHealth`.
+        let enemy = harness.addEnemy(.fast, at: CGPoint(x: 200, y: 500))
+        XCTAssertEqual(enemy.maxHealth, 1, "this test needs an enemy one round can kill")
         XCTAssertEqual(harness.scene.activeEnemyCount, 1)
 
         harness.player.position = CGPoint(x: 200, y: 480)
@@ -60,40 +62,40 @@ final class GameplayCollisionTests: XCTestCase {
 
     @MainActor
     func testOneMovingBulletCostsExactlyOneHitPoint() {
-        // The tank is the only enemy with 2 HP, so it is the only one that can show a
-        // bullet landing twice. `didBegin(_:)` reports a contact per overlap and the
-        // handler decrements unconditionally, so a shot that stayed inside the hitbox for
-        // several frames would spend a 2 HP enemy in one trigger pull — the tank's whole
-        // point is that it takes two.
+        // `didBegin(_:)` reports a contact per overlap and the handler decrements
+        // unconditionally, so a shot that stayed inside the hitbox for several frames
+        // would spend several hit points in one trigger pull. The tank soaks the most
+        // rounds of any enemy, which makes it the clearest place to see that.
         let harness = GameplayHarness()
         harness.startPlaying()
         defer { harness.teardown() }
 
         let tank = harness.addEnemy(.tank, at: CGPoint(x: 200, y: 500))
-        XCTAssertEqual(tank.maxHealth, 2, "this test is only meaningful for a 2 HP enemy")
+        XCTAssertGreaterThan(tank.maxHealth, 1, "this test is only meaningful for a multi-hit enemy")
 
         harness.fireMovingBullets(from: CGPoint(x: 200, y: 380))
         harness.spin(1.2)
 
-        XCTAssertEqual(tank.health, 1, "one bullet took \(tank.maxHealth - tank.health) hit points")
+        XCTAssertEqual(tank.health, tank.maxHealth - 1, "one bullet took \(tank.maxHealth - tank.health) hit points")
         XCTAssertNotNil(tank.parent, "the tank died to a single bullet")
         XCTAssertEqual(harness.scene.activeEnemyCount, 1)
     }
 
     @MainActor
-    func testTwoMovingBulletsFinishTheTank() {
+    func testItsFullHealthInBulletsFinishesTheTank() {
         let harness = GameplayHarness()
         harness.startPlaying()
         defer { harness.teardown() }
 
         let tank = harness.addEnemy(.tank, at: CGPoint(x: 200, y: 500))
 
-        harness.fireMovingBullets(from: CGPoint(x: 200, y: 380))
-        harness.spin(1.2)
-        harness.fireMovingBullets(from: CGPoint(x: 200, y: 380))
+        for _ in 0..<tank.maxHealth {
+            harness.fireMovingBullets(from: CGPoint(x: 200, y: 380))
+            harness.spin(0.15)
+        }
         harness.spin(1.2)
 
-        XCTAssertLessThanOrEqual(tank.health, 0, "the tank survived two clean hits")
+        XCTAssertLessThanOrEqual(tank.health, 0, "the tank survived \(tank.maxHealth) clean hits")
         XCTAssertNil(tank.parent)
         XCTAssertEqual(harness.scene.activeEnemyCount, 0)
     }
@@ -108,7 +110,7 @@ final class GameplayCollisionTests: XCTestCase {
 
         for i in 0..<25 {
             let y = 300 + CGFloat(i % 5) * 40
-            let enemy = harness.addEnemy(.basic, at: CGPoint(x: 60 + CGFloat(i % 4) * 80, y: y))
+            let enemy = harness.addEnemy(.fast, at: CGPoint(x: 60 + CGFloat(i % 4) * 80, y: y))
             harness.player.position = CGPoint(x: enemy.position.x, y: enemy.position.y - 20)
             harness.fireBullets(onto: enemy.position)
         }

@@ -3,7 +3,13 @@
 <plist version="1.0">
 <dict>
 	<!--
-	  Only the scene manifest lives here. GENERATE_INFOPLIST_FILE stays on, so Xcode
+	  The game uses no encryption beyond what iOS itself provides, so the
+	  export-compliance question is answered here once instead of on every upload.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!--
+	  Otherwise only the scene manifest lives here. GENERATE_INFOPLIST_FILE stays on, so Xcode
 	  merges every INFOPLIST_KEY_* build setting (display name, orientations, status
 	  bar, launch storyboard, category) into this file at build time — this is a base,
 	  not a replacement, and duplicating those keys here would just create two places

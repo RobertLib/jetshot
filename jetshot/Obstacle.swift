@@ -260,27 +260,21 @@ class Obstacle: SKNode {
                 for col in 0..<blocksPerRow {
                     let block = SKShapeNode(rectOf: CGSize(width: blockSize, height: blockSize), cornerRadius: 3)
 
-                    // Slight color variation for visual interest
-                    let variation = CGFloat.random(in: -0.05...0.05)
-                    if let components = type.color.cgColor.components, components.count >= 3 {
-                        block.fillColor = UIColor(
-                            red: components[0] + variation,
-                            green: components[1] + variation,
-                            blue: components[2] + variation,
-                            alpha: 1.0
-                        )
-                    } else {
-                        block.fillColor = type.color
-                    }
-                    block.strokeColor = type.strokeColor
-                    block.lineWidth = 1.5
+                    // Glass bricks in a lit edge; a slight variation in the glass so the
+                    // wall reads as built from pieces, which is what it is.
+                    let variation = CGFloat.random(in: 0.8...1.25)
+                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                    Enemy.glass(type.color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                    block.fillColor = UIColor(red: r * variation, green: g * variation, blue: b * variation, alpha: a)
+                    block.strokeColor = Self.lightColor(for: type)
+                    block.lineWidth = 1.2
 
                     let x = startX + CGFloat(col) * (blockSize + blockSpacing) + blockSize / 2
                     let y = startY + CGFloat(row) * (blockSize + blockSpacing) + blockSize / 2
                     block.position = CGPoint(x: x, y: y)
 
                     // Add subtle glow to each block
-                    GlowHelper.addEnhancedGlow(to: block, color: type.color, intensity: 0.4)
+                    GlowHelper.addEnhancedGlow(to: block, color: Self.lightColor(for: type), intensity: 0.3)
 
                     // Physics for each block - IMPORTANT: Set all physics properties
                     block.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: blockSize, height: blockSize))
@@ -300,7 +294,7 @@ class Obstacle: SKNode {
         case .pulsatingRing:
             // Create ring that pulses
             let outerRadius = size.width / 2
-            let innerRadius = outerRadius * 0.6
+            let innerRadius = outerRadius * Self.ringInnerFraction
 
             let path = CGMutablePath()
             path.addArc(center: .zero, radius: outerRadius, startAngle: 0, endAngle: .pi * 2, clockwise: true)
@@ -356,7 +350,7 @@ class Obstacle: SKNode {
 
         case .spiralBlade:
             // Create spiral blade pattern
-            let armCount = 3
+            let armCount = Self.spiralArmCount
             let armLength = size.height / 2
             let armWidth = size.width
 
@@ -509,31 +503,61 @@ class Obstacle: SKNode {
 
         addChild(bodyNode)
 
-        // Shared industrial finish, so every obstacle type reads as lit hardware
-        // instead of a flat silhouette.
+        // Shared hard-light finish, so every obstacle reads as a constructed barrier
+        // of light, the way the world around it is drawn.
         if type != .destructibleWall {
-            applyIndustrialFinish()
-            GlowHelper.addEnhancedGlow(to: bodyNode, color: type.color, intensity: 0.55)
+            applyHardLightFinish()
+            GlowHelper.addEnhancedGlow(to: bodyNode, color: Self.lightColor(for: type), intensity: 0.5)
         }
     }
 
-    /// Lit metal, hazard markings and an edge highlight.
-    private func applyIndustrialFinish() {
-        let size = type.size
+    /// A type's colour pushed to full brightness: the colour of its edges.
+    static func lightColor(for type: ObstacleType) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        type.strokeColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let m = max(r, g, b, 0.01)
+        // Pushed apart from grey as well as up, or the pale types all read as white.
+        func lift(_ c: CGFloat) -> CGFloat { min(1, pow(c / m, 1.6)) }
+        return UIColor(red: lift(r), green: lift(g), blue: lift(b), alpha: 1)
+    }
 
-        // Only shade shapes that are actually filled; wireframe types (the ring)
-        // would just get muddied by a fill texture.
+    /// Dark glass inside a lit edge and a second, finer contour; slabs carry caution
+    /// stripes in light and a running beacon.
+    private func applyHardLightFinish() {
+        let size = type.size
+        let light = Self.lightColor(for: type)
+
+        // Only glaze shapes that are actually filled; wireframe types (the ring)
+        // stay open.
         if bodyNode.fillColor.cgColor.alpha > 0.05 {
-            SurfaceFX.applyMetal(to: bodyNode, tint: type.color)
+            bodyNode.fillColor = Enemy.glass(type.color)
         }
-        SurfaceFX.addEdgeHighlight(to: bodyNode)
+        bodyNode.strokeColor = light
+        bodyNode.lineWidth = min(bodyNode.lineWidth, 2.6)
+
+        if let path = bodyNode.path {
+            let box = path.boundingBoxOfPath
+            if box.width > 12, box.height > 12 {
+                var inset = CGAffineTransform(scaleX: (box.width - 8) / box.width, y: (box.height - 8) / box.height)
+                if let inner = path.copy(using: &inset) {
+                    let contour = SKShapeNode(path: inner)
+                    contour.fillColor = .clear
+                    contour.strokeColor = light.withAlphaComponent(0.4)
+                    contour.lineWidth = 1
+                    contour.blendMode = .add
+                    contour.zPosition = 2
+                    bodyNode.addChild(contour)
+                }
+            }
+        }
 
         // Plain slab-shaped hazards get caution stripes and a running light;
         // the shaped types (spinner, blades, hexagons) already read as dangerous.
         switch type {
         case .wall, .movingWall, .horizontalWall, .zigzagWall:
-            let stripes = SurfaceFX.hazardStripes(size: size, cornerRadius: 6)
-            stripes.alpha = 0.65
+            let stripes = SurfaceFX.hazardStripes(size: size, cornerRadius: 6, alpha: 0.42, stripeWidth: 3)
+            (stripes as? SKSpriteNode)?.blendMode = .add
+            stripes.alpha = 0.8
             bodyNode.addChild(stripes)
 
             let isVertical = size.height >= size.width
@@ -563,15 +587,17 @@ class Obstacle: SKNode {
         case .wall, .horizontalWall, .movingWall, .rotatingBar, .zigzagWall, .waveWall:
             physicsBody = SKPhysicsBody(rectangleOf: size)
 
-        case .spinner, .spiralBlade:
-            // Cross/spiral shape - use two rectangles
+        case .spinner:
+            // Cross shape - use two rectangles
             let verticalBody = SKPhysicsBody(rectangleOf: size)
             let horizontalBody = SKPhysicsBody(rectangleOf: CGSize(width: size.height, height: size.width))
             physicsBody = SKPhysicsBody(bodies: [verticalBody, horizontalBody])
 
+        case .spiralBlade:
+            physicsBody = SKPhysicsBody(bodies: Self.spiralBladeBodies())
+
         case .pulsatingRing:
-            // Use circular physics for ring
-            physicsBody = SKPhysicsBody(circleOfRadius: size.width / 2)
+            physicsBody = SKPhysicsBody(bodies: Self.ringBodies(size: size))
 
         case .triangleBarrier:
             // Triangle shape
@@ -615,6 +641,71 @@ class Obstacle: SKNode {
         physicsBody?.contactTestBitMask = PhysicsCategory.player | PhysicsCategory.bullet
         physicsBody?.collisionBitMask = PhysicsCategory.none
         physicsBody?.affectedByGravity = false
+    }
+
+    /// The ring's hole, as a fraction of its outer radius. Shared by the drawing and
+    /// the hitbox so the two cannot drift apart.
+    private static let ringInnerFraction: CGFloat = 0.6
+    private static let spiralArmCount = 3
+
+    /// The ring as drawn: a band of segments around an open centre.
+    ///
+    /// This used to be a solid disc of the outer radius, so the 60 pt hole the ring is
+    /// drawn with — several times the ship's core — killed anything that flew through
+    /// it. Sixteen segments put the straight chords within a point of the arcs.
+    private static func ringBodies(size: CGSize) -> [SKPhysicsBody] {
+        let outer = size.width / 2
+        let inner = outer * ringInnerFraction
+        let segments = 16
+        return (0..<segments).map { i in
+            let a0 = CGFloat(i) / CGFloat(segments) * 2 * .pi
+            let a1 = CGFloat(i + 1) / CGFloat(segments) * 2 * .pi
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: inner * cos(a0), y: inner * sin(a0)))
+            path.addLine(to: CGPoint(x: outer * cos(a0), y: outer * sin(a0)))
+            path.addLine(to: CGPoint(x: outer * cos(a1), y: outer * sin(a1)))
+            path.addLine(to: CGPoint(x: inner * cos(a1), y: inner * sin(a1)))
+            path.closeSubpath()
+            return SKPhysicsBody(polygonFrom: path)
+        }
+    }
+
+    /// The blade as drawn: its hub and three curved arms at 0°, 120° and 240°.
+    ///
+    /// It used to share the spinner's four-armed "+" cross, so of the three arms on
+    /// screen only the one along the cross was solid, and two arms that were never
+    /// drawn hurt. Each arm is traced as two convex pieces — the 12 pt root tapering to
+    /// where the blade's curve meets its straight edge 40 pt out, then the spike to the
+    /// 70 pt tip — rotated exactly as `setupBody()` rotates the drawing. The trace runs
+    /// round the visible outline (path plus half its 2.6 pt stroke): the spike's path
+    /// alone is under a point wide, thinner than it looks and thinner than the physics
+    /// resolves reliably. The hub is an octagon rather than a circle because
+    /// `startExpanding()` stretches the blade along one axis, and a polygon can follow
+    /// that where a circle body cannot.
+    private static func spiralBladeBodies() -> [SKPhysicsBody] {
+        // Arm pointing along +y, in the coordinates of the drawn 12 x 140 blade.
+        let root = [CGPoint(x: -7.2, y: 0), CGPoint(x: 7.2, y: 0), CGPoint(x: 3.9, y: 40), CGPoint(x: 0.9, y: 40)]
+        let spike = [CGPoint(x: 0.9, y: 40), CGPoint(x: 3.9, y: 40), CGPoint(x: 3.7, y: 47), CGPoint(x: 3.4, y: 54),
+                     CGPoint(x: 2.6, y: 62), CGPoint(x: 0.5, y: 70.5), CGPoint(x: -0.5, y: 62)]
+
+        func polygon(_ points: [CGPoint], rotatedBy angle: CGFloat) -> SKPhysicsBody {
+            let path = CGMutablePath()
+            path.addLines(between: points, transform: CGAffineTransform(rotationAngle: angle))
+            path.closeSubpath()
+            return SKPhysicsBody(polygonFrom: path)
+        }
+
+        let hub = (0..<8).map { i -> CGPoint in
+            let angle = CGFloat(i) * .pi / 4
+            return CGPoint(x: 12 * cos(angle), y: 12 * sin(angle))
+        }
+        var bodies = [polygon(hub, rotatedBy: 0)]
+        for i in 0..<spiralArmCount {
+            let angle = CGFloat(i) * .pi * 2 / CGFloat(spiralArmCount)
+            bodies.append(polygon(root, rotatedBy: angle))
+            bodies.append(polygon(spike, rotatedBy: angle))
+        }
+        return bodies
     }
 
     private func setupBehavior() {
@@ -682,15 +773,13 @@ class Obstacle: SKNode {
         let moveDuration: TimeInterval = 8.0
         let moveAction = SKAction.moveBy(x: 0, y: -(sceneSize.height + 200), duration: moveDuration)
 
-        // Cleanup all repeating actions before removal
-        let cleanup = SKAction.run { [weak self] in
-            self?.removeAction(forKey: "rotate")
-            self?.removeAction(forKey: "horizontalMovement")
-            self?.removeAction(forKey: "pulse")
-            self?.removeAllActions()
-        }
-        let removeAction = SKAction.removeFromParent()
-        let sequence = SKAction.sequence([moveAction, cleanup, removeAction])
+        // Straight to removal, which stops the repeating actions with the node. There
+        // used to be a cleanup step in between that called `removeAllActions()`,
+        // cancelling this very sequence: the removal after it only ran because SpriteKit
+        // (as of iOS 27) still finishes a cancelled sequence's instant steps that frame.
+        // On a runtime that stops there instead, every obstacle would be parked below
+        // the screen for the rest of the run, body live and glow drawing.
+        let sequence = SKAction.sequence([moveAction, SKAction.removeFromParent()])
         run(sequence, withKey: "moveDown")
     }
 
@@ -720,7 +809,12 @@ class Obstacle: SKNode {
 
         let sequence = SKAction.sequence([scaleUp, scaleDown])
         let forever = SKAction.repeatForever(sequence)
-        bodyNode.run(forever, withKey: "pulse")
+        // On the obstacle, not `bodyNode`: the physics body is the obstacle's, and
+        // SpriteKit scales a body with its own node or an ancestor, never a child.
+        // Pulsing `bodyNode` swelled the drawing 0.8–1.3x over a hitbox that stayed put,
+        // so hits came out of empty space and the swollen rim could be flown through.
+        // `bodyNode` is the obstacle's only child, so the drawing is unchanged.
+        run(forever, withKey: "pulse")
     }
 
     private func startExpanding() {
@@ -733,7 +827,9 @@ class Obstacle: SKNode {
 
         let sequence = SKAction.sequence([expand, contract])
         let forever = SKAction.repeatForever(sequence)
-        bodyNode.run(forever, withKey: "expand")
+        // On the obstacle, for the reason in `startPulsating()`. Scale applies before
+        // the obstacle's own rotation, so the stretch still turns with the blade.
+        run(forever, withKey: "expand")
     }
 
     private func startWaveMovement() {
@@ -763,6 +859,11 @@ class Obstacle: SKNode {
               block.parent != nil else {
             return false
         }
+
+        // Out of the physics before the 0.3 s fade: a block that kept its body while
+        // it fell went on eating bolts meant for the block behind it, and could still
+        // cost the player a hit.
+        block.physicsBody = nil
 
         // Create small explosion particles
         createBlockExplosion(at: block.position, in: bodyNode)
@@ -797,28 +898,16 @@ class Obstacle: SKNode {
     }
 
     private func createBlockExplosion(at position: CGPoint, in parent: SKNode) {
-        // Create small particle effect for block destruction
-        for _ in 0..<6 {
-            let particle = SKShapeNode(rectOf: CGSize(width: 4, height: 4))
-            particle.fillColor = type.color
-            particle.strokeColor = .clear
-            particle.position = position
-            particle.zPosition = 20
-
-            parent.addChild(particle)
-
-            let angle = CGFloat.random(in: 0...(2 * .pi))
-            let speed = CGFloat.random(in: 20...40)
-            let dx = cos(angle) * speed
-            let dy = sin(angle) * speed
-
-            let move = SKAction.moveBy(x: dx, y: dy, duration: 0.3)
-            let fadeOut = SKAction.fadeOut(withDuration: 0.3)
-            let scale = SKAction.scale(to: 0, duration: 0.3)
-            let group = SKAction.group([move, fadeOut, scale])
-            let remove = SKAction.removeFromParent()
-
-            particle.run(SKAction.sequence([group, remove]))
-        }
+        // The brick comes apart along its own edges, like everything else that breaks.
+        let half = blockSize / 2
+        let outline = CGPath(rect: CGRect(x: -half, y: -half, width: blockSize, height: blockSize), transform: nil)
+        let pieces = ExplosionFX.shatter(path: outline, color: Self.lightColor(for: type), at: position)
+        pieces.zPosition = 20
+        parent.addChild(pieces)
+        let flash = LightSprite.star(size: 36, color: Self.lightColor(for: type))
+        flash.position = position
+        flash.zPosition = 20
+        parent.addChild(flash)
+        flash.run(.sequence([.group([.scale(to: 1.5, duration: 0.2), .fadeOut(withDuration: 0.2)]), .removeFromParent()]))
     }
 }

@@ -36,6 +36,14 @@ import UIKit
 ///     -levelselect            the level grid, on the page holding `-level`
 ///     -level <1...50>         straight into a campaign level
 ///     -endless                straight into an endless run
+///     -results                the level-complete panel for `-level`, with a sample
+///                             run that wins the chain medal
+///     -gameover               the game-over screen for `-level` (an endless run's,
+///                             with `-endless`, which beat the record)
+///     -victory                the victory screen
+///     -story opening|ending   one of the story films
+///     -shot <n>               ...starting on its nth shot (1-based)
+///     -at <seconds>           ...this far into that shot
 ///
 /// What the run starts as:
 ///
@@ -47,11 +55,21 @@ import UIKit
 ///     -chain <n>              seed the kill chain, and hold it lit (see `holdPose`)
 ///     -powerups a,b,c         activate power-ups on entry (see `powerUp(named:)`)
 ///     -boss [fraction]        skip to the boss, damaged to `fraction` health (0.3)
+///     -bossattack <name>      the boss uses only this attack, e.g. `sweepBeam` (see
+///                             `BossAttackPattern`) — for tuning one attack at a time
+///     -overdrive              fill the Overdrive meter on entry
+///     -overdrivefire [secs]   fill it and fire it this far into the level (3.5)
+///     -perks                  endless: put the perk picker up once the run has started
+///     -pause                  open the pause menu once the run has started
+///     -settings               ...and the settings panel over it; from the menu, over
+///                             the menu
+///     -resetdialog            level select: put the reset confirmation up
 ///
 /// How it plays itself:
 ///
 ///     -autopilot              a bot flies the ship and dodges
 ///     -invincible             damage is refused, so a 25 s clip cannot end in a death
+///     -cool                   with -autopilot, the guns never overheat (see `holdPose`)
 ///     -nointro                run the level-intro card at 25x instead of watching it
 ///
 /// Note that the level is started regardless of `-nointro` — see
@@ -67,6 +85,10 @@ enum DebugLaunch {
         case levelSelect
         case level(Int)
         case endless
+        case results(Int)
+        case gameOver(Int)
+        case victory
+        case story(StoryType, shot: Int, at: Float)
     }
 
     struct Options {
@@ -87,8 +109,23 @@ enum DebugLaunch {
         var chain: Int?
         var powerUps: [PowerUpType] = []
         var bossFraction: CGFloat?
+        var bossAttack: BossAttackPattern?
+        var overdrive = false
+        /// When to fire the Overdrive, in seconds after the scene is posed. The default
+        /// fires into the opening wave; a screenshot of it dissolving a boss's barrage
+        /// has to wait for the boss.
+        var overdriveFire: TimeInterval?
+        var perks = false
+        var pause = false
+        var settings = false
+        var resetDialog = false
         var autopilot = false
         var invincible = false
+        /// Keep the heat gauge empty. The bot holds the trigger down for the whole
+        /// recording, which no player does, and unbroken fire locks the guns out for
+        /// 1.5 s every nine — long enough to land in a screenshot or a preview cut as
+        /// a ship that has stopped shooting.
+        var coolGuns = false
         var skipIntro = false
 
         /// Whether anything at all was asked for. A normal launch from Xcode passes
@@ -97,8 +134,9 @@ enum DebugLaunch {
             if case .menu = destination {} else { return true }
             return unlockAll || anchorLevel != nil || guns != nil || missiles != nil
                 || round != nil || holdBanner
-                || chain != nil || !powerUps.isEmpty || bossFraction != nil
-                || autopilot || invincible || skipIntro
+                || chain != nil || !powerUps.isEmpty || bossFraction != nil || bossAttack != nil
+                || overdrive || overdriveFire != nil || perks || pause || settings || resetDialog
+                || autopilot || invincible || coolGuns || skipIntro
         }
     }
 
@@ -120,15 +158,34 @@ enum DebugLaunch {
         options.unlockAll = args.contains("-unlockall")
         options.autopilot = args.contains("-autopilot")
         options.invincible = args.contains("-invincible")
+        options.coolGuns = args.contains("-cool")
         options.skipIntro = args.contains("-nointro")
         options.holdBanner = args.contains("-banner")
+        options.overdrive = args.contains("-overdrive")
+        if args.contains("-overdrivefire") {
+            options.overdriveFire = value(after: "-overdrivefire").flatMap(Double.init).map { max(0, $0) } ?? 3.5
+        }
+        options.perks = args.contains("-perks")
+        options.pause = args.contains("-pause")
+        options.settings = args.contains("-settings")
+        options.resetDialog = args.contains("-resetdialog")
 
         if let raw = value(after: "-level"), let level = Int(raw),
            (1...GameConfiguration.totalLevels).contains(level) {
             options.anchorLevel = level
         }
 
-        if args.contains("-levelselect") {
+        if let film = value(after: "-story") {
+            let shot = value(after: "-shot").flatMap(Int.init).map { max(1, $0) } ?? 1
+            let at = value(after: "-at").flatMap(Float.init).map { max(0, $0) } ?? 0
+            options.destination = .story(film == "ending" ? .ending : .opening, shot: shot, at: at)
+        } else if args.contains("-results") {
+            options.destination = .results(options.anchorLevel ?? 15)
+        } else if args.contains("-gameover") {
+            options.destination = .gameOver(options.anchorLevel ?? 34)
+        } else if args.contains("-victory") {
+            options.destination = .victory
+        } else if args.contains("-levelselect") {
             options.destination = .levelSelect
         } else if args.contains("-endless") {
             options.destination = .endless
@@ -150,6 +207,9 @@ enum DebugLaunch {
         if args.contains("-boss") {
             let fraction = value(after: "-boss").flatMap(Double.init) ?? 0.3
             options.bossFraction = CGFloat(min(max(fraction, 0.05), 1.0))
+        }
+        if let name = value(after: "-bossattack") {
+            options.bossAttack = BossAttackPattern.allCases.first { "\($0)".lowercased() == name.lowercased() }
         }
 
         return options
@@ -194,6 +254,7 @@ enum DebugLaunch {
         var scores: [String: Int] = [:]
         var stars: [String: Int] = [:]
         var weapons: [String: [String: Int]] = [:]
+        var medals: [String: Int] = [:]
 
         for level in 1...GameConfiguration.totalLevels {
             // Rising, with the boss payout stepping up every fifth level.
@@ -202,6 +263,10 @@ enum DebugLaunch {
             // that decides a rating is not something anyone holds at 70% for fifty
             // levels running.
             stars["\(level)"] = (level % 7 == 3) ? 2 : 3
+            // Medals thin out towards the end, the way they would for a real player:
+            // the early levels mostly mastered, the late ones only partly.
+            medals["\(level)"] = level <= 12 ? (level % 5 == 0 ? 0b011 : 0b111)
+                : (level % 3 == 0 ? 0b101 : (level % 4 == 0 ? 0b111 : 0b001))
             weapons["\(level)"] = [
                 "bulletCount": min(GameConfiguration.maxBulletCount, 2 + level),
                 "sideMissileCount": min(GameConfiguration.maxSideMissileCount, level / 4)
@@ -213,7 +278,8 @@ enum DebugLaunch {
             CloudStorageManager.Keys.levelScores: scores,
             CloudStorageManager.Keys.levelStars: stars,
             CloudStorageManager.Keys.levelWeapons: weapons,
-            CloudStorageManager.Keys.endlessRecords: ["bestScore": 486_300, "bestRound": 27]
+            CloudStorageManager.Keys.endlessRecords: ["bestScore": 486_300, "bestRound": 27],
+            CloudStorageManager.Keys.levelMedals: medals
         ]
     }
 
@@ -225,12 +291,24 @@ enum DebugLaunch {
 
         switch options.destination {
         case .menu:
-            return nil
+            guard options.settings else { return nil }
+            let menu = MenuScene(size: size)
+            menu.run(.sequence([.wait(forDuration: 0.8), .run { [weak menu] in
+                guard let menu = menu else { return }
+                menu.addChild(SettingsOverlay(sceneSize: menu.size))
+            }]))
+            return menu
 
         case .levelSelect:
             // `LevelSelectScene` opens on the page holding `startLevel`, so `-level`
             // doubles as the page anchor here. Defaults to the first page.
-            return LevelSelectScene(size: size, startLevel: options.anchorLevel ?? 1)
+            let scene = LevelSelectScene(size: size, startLevel: options.anchorLevel ?? 1)
+            if options.resetDialog {
+                scene.run(.sequence([.wait(forDuration: 1.0), .run { [weak scene] in
+                    scene?.debugShowResetDialog()
+                }]))
+            }
+            return scene
 
         case .level(let level):
             let scene = GameScene(size: size)
@@ -243,6 +321,29 @@ enum DebugLaunch {
             scene.isEndless = true
             applyArsenal(to: scene, level: 1)
             return scene
+
+        case .story(let type, let shot, let at):
+            let scene = StoryScene(size: size, type: type, targetLevel: type == .opening ? 1 : nil)
+            scene.debugStartShot = shot - 1
+            scene.debugStartTime = at
+            return scene
+
+        case .results(let level):
+            // Writes are no-ops in the demo store, so the chain medal shows as newly won
+            // on every launch rather than only on the first.
+            return LevelCompleteScene(
+                size: size, level: level, score: 61_420, coinsCollected: 14, totalCoins: 16,
+                bulletCount: 6, sideMissileCount: 1, bestChain: 31, grazes: 47,
+                medals: [.untouched, .chain]
+            )
+
+        case .gameOver(let level):
+            let endless = ProcessInfo.processInfo.arguments.contains("-endless")
+            return GameOverScene(size: size, score: endless ? 486_300 : 128_450, level: level,
+                                 isEndless: endless, endlessRound: 27, isEndlessRecord: endless)
+
+        case .victory:
+            return GameCompletionScene(size: size, totalScore: LevelManager.shared.getTotalScore())
         }
     }
 
@@ -290,9 +391,25 @@ enum DebugLaunch {
         if let fraction = options.bossFraction {
             scene.debugForceBoss(healthFraction: fraction)
         }
+        BossManager.debugForcedPattern = options.bossAttack
 
         if options.invincible {
             scene.debugSetInvulnerable(true)
+        }
+
+        if options.overdrive {
+            scene.run(.sequence([.wait(forDuration: 1.0), .run { [weak scene] in scene?.debugFillOverdrive() }]))
+        }
+        if let delay = options.overdriveFire {
+            scene.run(.sequence([.wait(forDuration: delay), .run { [weak scene] in scene?.debugTriggerOverdrive() }]))
+        }
+        if options.perks, scene.isEndless {
+            scene.run(.sequence([.wait(forDuration: 2.5), .run { [weak scene] in scene?.debugOfferPerks() }]))
+        }
+        if options.pause {
+            scene.run(.sequence([.wait(forDuration: 2.0), .run { [weak scene] in
+                scene?.debugOpenPauseMenu(withSettings: options.settings)
+            }]))
         }
     }
 
@@ -314,6 +431,7 @@ enum DebugLaunch {
     private static let pickups = ["powerup", "coin"]
 
     /// Clocks for the three states that decay faster than a screenshot can be taken.
+    /// (The fourth, `-cool`, needs no clock: the gauge is emptied every frame.)
     ///
     /// A chain lapses after 1.8 s without a kill, a shield lasts five seconds and the
     /// round banner is gone in under two — so a shot posed at launch and captured ten
@@ -410,12 +528,19 @@ enum DebugLaunch {
         scene.debugDrag(to: CGPoint(x: targetX, y: flightY - 50))
     }
 
-    /// Keeps the chain lit, the power-ups running and the round banner up, so that a
-    /// screenshot taken whenever the shell gets round to it still shows what the launch
-    /// arguments asked for. See `chainClock`.
+    /// Keeps the guns cool, the chain lit, the power-ups running and the round banner
+    /// up, so that a screenshot taken whenever the shell gets round to it still shows
+    /// what the launch arguments asked for. See `chainClock`.
     @MainActor
     private static func holdPose(_ scene: GameScene, deltaTime: TimeInterval) {
         let options = self.options
+
+        // Every frame rather than on a clock, so the gauge never reaches the 15% at which
+        // it shows: a HEAT bar under the ship in every shot would advertise a limit the
+        // pictures are not about.
+        if options.coolGuns {
+            scene.debugCoolGuns()
+        }
 
         // One kill every 1.2 s, comfortably inside `ComboRules.minWindow` of 1.8 s, so
         // the chain never lapses. It also creeps upwards, which is why the shell's

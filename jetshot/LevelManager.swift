@@ -116,14 +116,46 @@ class LevelManager {
 
     // Reset all progress (for testing)
     func resetProgress() {
-        cloudStorage.removeObject(forKey: completedLevelsKey)
-        cloudStorage.removeObject(forKey: levelScoresKey)
-        cloudStorage.removeObject(forKey: levelStarsKey)
-        cloudStorage.removeObject(forKey: levelWeaponsKey)
-        cloudStorage.removeObject(forKey: CloudStorageManager.Keys.endlessRecords)
+        // Every progress key, in both stores, and a new reset epoch with it: clearing
+        // the keys alone was undone by the next iCloud merge with any other device that
+        // still held the old progress. See `CloudStorageManager.Keys.progressEpoch`.
+        cloudStorage.resetProgress()
 
         // A full reset should feel like a fresh install, so the intro plays again.
         hasSeenOpeningStory = false
+    }
+
+    // MARK: - Medals
+
+    /// Medals earned on `level` across every run, on every device.
+    func getLevelMedals(level: Int) -> MedalSet {
+        let medals = cloudStorage.loadDictionary(forKey: CloudStorageManager.Keys.levelMedals) as? [String: Int] ?? [:]
+        return MedalSet(rawValue: medals["\(level)"] ?? 0)
+    }
+
+    /// Medals held across the whole campaign, for the level select's tally.
+    func getTotalMedalCount() -> Int {
+        let medals = cloudStorage.loadDictionary(forKey: CloudStorageManager.Keys.levelMedals) as? [String: Int] ?? [:]
+        return medals.values.reduce(0) { $0 + MedalSet(rawValue: $1).intersection(.all).count }
+    }
+
+    /// Adds a run's medals to the level's record and reports which ones are new.
+    ///
+    /// A union, never a replacement: a run that earned only the chain medal must not
+    /// take away the no-hit medal an earlier run won. Read-modify-write through `mutate`
+    /// for the reason `completeLevel` documents.
+    @discardableResult
+    func recordMedals(_ earned: MedalSet, level: Int) -> MedalSet {
+        let previous = getLevelMedals(level: level)
+        let newlyEarned = earned.subtracting(previous)
+        guard !newlyEarned.isEmpty else { return [] }
+
+        cloudStorage.mutate(dictionary: CloudStorageManager.Keys.levelMedals) { current in
+            var medals = current as? [String: Int] ?? [:]
+            medals["\(level)"] = (medals["\(level)"] ?? 0) | earned.rawValue
+            return medals
+        }
+        return newlyEarned
     }
 
     // MARK: - Endless Records
@@ -165,8 +197,8 @@ class LevelManager {
     /// from the level select replayed the whole intro crawl on every single attempt —
     /// skippable, but a skip you had to perform every retry.
     var hasSeenOpeningStory: Bool {
-        get { UserDefaults.standard.bool(forKey: hasSeenOpeningStoryKey) }
-        set { UserDefaults.standard.set(newValue, forKey: hasSeenOpeningStoryKey) }
+        get { cloudStorage.loadLocalBool(forKey: hasSeenOpeningStoryKey) }
+        set { cloudStorage.saveLocalBool(newValue, forKey: hasSeenOpeningStoryKey) }
     }
 
     // MARK: - Weapon Arsenal Management
@@ -302,11 +334,30 @@ class LevelManager {
         }
     }
 
+    /// Floor on the spawn gap for a swarm wave. See `isSwarmWave(_:)`.
+    static let swarmMinSpawnInterval: TimeInterval = 0.1
+
+    /// Whether a wave is nothing but swarm: meteors and kamikazes, which never fire and
+    /// die to a single round.
+    ///
+    /// `GameConfiguration.minSpawnInterval` keeps a tight wave of fighters from turning
+    /// into a clump that can't be read as individual ships. A swarm is meant to arrive as
+    /// a stream, and its density is authored as a ramp — 0.4 s at level 9 down to
+    /// 0.16 s at level 50 — but at 0.28 s that floor caught every step of it (a scaled
+    /// 0.4 s is already 0.26 s), so level 50's swarms came exactly as thick as level 9's,
+    /// in the pass and the reprise alike. Swarm waves get their own, lower floor, which
+    /// only level 50's reprise reaches.
+    static func isSwarmWave(_ wave: EnemyWave) -> Bool {
+        return !wave.isFormation && !wave.enemies.isEmpty
+            && wave.enemies.allSatisfy { $0 == .meteorSwarm || $0 == .kamikaze }
+    }
+
     /// Applies the interval and lead-in scaling for one wave, respecting both floors.
     private static func scaled(_ wave: EnemyWave, intervalScale: TimeInterval) -> EnemyWave {
+        let floor = isSwarmWave(wave) ? swarmMinSpawnInterval : GameConfiguration.minSpawnInterval
         let interval = wave.isFormation
             ? wave.spawnInterval
-            : max(GameConfiguration.minSpawnInterval, wave.spawnInterval * intervalScale)
+            : max(floor, wave.spawnInterval * intervalScale)
 
         let delay = max(
             GameConfiguration.minWaveDelay,

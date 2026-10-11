@@ -7,54 +7,33 @@
 
 import SpriteKit
 
-/// Centralized theme system for all UI elements in the game
-/// This ensures consistent styling across all scenes
+/// Centralized theme system for all UI elements in the game.
+///
+/// The screens around the game are drawn in the story films' language — see `FilmUI`
+/// for the frame, the lettering and the light geometry. This type holds the shared
+/// constants and the measuring that layout depends on.
 struct UITheme {
 
     // MARK: - Colors
 
     struct Colors {
-        // Background colors
-        static let sceneBackground = UIColor(red: 0.05, green: 0.05, blue: 0.15, alpha: 1.0)
+        // The story films' near-black: every screen has their 3D world behind it,
+        // drawn in light, and light needs a dark to read against.
+        static let sceneBackground = UIColor(red: 0.004, green: 0.006, blue: 0.02, alpha: 1.0)
 
-        // Primary UI colors
         static let primaryCyan = UIColor.cyan
         static let primaryCyanLight = UIColor(red: 0.6, green: 1.0, blue: 1.0, alpha: 1.0)
         static let primaryGold = UIColor(red: 1.0, green: 0.85, blue: 0.0, alpha: 1.0)
         static let primaryGoldLight = UIColor(red: 1.0, green: 0.95, blue: 0.3, alpha: 1.0)
-
-        // Status colors
-        static let successGreen = UIColor(red: 0.3, green: 0.7, blue: 0.3, alpha: 1.0)
-        static let successGreenLight = UIColor(red: 0.3, green: 0.9, blue: 0.4, alpha: 1.0)
         static let dangerRed = UIColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 1.0)
-        static let dangerRedLight = UIColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 0.5)
 
-        // Level button colors
-        static let levelUnlocked = UIColor(red: 0.1, green: 0.3, blue: 0.7, alpha: 1.0)
-        static let levelUnlockedBorder = UIColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1.0)
-        static let levelCompleted = UIColor(red: 0.1, green: 0.5, blue: 0.2, alpha: 1.0)
-        static let levelCompletedBorder = UIColor(red: 0.3, green: 0.9, blue: 0.4, alpha: 1.0)
-        static let levelLocked = UIColor(red: 0.15, green: 0.15, blue: 0.2, alpha: 1.0)
-        static let levelLockedBorder = UIColor(red: 0.3, green: 0.3, blue: 0.4, alpha: 1.0)
+        /// A figure that improved on what came before: a new record, a medal won.
+        static let improvement = UIColor(red: 0.45, green: 1.0, blue: 0.6, alpha: 1.0)
 
-        // Panel colors
-        static let panelBackground = UIColor(red: 0.1, green: 0.15, blue: 0.25, alpha: 0.95)
-
-        // Text colors
-        static let textPrimary = UIColor.white
         static let textSecondary = UIColor(red: 0.7, green: 0.8, blue: 0.9, alpha: 1.0)
-        static let textLabel = UIColor(red: 0.95, green: 0.95, blue: 1.0, alpha: 1.0)
-        static let textLabelInactive = UIColor(red: 0.4, green: 0.4, blue: 0.45, alpha: 1.0)
-
-        // Highlight colors
-        static let highlightWhiteStrong = UIColor(white: 1.0, alpha: 0.2)
-
-        // Button colors
-        static let buttonMenu = UIColor(red: 0.4, green: 0.4, blue: 0.5, alpha: 1.0)
-        static let buttonLevels = UIColor(red: 0.3, green: 0.5, blue: 0.9, alpha: 1.0)
-
-        // Shadow colors
-        static let shadowBlack = UIColor.black
+        /// Body copy: the films' subtitle white, a touch off pure so it sits back from
+        /// the lit type around it.
+        static let textBody = UIColor(white: 0.9, alpha: 1.0)
 
         // Entity colours are deliberately *not* here. `EnemyType.color` /
         // `.strokeColor` in Enemy.swift and `PowerUpType.color` in PowerUp.swift own
@@ -78,127 +57,141 @@ struct UITheme {
         // more breathing room rather than less.
         static let fontRegular = "AvenirNextCondensed-DemiBold"
         static let fontBold = "AvenirNextCondensed-Heavy"
-        /// Fixed-width digits, so counters don't jitter as they tick up.
+        /// Fixed-width digits, so counters don't jitter as they tick up. Also the films'
+        /// tag face, for anything that reads as data.
         static let fontNumeric = "Menlo-Bold"
-
-        // Font sizes
-        static let sizeHuge: CGFloat = 64
-        static let sizeLarge: CGFloat = 32
-        static let sizeMedium: CGFloat = 28
-        static let sizeRegular: CGFloat = 24
-        static let sizeSmall: CGFloat = 20
-        static let sizeTiny: CGFloat = 16
     }
 
     // MARK: - Dimensions
 
     struct Dimensions {
-        // Corner radius
-        static let cornerRadiusSmall: CGFloat = 10
-        static let cornerRadiusMedium: CGFloat = 12
-        static let cornerRadiusLarge: CGFloat = 15
-        static let cornerRadiusXLarge: CGFloat = 25
-
-        // Line widths
-        static let lineWidthThin: CGFloat = 1.5
-        static let lineWidthRegular: CGFloat = 2
-        static let lineWidthMedium: CGFloat = 3
-        static let lineWidthThick: CGFloat = 3.5
-        static let lineWidthExtraThick: CGFloat = 4
-        static let lineWidthGlowStrong: CGFloat = 8
-
-        // Button sizes
+        /// A primary button, and the height `createButton` falls back to for one.
         static let buttonHeight: CGFloat = 50
-        static let buttonWidthSmall: CGFloat = 125
-        static let buttonWidthLarge: CGFloat = 200
-        static let buttonWidthXLarge: CGFloat = 260
+        /// Every other button.
+        static let buttonHeightSecondary: CGFloat = 44
 
-        // Panel sizes
-        static let panelWidthMax: CGFloat = 350
+        /// START and ENDLESS on the menu.
+        static let buttonWidthLarge: CGFloat = 250
+        /// The menu's SETTINGS, and the settings panel's CLOSE.
+        static let buttonWidthSmall: CGFloat = 170
+        /// The one action a results screen or the pause menu is asking for, and the
+        /// full width of the column under it.
+        static let buttonWidthXLarge: CGFloat = 280
+        /// Gap between the two buttons of a pair.
+        static let buttonPairGap: CGFloat = 12
+        /// One of a pair side by side: LEVELS / MENU, BACK / RESET, NO / YES — half the
+        /// primary column, less the gap between them.
+        static let buttonWidthHalf: CGFloat = (buttonWidthXLarge - buttonPairGap) / 2
 
-        // Star sizes
-        static let starOuterRadius: CGFloat = 20
-        static let starInnerRadius: CGFloat = 10
-        static let starSmallRadius: CGFloat = 6
-
-        // Level button sizes
-        static let levelButtonSize: CGFloat = 70
-        static let levelButtonSpacing: CGFloat = 30
-
-        // Spacing
-        static let spacingMedium: CGFloat = 50
-        static let spacingLarge: CGFloat = 60
+        /// Widest a results column or a modal grows, so an iPad does not stretch the
+        /// lines out of reach of each other.
+        static let columnWidthMax: CGFloat = 340
     }
 
-    // MARK: - Animations
+    // MARK: - Buttons
 
-    struct Animations {
-        // Durations
-        static let durationFast: TimeInterval = 0.1
-        static let durationQuick: TimeInterval = 0.2
-        static let durationNormal: TimeInterval = 0.3
-        static let durationMedium: TimeInterval = 0.4
-        static let durationSlow: TimeInterval = 0.5
-        static let durationGlowPulse: TimeInterval = 1.0
-        static let durationButtonPulse: TimeInterval = 0.8
+    /// Name of the tint inside a button's glass, which the press animation flashes.
+    static let buttonWashName = "buttonWash"
 
-        // Alpha values
-        static let alphaFadedLow: CGFloat = 0.3
-        static let alphaFadedHigh: CGFloat = 0.7
-        static let alphaInactive: CGFloat = 0.3
-        static let alphaFull: CGFloat = 1.0
+    /// Creates a button in the films' style: dark glass inside a hairline frame, a
+    /// bracket of light on each corner, and tracked lettering in the button's colour.
+    ///
+    /// These were rounded, colour-filled pills with a drop shadow — a mobile-app control
+    /// dropped in front of a picture that is otherwise drawn entirely in light. A frame
+    /// with lit corners is the films' own viewfinder at button size, so a button now
+    /// reads as part of the HUD rather than as something stuck on top of it.
+    ///
+    /// The root stays an `SKShapeNode` whose path is exactly the button's outline: every
+    /// scene hit-tests that path, and the layout tests measure it. Decoration hangs off
+    /// it as *direct* children only — see `FilmUI.addBrackets(to:)`.
+    ///
+    /// - Parameter primary: the one action a screen is asking for. Its glass carries
+    ///   more of the colour, its brackets are heavier and breathe, and its type is
+    ///   larger, so it leads without having to be a different shape.
+    static func createButton(
+        text: String,
+        color: UIColor,
+        width: CGFloat,
+        name: String,
+        height: CGFloat? = nil,
+        primary: Bool = false
+    ) -> SKShapeNode {
+        let buttonHeight = height ?? (primary ? Dimensions.buttonHeight : Dimensions.buttonHeightSecondary)
+        let size = CGSize(width: width, height: buttonHeight)
 
-        // Scale values
-        static let scaleSmall: CGFloat = 0.5
-        static let scalePressed: CGFloat = 0.9
-        static let scaleNormal: CGFloat = 1.0
-        static let scalePulsed: CGFloat = 1.1
-    }
-
-    // MARK: - Helper Methods
-
-    /// Creates a standard styled button with consistent appearance (outlined style)
-    static func createButton(text: String, color: UIColor, width: CGFloat, name: String, height: CGFloat? = nil) -> SKShapeNode {
-        let buttonHeight = height ?? Dimensions.buttonHeight
-        let button = SKShapeNode(
-            rectOf: CGSize(width: width, height: buttonHeight),
-            cornerRadius: Dimensions.cornerRadiusMedium
-        )
-        // Subtle background tint with border color
-        button.fillColor = color.withAlphaComponent(0.15)
-
-        // Use the provided color for the stroke
-        button.strokeColor = color
-        button.lineWidth = Dimensions.lineWidthMedium
+        let button = SKShapeNode(rectOf: size)
         button.name = name
+        button.fillColor = FilmUI.glass.withAlphaComponent(primary ? 0.8 : 0.66)
+        button.strokeColor = color.withAlphaComponent(primary ? 0.42 : 0.24)
+        button.lineWidth = 1
 
-        // Add subtle shadow effect with lower opacity for outlined style
-        let shadow = SKShapeNode(
-            rectOf: CGSize(width: width, height: buttonHeight),
-            cornerRadius: Dimensions.cornerRadiusMedium
+        // The colour, washed thinly over the glass.
+        let wash = SKSpriteNode(color: color, size: CGSize(width: width - 2, height: buttonHeight - 2))
+        let washAlpha: CGFloat = primary ? 0.13 : 0.045
+        wash.alpha = washAlpha
+        wash.userData = ["rest": washAlpha]
+        wash.name = buttonWashName
+        wash.zPosition = 0.5
+        button.addChild(wash)
+
+        let arm = min(10, buttonHeight * 0.24)
+        let brackets = FilmUI.addBrackets(to: button, size: size, arm: arm, color: color,
+                                          width: primary ? 1.5 : 1.2)
+        for tube in brackets {
+            tube.zPosition = 1
+            tube.alpha = primary ? 1 : 0.7
+            if primary {
+                let dim = SKAction.fadeAlpha(to: 0.5, duration: 1.1)
+                dim.timingMode = .easeInEaseOut
+                let lift = SKAction.fadeAlpha(to: 1, duration: 1.1)
+                lift.timingMode = .easeInEaseOut
+                tube.run(.repeatForever(.sequence([dim, lift])))
+            }
+        }
+
+        let label = FilmUI.label(
+            text,
+            size: primary ? 19 : 16,
+            color: StoryPalette.mix(color, .white, primary ? 0.45 : 0.38),
+            tracking: primary ? 3.5 : 2.5,
+            maxWidth: width - 28,
+            minimumSize: 11
         )
-        shadow.fillColor = .clear
-        shadow.strokeColor = Colors.shadowBlack
-        shadow.alpha = Animations.alphaFadedLow
-        shadow.lineWidth = Dimensions.lineWidthMedium
-        shadow.position = CGPoint(x: 0, y: -2)
-        shadow.zPosition = -1
-        button.addChild(shadow)
-
-        // Add label with color matching the border
-        let label = SKLabelNode(fontNamed: Typography.fontBold)
-        label.text = text
-        label.fontSize = Typography.sizeSmall
-        label.fontColor = color
-        label.horizontalAlignmentMode = .center
         label.zPosition = 2
-        // Size first, then centre: `fitLabel` changes the point size, and the cap band
-        // it has to be centred on is measured at whatever size it settles on.
-        fitLabel(label, toWidth: width - 20)
+        // Size first, then centre: the cap band is measured at the size it settled on.
         centerOnCapBand(label)
         button.addChild(label)
 
         return button
+    }
+
+    /// A button press: the glass flashes, the frame gives a little, and `completion`
+    /// runs once it has sprung back.
+    ///
+    /// The give is relative to the scale the button rests at — on a wide screen the
+    /// menu's buttons are drawn larger, and pressing one must not snap it back to its
+    /// phone size.
+    static func createButtonPressAnimation(completion: @escaping () -> Void) -> SKAction {
+        let flash = SKAction.customAction(withDuration: 0) { node, _ in
+            guard let wash = node.childNode(withName: buttonWashName) else { return }
+            let rest = wash.userData?["rest"] as? CGFloat ?? wash.alpha
+            wash.removeAction(forKey: "press")
+            wash.run(.sequence([
+                .fadeAlpha(to: 0.45, duration: 0.05),
+                .fadeAlpha(to: rest, duration: 0.3)
+            ]), withKey: "press")
+        }
+        let duration: CGFloat = 0.17
+        let give = SKAction.customAction(withDuration: TimeInterval(duration)) { node, elapsed in
+            if node.userData == nil { node.userData = [:] }
+            let rest = node.userData?["restScale"] as? CGFloat ?? node.xScale
+            node.userData?["restScale"] = rest
+            // In over the first 40%, back out over the rest.
+            let t = min(1, elapsed / duration)
+            let depth: CGFloat = t < 0.4 ? t / 0.4 : 1 - (t - 0.4) / 0.6
+            node.setScale(rest * (1 - 0.05 * depth))
+        }
+        return .sequence([.group([flash, give]), .run(completion)])
     }
 
     /// Centres a label on its **cap band** rather than on its full glyph box, and
@@ -298,13 +291,22 @@ struct UITheme {
     }
 
     /// The label's glyph box with diacritics folded away, measured from its baseline.
+    ///
+    /// Tracked labels carry their font in an attributed string — `FilmUI.label` sets
+    /// one — and the probe has to be built the same way, or it would measure the
+    /// plain-text default font instead of the one on screen.
     private static func capBand(of label: SKLabelNode) -> CGRect {
+        let fold: (String) -> String = {
+            $0.folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+        }
         let probe = SKLabelNode(fontNamed: label.fontName ?? Typography.fontBold)
-        probe.text = (label.text ?? "").folding(
-            options: .diacriticInsensitive,
-            locale: Locale(identifier: "en_US_POSIX")
-        )
-        probe.fontSize = label.fontSize
+        if let attributed = label.attributedText, attributed.length > 0 {
+            let attributes = attributed.attributes(at: 0, effectiveRange: nil)
+            probe.attributedText = NSAttributedString(string: fold(attributed.string), attributes: attributes)
+        } else {
+            probe.text = fold(label.text ?? "")
+            probe.fontSize = label.fontSize
+        }
         probe.verticalAlignmentMode = .baseline
         probe.horizontalAlignmentMode = label.horizontalAlignmentMode
         return probe.frame
@@ -440,42 +442,6 @@ struct UITheme {
         }
     }
 
-    /// Creates a standard panel with consistent styling
-    static func createPanel(width: CGFloat, height: CGFloat, borderColor: UIColor) -> SKShapeNode {
-        let panel = SKShapeNode(
-            rectOf: CGSize(width: width, height: height),
-            cornerRadius: Dimensions.cornerRadiusXLarge
-        )
-        panel.fillColor = Colors.panelBackground
-        panel.strokeColor = borderColor
-        panel.lineWidth = Dimensions.lineWidthExtraThick
-        return panel
-    }
-
-    /// Creates a star shape with consistent appearance
-    static func createStar(outerRadius: CGFloat? = nil, innerRadius: CGFloat? = nil) -> SKShapeNode {
-        let path = CGMutablePath()
-        let points = 5
-        let outer = outerRadius ?? Dimensions.starOuterRadius
-        let inner = innerRadius ?? Dimensions.starInnerRadius
-
-        for i in 0..<points * 2 {
-            let angle = CGFloat(i) * .pi / CGFloat(points)
-            let radius = i % 2 == 0 ? outer : inner
-            let x = radius * cos(angle - .pi / 2)
-            let y = radius * sin(angle - .pi / 2)
-
-            if i == 0 {
-                path.move(to: CGPoint(x: x, y: y))
-            } else {
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        path.closeSubpath()
-
-        return SKShapeNode(path: path)
-    }
-
     /// Soft top-down scrim so HUD instrumentation stays legible over any
     /// background. Cached, since it only depends on the screen size.
     private static var scrimCache: [String: SKTexture] = [:]
@@ -520,36 +486,5 @@ struct UITheme {
         let texture = SKTexture(image: image)
         scrimCache[key] = texture
         return texture
-    }
-
-    /// Creates a glow effect animation
-    static func createGlowPulseAnimation(fromAlpha: CGFloat? = nil, toAlpha: CGFloat? = nil) -> SKAction {
-        let from = fromAlpha ?? Animations.alphaFadedLow
-        let to = toAlpha ?? Animations.alphaFadedHigh
-        return SKAction.repeatForever(
-            SKAction.sequence([
-                SKAction.fadeAlpha(to: from, duration: Animations.durationGlowPulse),
-                SKAction.fadeAlpha(to: to, duration: Animations.durationGlowPulse)
-            ])
-        )
-    }
-
-    /// Creates a button pulse animation
-    static func createButtonPulseAnimation() -> SKAction {
-        return SKAction.repeatForever(
-            SKAction.sequence([
-                SKAction.scale(to: Animations.scalePulsed, duration: Animations.durationButtonPulse),
-                SKAction.scale(to: Animations.scaleNormal, duration: Animations.durationButtonPulse)
-            ])
-        )
-    }
-
-    /// Creates a button press animation
-    static func createButtonPressAnimation(completion: @escaping () -> Void) -> SKAction {
-        return SKAction.sequence([
-            SKAction.scale(to: Animations.scalePressed, duration: Animations.durationFast),
-            SKAction.scale(to: Animations.scaleNormal, duration: Animations.durationFast),
-            SKAction.run(completion)
-        ])
     }
 }

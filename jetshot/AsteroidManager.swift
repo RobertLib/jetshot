@@ -52,23 +52,20 @@ class AsteroidManager {
     }
 
 
-    /// Adds more waves to a manager that may already have drained its queue.
+    /// Drops whatever is still queued and starts `newWaves` from now.
     ///
     /// For endless mode, which has no authored level to draw a fixed hazard track from —
-    /// `GameScene` tops this up a round at a time so the hazards keep escalating with the
-    /// run instead of running out. Same shape, and the same `waveStartTime` repair, as
-    /// `EnemyManager.appendWaves(_:currentTime:)`.
-    func appendWaves(_ newWaves: [AsteroidWave], currentTime: TimeInterval) {
-        guard !newWaves.isEmpty else { return }
-
-        let hadFinished = currentWaveIndex >= waves.count
-        waves.append(contentsOf: newWaves)
-        totalAsteroidsToSpawn += newWaves.reduce(0) { $0 + $1.count }
-
-        if hadFinished {
-            waveStartTime = currentTime
-            lastSpawnTime = currentTime
-        }
+    /// `GameScene` hands over a fresh track every round so the hazards escalate with the
+    /// run. This used to *append*, but a borrowed track runs far longer than a round (a
+    /// level 50 set is ~84 s against rounds of 15–30 s), so each round queued behind a
+    /// growing backlog and a deep run was still flying asteroids from many rounds back.
+    func replaceWaves(_ newWaves: [AsteroidWave], currentTime: TimeInterval) {
+        waves = newWaves
+        currentWaveIndex = 0
+        asteroidsSpawnedInWave = 0
+        totalAsteroidsToSpawn = totalAsteroidsSpawned + newWaves.reduce(0) { $0 + $1.count }
+        waveStartTime = currentTime
+        lastSpawnTime = currentTime
     }
 
     func update(currentTime: TimeInterval) {
@@ -172,21 +169,11 @@ class AsteroidManager {
             let splitSpeed: CGFloat = CGFloat.random(in: 40...80) // Reduced horizontal speed
             let splitVelocityX = cos(angle) * splitSpeed
 
-            // Calculate falling movement parameters with enhanced downward speed
-            let pieceSpeed = piece.asteroidSize.speed * 1.3 // 30% faster falling for threat
-            let totalDistance = scene.size.height + piece.asteroidSize.baseSize * 2
-            let fallDuration = TimeInterval(totalDistance / pieceSpeed)
-
-            // Calculate final position: combine split momentum with enhanced falling
-            // Horizontal spread is limited, vertical is emphasized
-            let finalX = piece.position.x + (splitVelocityX * CGFloat(fallDuration) * 0.6) // Reduce horizontal spread
-            let finalY = -piece.asteroidSize.baseSize
+            let fall = Self.pieceFall(from: piece.position, size: piece.asteroidSize, splitVelocityX: splitVelocityX)
+            let fallDuration = fall.duration
 
             // Create smooth movement that combines split and fall
-            let combinedMove = SKAction.move(
-                to: CGPoint(x: finalX, y: finalY),
-                duration: fallDuration
-            )
+            let combinedMove = SKAction.move(to: fall.destination, duration: fallDuration)
             combinedMove.timingMode = .linear // Constant velocity, like in space
 
             // Add continuous rotation for more dynamic feel
@@ -213,4 +200,25 @@ class AsteroidManager {
         }
     }
 
+    /// Where a split piece falls to, and how long it takes: from where the rock broke
+    /// to just below the bottom edge, 30% faster than a whole rock of its size so the
+    /// pieces are a threat. The split's sideways momentum, damped to 60%, carries on
+    /// for the same time.
+    ///
+    /// The duration used to be a full-screen drop — screen height over speed — whatever
+    /// the height the rock was broken at. A piece only has the rest of the screen left
+    /// to fall, so one broken low crawled out at a fraction of the intended speed
+    /// (a medium broken 150 pt up fell at ~20 pt/s instead of 104), and the drift, scaled
+    /// by that inflated duration, slid it hundreds of points sideways.
+    static func pieceFall(
+        from start: CGPoint,
+        size: AsteroidSize,
+        splitVelocityX: CGFloat
+    ) -> (destination: CGPoint, duration: TimeInterval) {
+        let speed = size.speed * 1.3
+        let finalY = -size.baseSize
+        let duration = TimeInterval(max(0, start.y - finalY) / speed)
+        let finalX = start.x + splitVelocityX * 0.6 * CGFloat(duration)
+        return (CGPoint(x: finalX, y: finalY), duration)
+    }
 }

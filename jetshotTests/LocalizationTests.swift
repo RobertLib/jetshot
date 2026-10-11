@@ -54,21 +54,35 @@ final class LocalizationTests: XCTestCase {
         "levelSelect.title", "levelSelect.page", "levelSelect.reset", "levelSelect.resetTitle",
         "levelSelect.resetMessage", "levelSelect.resetWarning",
         "hud.endless", "hud.level", "hud.round", "hud.warning", "hud.extremeDanger",
-        "hud.boss", "hud.heat", "hud.overheated",
-        "pause.title", "pause.level", "pause.resume", "pause.settings",
+        "sector.label", "sector.1", "sector.2", "sector.3", "sector.4", "sector.5",
+        "sector.6", "sector.7", "sector.8", "sector.9", "sector.10",
+        "hud.heat", "hud.overheated",
+        "boss.warden", "boss.mantis", "boss.gyre", "boss.hive", "boss.lancer",
+        "boss.serpent", "boss.wraith", "boss.tesseract", "boss.maw", "boss.heart",
+        "hud.overdrive", "hud.overdriveReady", "hud.overdriveHint", "hud.overdriveSaved",
+        "medal.untouched", "medal.chain", "medal.hunter", "medal.earned", "medal.goals",
+        "medal.new", "levelSelect.medals", "perk.title", "perk.subtitle",
+        "perk.fireRate.name", "perk.fireRate.detail", "perk.coolant.name",
+        "perk.coolant.detail", "perk.capacitor.name", "perk.capacitor.detail",
+        "perk.longOverdrive.name", "perk.longOverdrive.detail", "perk.daredevil.name",
+        "perk.daredevil.detail", "perk.chainKeeper.name", "perk.chainKeeper.detail",
+        "perk.armor.name", "perk.armor.detail", "perk.arsenal.name", "perk.arsenal.detail",
+        "perk.roundShield.name", "perk.roundShield.detail", "perk.magnet.name",
+        "perk.magnet.detail",
+        "pause.title", "pause.resume", "pause.settings",
         "combo.chain", "combo.toNextTier", "combo.lost",
         "tutorial.move", "tutorial.coins", "tutorial.chain",
         "powerUp.extraLife", "powerUp.multiShot", "powerUp.sideMissiles", "powerUp.shield",
         "powerUp.lightning", "powerUp.rapidFire", "powerUp.magnet", "powerUp.slowMotion",
-        "powerUp.freezeBomb", "powerUp.homingMissiles", "powerUp.scoreDouble",
+        "powerUp.slowMotionShort", "powerUp.freezeBomb", "powerUp.homingMissiles", "powerUp.scoreDouble",
         "powerUp.barrier", "powerUp.nuke", "powerUp.livesMax", "powerUp.gunsMax",
         "powerUp.missilesMax",
         "levelComplete.title", "levelComplete.newBest", "levelComplete.personalBestSet",
-        "levelComplete.bestChain", "levelComplete.next", "levelComplete.continue",
+        "levelComplete.bestChain", "levelComplete.grazes", "levelComplete.next", "levelComplete.continue",
         "gameOver.title", "gameOver.reachedRound", "gameOver.newRecord",
         "completion.title", "completion.congratulations", "completion.success",
         "completion.thanks", "completion.totalScore", "completion.playAgain",
-        "story.skipHint",
+        "story.skipHint", "story.shipName", "story.protocolName",
         "story.opening.title",
         "story.opening.p1", "story.opening.p2", "story.opening.p3", "story.opening.p4",
         "story.opening.p5", "story.opening.p6", "story.opening.p7", "story.opening.p8",
@@ -134,34 +148,39 @@ final class LocalizationTests: XCTestCase {
     ///
     /// This is the assertion that protects the shipping layout: button widths were all
     /// chosen against English copy, and Czech is the longer language everywhere —
-    /// "NASTAVENÍ" against a 125pt SETTINGS button, "NEKONEČNÁ HRA" against a 200pt
-    /// ENDLESS one. Both halves matter. Overflowing the stroke is the obvious failure;
-    /// hitting `fitLabel`'s 11pt floor is the quieter one, because that is the point at
+    /// "NASTAVENÍ" against SETTINGS, "NEKONEČNÁ HRA" against ENDLESS, "POKRAČOVAT"
+    /// against RESUME. Both halves matter. Overflowing the frame is the obvious failure;
+    /// hitting the label's 11pt floor is the quieter one, because that is the point at
     /// which the label stops shrinking and starts overflowing anyway.
     func testEveryCzechButtonLabelFitsItsButton() throws {
         let czech = try czechBundle()
+        typealias D = UITheme.Dimensions
 
-        // Paired with the width at each `UITheme.createButton` call site.
-        let buttons: [(key: String, width: CGFloat)] = [
-            ("menu.start", UITheme.Dimensions.buttonWidthLarge),
-            ("menu.endless", UITheme.Dimensions.buttonWidthLarge),
-            ("menu.settings", UITheme.Dimensions.buttonWidthSmall),
-            ("common.levels", UITheme.Dimensions.buttonWidthSmall),
-            ("common.menu", UITheme.Dimensions.buttonWidthSmall),
-            ("common.retry", UITheme.Dimensions.buttonWidthXLarge),
-            ("levelComplete.next", UITheme.Dimensions.buttonWidthXLarge),
-            ("levelComplete.continue", UITheme.Dimensions.buttonWidthXLarge),
-            ("completion.playAgain", UITheme.Dimensions.buttonWidthXLarge),
-            ("settings.close", 160),
-            ("common.back", 140),
-            ("levelSelect.reset", 140),
-            ("common.yes", 120),
-            ("common.no", 120)
+        // Paired with the width at each `UITheme.createButton` call site, and whether it
+        // is drawn as the primary action — that one is set larger.
+        let buttons: [(key: String, width: CGFloat, primary: Bool)] = [
+            ("menu.start", D.buttonWidthLarge, true),
+            ("menu.endless", D.buttonWidthLarge, false),
+            ("menu.settings", D.buttonWidthSmall, false),
+            ("settings.close", D.buttonWidthSmall, false),
+            ("common.retry", D.buttonWidthXLarge, true),
+            ("levelComplete.next", D.buttonWidthXLarge, true),
+            ("levelComplete.continue", D.buttonWidthXLarge, true),
+            ("completion.playAgain", D.buttonWidthXLarge, true),
+            ("pause.resume", D.buttonWidthXLarge, true),
+            ("common.retry", D.buttonWidthXLarge, false),
+            ("pause.settings", D.buttonWidthXLarge, false),
+            ("common.levels", D.buttonWidthHalf, false),
+            ("common.menu", D.buttonWidthHalf, false),
+            ("common.back", D.buttonWidthHalf, false),
+            ("levelSelect.reset", D.buttonWidthHalf, false),
+            ("common.yes", D.buttonWidthHalf, false),
+            ("common.no", D.buttonWidthHalf, false)
         ]
 
-        for (key, width) in buttons {
+        for (key, width, primary) in buttons {
             let text = czech.localizedString(forKey: key, value: nil, table: nil)
-            let button = UITheme.createButton(text: text, color: .white, width: width, name: key)
+            let button = UITheme.createButton(text: text, color: .white, width: width, name: key, primary: primary)
             let label = try XCTUnwrap(button.children.compactMap { $0 as? SKLabelNode }.first)
 
             // The 1pt slack absorbs the rounding in SpriteKit's glyph measurement.
@@ -173,6 +192,30 @@ final class LocalizationTests: XCTestCase {
                 label.fontSize, 11,
                 "\"\(text)\" only fits its \(width)pt button by hitting the legibility floor"
             )
+        }
+    }
+
+    /// The power-up countdown bars' captions, in both languages, against the room the
+    /// bar leaves them. They were English literals until they were translated, and the
+    /// bar was laid out around those — "SLOW MO", not Czech "ZPOMALENÍ ČASU".
+    func testEveryPowerUpTimerCaptionFitsItsBar() throws {
+        let keys = [
+            "powerUp.shield", "powerUp.lightning", "powerUp.rapidFire", "powerUp.magnet",
+            "powerUp.slowMotionShort", "powerUp.scoreDouble", "powerUp.barrier"
+        ]
+        for bundle in [try englishBundle(), try czechBundle()] {
+            for key in keys {
+                let text = bundle.localizedString(forKey: key, value: nil, table: nil)
+                let label = PowerUpTimerHUD.makeLabel(text)
+                XCTAssertLessThanOrEqual(
+                    label.frame.width, PowerUpTimerHUD.labelWidth + 0.5,
+                    "\"\(text)\" overruns its power-up bar"
+                )
+                XCTAssertGreaterThan(
+                    label.fontSize, 11,
+                    "\"\(text)\" only fits its power-up bar by hitting the legibility floor"
+                )
+            }
         }
     }
 
@@ -213,10 +256,9 @@ final class LocalizationTests: XCTestCase {
 
     // MARK: - Content
 
-    /// The crawl is laid out one paragraph at a time with a blank label between beats.
-    /// `StoryScene.spaced(_:)` rebuilds that rhythm from the translated paragraphs, so
-    /// the gaps cannot be lost in translation.
-    func testStoryParagraphsAreSeparatedByBlankLines() {
+    /// The catalog holds narration only: every paragraph is copy, and the one symbol
+    /// beat the ending draws rather than captions is still in the list.
+    func testStoryParagraphsAreCopyOnly() {
         let opening = L10n.Story.openingParagraphs
         XCTAssertFalse(opening.isEmpty)
         XCTAssertFalse(opening.contains(where: \.isEmpty), "the catalog should hold copy, not layout")

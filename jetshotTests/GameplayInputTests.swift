@@ -53,20 +53,64 @@ final class GameplayInputTests: XCTestCase {
 
     // MARK: - Moving the ship
 
+    /// Steering is relative: putting a finger down anywhere must not move the ship.
+    /// Under the old absolute control a touch teleported the ship 50 pt above the finger,
+    /// which is how a thumb landing on the far side of the screen flew the ship straight
+    /// into whatever was between.
     @MainActor
-    func testTouchMovesTheShipTowardTheFinger() {
+    func testATouchDoesNotTeleportTheShip() {
         let harness = GameplayHarness()
         harness.startPlayingWithControl()
         defer { harness.teardown() }
 
         let start = harness.player.position
-        harness.touchDown(at: CGPoint(x: start.x + 120, y: start.y + 60))
-        harness.spin(0.8) // moveTo is animated
+        harness.touchDown(at: CGPoint(x: start.x + 140, y: start.y + 200))
+        harness.spin(0.5)
 
-        XCTAssertGreaterThan(
-            harness.player.position.x, start.x,
-            "the ship ignored the touch"
+        XCTAssertEqual(harness.player.position.x, start.x, accuracy: 0.5, "the touch moved the ship sideways")
+        XCTAssertEqual(harness.player.position.y, start.y, accuracy: 0.5, "the touch moved the ship vertically")
+    }
+
+    /// The ship moves by the finger's travel, times the drag sensitivity, from wherever
+    /// the finger happened to land.
+    @MainActor
+    func testDraggingMovesTheShipByTheFingersTravel() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        let start = harness.player.position
+        let finger = CGPoint(x: start.x - 60, y: start.y - 30)
+        harness.touchDown(at: finger)
+        harness.drag(to: CGPoint(x: finger.x + 50, y: finger.y + 40))
+
+        let expected = CGPoint(
+            x: start.x + 50 * GameConfiguration.dragSensitivity,
+            y: start.y + 40 * GameConfiguration.dragSensitivity
         )
+        XCTAssertEqual(harness.player.position.x, expected.x, accuracy: 1.5, "the ship did not track the drag sideways")
+        XCTAssertEqual(harness.player.position.y, expected.y, accuracy: 1.5, "the ship did not track the drag vertically")
+    }
+
+    /// A second finger is a trigger, never a second steering input: moving it must not
+    /// drag the ship.
+    @MainActor
+    func testASecondFingerDoesNotSteer() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        let start = harness.player.position
+        harness.touchDown(at: CGPoint(x: start.x, y: start.y - 40))
+
+        let second = HarnessTouch(CGPoint(x: 60, y: 300))
+        harness.scene.touchesBegan([second], with: nil)
+        second.point = CGPoint(x: 260, y: 420)
+        harness.scene.touchesMoved([second], with: nil)
+        harness.spin(0.2)
+
+        XCTAssertEqual(harness.player.position.x, start.x, accuracy: 0.5, "the second finger steered the ship")
+        harness.scene.touchesEnded([second], with: nil)
     }
 
     @MainActor
@@ -175,12 +219,15 @@ final class GameplayInputTests: XCTestCase {
         harness.startPlayingWithControl()
         defer { harness.teardown() }
 
+        let before = harness.scene.volleysFired
         harness.holdFire(for: 1.2)
-        let fired = harness.bulletsInFlight
+        let fired = harness.scene.volleysFired - before
 
-        // One bullet per shootInterval, and bullets live 1.5 s so none have expired yet.
+        // One volley per shootInterval. Counted at the source rather than as rounds in
+        // the air: a round now crosses the screen in well under the 1.2 s window, so the
+        // in-flight count would undercount by however many had already left.
         // Generous bounds: this is guarding the order of magnitude, not the frame timing.
-        let expected = 1.2 / GameConfiguration.defaultShootInterval // = 4
+        let expected = 1.2 / GameConfiguration.defaultShootInterval
         XCTAssertGreaterThanOrEqual(
             Double(fired), expected * 0.5,
             "only \(fired) shots in 1.2 s — the guns are far slower than \(GameConfiguration.defaultShootInterval)s"
@@ -212,38 +259,20 @@ final class GameplayInputTests: XCTestCase {
         )
     }
 
+    /// With relative steering a held finger is the trigger wherever it rests. The old
+    /// range gate (no fire unless the finger sat within 50 pt of the ship) existed only
+    /// because the finger had to be under the ship to fly it.
     @MainActor
-    func testHoldingAwayFromTheShipDoesNotFire() throws {
+    func testHoldingAnywhereFires() {
         let harness = GameplayHarness()
         harness.startPlayingWithControl()
         defer { harness.teardown() }
 
-        // Establish that firing works at all from directly over the ship, so a silent
-        // result below means the range gate fired — not that nothing ever shoots.
-        harness.holdFire(for: 0.8)
-        XCTAssertGreaterThan(harness.bulletsInFlight, 0, "the guns never fired from point blank")
-        harness.touchUp(at: harness.player.position)
-        harness.spin(0.3)
+        let ship = harness.player.position
+        harness.touchDown(at: CGPoint(x: ship.x + 150, y: ship.y + 260))
+        harness.spin(0.8)
 
-        // Now hold well off to the side. `touchesMoved` steers the ship instantly to the
-        // finger, so hold *without* moving: touchesBegan sets touchLocation while
-        // moveTo(x:) glides the ship over, and until it arrives the gap keeps the guns
-        // shut. Assert only while the gap is genuinely out of range.
-        let gate = GameConfiguration.shootDistanceThreshold
-        let fingerX = harness.player.position.x + gate + 140
-        harness.clearBullets()
-        harness.touchDown(at: CGPoint(x: fingerX, y: harness.player.position.y))
-        harness.spin(0.12)
-
-        let gap = abs(harness.player.position.x - fingerX)
-        // `try`, not `try?`: XCTSkipIf signals a skip by *throwing*, so swallowing it
-        // with `try?` left the guard as a no-op and ran the assertion below on exactly
-        // the state it was written to exclude.
-        try XCTSkipIf(gap <= gate, "the ship closed the gap too quickly to observe the range gate")
-        XCTAssertEqual(
-            harness.bulletsInFlight, 0,
-            "the guns fired while the finger was \(Int(gap))pt from the ship (gate is \(Int(gate))pt)"
-        )
+        XCTAssertGreaterThan(harness.bulletsInFlight, 0, "a finger held away from the ship did not fire")
     }
 
     @MainActor

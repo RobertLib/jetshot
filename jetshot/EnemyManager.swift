@@ -47,6 +47,15 @@ class EnemyManager {
     // Formation management
     private var formationManager: FormationManager?
 
+    /// The formation the current wave spawned, while the queue may still need to wait
+    /// on it. Weak: `FormationManager` drops a formation once every member is gone.
+    private weak var lastFormation: Formation?
+    private var lastFormationSpawnTime: TimeInterval = 0
+
+    /// Longest the queue will wait on a formation before moving on regardless — a
+    /// backstop, well past the ~8.5 s the largest formation needs to enter and attack.
+    private static let maxFormationHold: TimeInterval = 12
+
     init(scene: SKScene, waves: [EnemyWave]) {
         self.scene = scene
         self.waves = waves
@@ -85,6 +94,11 @@ class EnemyManager {
 
         // Check if all enemies in current wave have been spawned
         if enemiesSpawnedInWave >= currentWave.enemies.count {
+            if currentWave.isFormation, isNextWaveAFormation,
+               !formationHasReleasedItsSlots(at: currentTime) {
+                return
+            }
+
             // Move to next wave
             currentWaveIndex += 1
             enemiesSpawnedInWave = 0
@@ -102,7 +116,7 @@ class EnemyManager {
         if currentWave.isFormation && enemiesSpawnedInWave == 0 {
             // Spawn entire formation at once
             let pattern = currentWave.formationPattern ?? .vShape
-            formationManager?.spawnFormation(
+            lastFormation = formationManager?.spawnFormation(
                 pattern: pattern,
                 types: currentWave.enemies,
                 attackDelay: 2.0,
@@ -110,6 +124,7 @@ class EnemyManager {
                     // Enemy left the screen - no action needed
                 }
             )
+            lastFormationSpawnTime = currentTime
 
             enemiesSpawnedInWave = currentWave.enemies.count
             totalEnemiesSpawned += currentWave.enemies.count
@@ -126,6 +141,29 @@ class EnemyManager {
             totalEnemiesSpawned += 1
             lastSpawnTime = currentTime
         }
+    }
+
+    private var isNextWaveAFormation: Bool {
+        let next = currentWaveIndex + 1
+        return next < waves.count && waves[next].isFormation
+    }
+
+    /// Whether the formation the current wave spawned has finished taking its slots and
+    /// begun its attack, so another can fly into the same grid.
+    ///
+    /// Every pattern lays out on the same slots (screen centre, near the top), and a
+    /// formation counts as spawned the instant it appears. A run of formation waves —
+    /// levels 35, 39, 43, 49 and 50 each have five or six back to back — used to arrive
+    /// one lead-in apart, under a second each after the pacing pass, while each takes
+    /// 4–8 s to fly in and hold before it attacks: the whole run piled onto one grid
+    /// together. Holding the next formation until this one starts its attack means it
+    /// arrives as this one peels away. A formation wiped out before then holds nothing.
+    ///
+    /// Only formation-to-formation: loose enemies come in along the whole top edge and
+    /// fly straight through, so a loose wave after a formation keeps its usual lead-in.
+    private func formationHasReleasedItsSlots(at currentTime: TimeInterval) -> Bool {
+        guard let formation = lastFormation else { return true }
+        return formation.hasAttacked || currentTime - lastFormationSpawnTime >= Self.maxFormationHold
     }
 
     private func spawnEnemy(type: EnemyType) {
@@ -152,6 +190,48 @@ class EnemyManager {
         enemy.startMovement {
             // Enemy left the screen - no action needed
         }
+
+        spawnWingman(for: enemy, in: parentNode, gameScene: gameScene)
+    }
+
+    /// Types that may fly in pairs: the line fighters, whose behaviour is a path from
+    /// wherever they spawn. Not the set-pieces (turrets, mines, the vortex, the tank),
+    /// which are meant to be met one at a time, and not flankers, whose entry side is
+    /// baked into their heading.
+    private static func canFlyInPairs(_ type: EnemyType) -> Bool {
+        switch type {
+        case .basic, .fast, .zigzag, .kamikaze, .formation, .sniper, .striker,
+             .scout, .eliteGuard, .bomber, .ghost, .splitter, .bouncer, .teleporter, .heavy:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Possibly sends a second enemy of the same type down the mirrored lane. See
+    /// `CombatRules.wingmanChance(forLevel:)`.
+    private func spawnWingman(for lead: Enemy, in parentNode: SKNode, gameScene: GameScene?) {
+        guard let scene = scene, Self.canFlyInPairs(lead.enemyType) else { return }
+        let level = gameScene?.enemyHealthLevel ?? 1
+        guard Double.random(in: 0..<1) < CombatRules.wingmanChance(forLevel: level) else { return }
+
+        let width = scene.size.width
+        var x = width - lead.position.x
+        // A lead near the centre line would mirror onto itself: fly alongside instead.
+        if abs(x - lead.position.x) < 70 {
+            x = lead.position.x + (lead.position.x < width / 2 ? 80 : -80)
+        }
+        x = min(max(x, 30), width - 30)
+
+        let wingman = Enemy(sceneSize: scene.size, scene: scene, type: lead.enemyType)
+        wingman.position = CGPoint(x: x, y: lead.position.y)
+        parentNode.addChild(wingman)
+        gameScene?.registerEnemy(wingman)
+        wingman.startMovement {}
+        // Not counted in `totalEnemiesSpawned`. Wingmen are extra traffic on top of the
+        // queue, not part of it — `totalEnemiesToSpawn` has no way to know how many will
+        // roll — and counting them on one side only filled the level's progress bar
+        // before the last wave had even started.
     }
 
     func areAllWavesSpawned() -> Bool {

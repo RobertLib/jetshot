@@ -171,7 +171,15 @@ enum EnemyType {
         }
     }
 
+    /// Drawing scale. Every value carries the same 1.12 lift over the original table:
+    /// at the old sizes a basic fighter was 6% of a phone's width, small enough that a
+    /// busy screen read as specks, and now that enemies take several hits they need to
+    /// be a target the eye can hold on to.
     var size: CGFloat {
+        return baseSize * 1.12
+    }
+
+    private var baseSize: CGFloat {
         switch self {
         case .basic: return 1.0
         case .fast: return 0.8
@@ -235,10 +243,46 @@ enum EnemyType {
         }
     }
 
+    /// Base hit points, before the per-level scaling in `CombatRules.health(base:level:)`.
+    ///
+    /// Everything but the tank used to have 1. See `CombatRules` for why that changed;
+    /// the table keeps a clear shape — popcorn (`fast`, `scout`, `kamikaze`, the swarm)
+    /// still dies to a single round, line fighters take two or three, and the enemies
+    /// that are supposed to anchor a wave (tank, turrets, vortex, commander) take long
+    /// enough to be a target the player commits to.
     var maxHealth: Int {
         switch self {
-        case .tank: return 2 // Only tank has 2 HP
-        default: return 1
+        case .fast, .kamikaze, .scout, .meteorSwarm: return 1
+        case .basic, .zigzag, .formation, .striker, .flanker: return 2
+        case .sniper, .mine, .ghost, .splitter, .bouncer, .teleporter: return 3
+        case .eliteGuard, .spinner, .shield, .mirror: return 4
+        case .heavy, .bomber, .laser: return 5
+        case .turret, .commander: return 6
+        case .turretSpiral, .vortex: return 7
+        case .tank: return 9
+        }
+    }
+
+    /// Types with no movement of their own: `FormationManager` flies them in, holds them
+    /// in a slot and sends them on their attack run, and never calls `startMovement`.
+    /// Spawned loose they only get the fallback dive in `Enemy.startMovement`, so a wave
+    /// builder should keep them to formation waves.
+    var isFormationOnly: Bool {
+        switch self {
+        case .formation, .scout, .eliteGuard, .bomber, .spinner, .commander: return true
+        default: return false
+        }
+    }
+
+    /// Types that can be handed to `FormationManager`. Its entry and attack paths replace
+    /// the type's movement routine outright, so beyond the formation types this is only
+    /// the plain line fighters, whose routine is a straight descent with nothing lost —
+    /// the same set the campaign's own formation waves use. A turret in a formation never
+    /// docks, a bouncer never bounces and a ghost's phasing is cleared by the attack run.
+    var canFlyInFormation: Bool {
+        switch self {
+        case .basic, .fast, .heavy: return true
+        default: return isFormationOnly
         }
     }
 }
@@ -279,6 +323,8 @@ class Enemy: SKShapeNode {
     private var isTurretDocked: Bool = false
     private var turretRotationNode: SKNode?
     private var turretGunBarrels: [SKShapeNode] = []
+    /// The spiral turret's muzzle, where its rounds leave from.
+    private weak var turretMuzzle: SKNode?
     private let turretDockDuration: TimeInterval = 4.0 // How long turret stays docked and shooting
 
     // Mine properties
@@ -286,11 +332,26 @@ class Enemy: SKShapeNode {
     private let mineArmingTime: TimeInterval = 2.0 // Time before mine arms
     private let mineCountdown: TimeInterval = 3.0 // Countdown before explosion
 
-    // Ghost properties
-    private var ghostPhaseInterval: TimeInterval = 2.0
+    // Ghost properties. How long the ghost holds each state, and how long it takes to
+    // cross between them; see `startGhostPhasing()`.
+    private static let ghostHoldDuration: TimeInterval = 1.3
+    private static let ghostFadeDuration: TimeInterval = 0.25
+    private static let ghostPhasedAlpha: CGFloat = 0.25
+
+    /// Whether this is a ghost that is currently phased out — no target for player rounds
+    /// (see `GameScene.bulletDidCollideWithEnemy`) and holding its own fire.
+    var isGhostPhased: Bool {
+        return enemyType == .ghost && alpha < 0.5
+    }
 
     // Laser properties
     private var isChargingLaser: Bool = false
+    private static let laserChargeTime: TimeInterval = 1.0
+    private static let laserBeamDuration: TimeInterval = 1.5
+    private static let laserBeamFadeDuration: TimeInterval = 0.3
+    /// The beam's hit volume. `GameScene` treats a node of this name as a sustained beam
+    /// wherever it sits in the tree, the way it treats a boss's "bosslaser".
+    static let laserBeamName = "laserBeam"
 
     // Teleporter properties
     private var teleportInterval: TimeInterval = 3.0
@@ -309,8 +370,13 @@ class Enemy: SKShapeNode {
         self.shootInterval = TimeInterval.random(in: type.shootIntervalRange)
         // Accept SKScene but store a weak reference to GameScene when possible
         self.gameScene = scene as? GameScene
-        self.maxHealth = type.maxHealth
-        self.health = type.maxHealth
+        // Scaled by how deep into the game this enemy appears. `GameScene` knows that
+        // (the level, or the endless round's equivalent); an enemy built outside a game
+        // scene — a test, a preview — gets its base health.
+        let level = (scene as? GameScene)?.enemyHealthLevel ?? 1
+        let health = CombatRules.health(base: type.maxHealth, level: level)
+        self.maxHealth = health
+        self.health = health
 
         super.init()
 
@@ -328,7 +394,9 @@ class Enemy: SKShapeNode {
     /// because `attackFromFormation` has to know the same thing to put the timer back.
     private var firesOnATimer: Bool {
         switch enemyType {
-        case .kamikaze, .turret, .turretSpiral, .mine, .meteorSwarm, .vortex, .mirror:
+        // The laser used to be on the timer as well as firing from its movement stops,
+        // so the timer could start a beam while the ship was flying between them.
+        case .kamikaze, .turret, .turretSpiral, .mine, .meteorSwarm, .vortex, .mirror, .laser:
             return false
         default:
             return true
@@ -344,6 +412,45 @@ class Enemy: SKShapeNode {
     }
 
     // Mark enemy as destroyed (prevents completion callback from firing)
+    /// Whether `GameScene` has already counted this enemy towards the hunter medal.
+    var isTallied = false
+
+    /// When this mirror last returned a round, on the scene's gameplay clock.
+    private var lastReflection: TimeInterval = -1
+
+    func canReflect(at time: TimeInterval) -> Bool {
+        return time - lastReflection >= 0.3
+    }
+
+    func noteReflection(at time: TimeInterval) {
+        lastReflection = time
+    }
+
+    /// The scale the enemy rests at. Splitter fragments are spawned at 0.6; the hit
+    /// squash used to snap them back to full size on their first hit, because it
+    /// animated to an absolute 1.0.
+    var restingScale: CGFloat = 1.0
+
+    /// Lazily built white silhouette used for hit flashes. Kept rather than rebuilt per
+    /// hit: at the current fire rate a tough enemy takes a dozen rounds a second, and
+    /// a fresh `SKShapeNode` per round is a path tessellation per round.
+    private weak var hitFlashOverlay: SKShapeNode?
+
+    /// The thin health readout under enemies tough enough to warrant one.
+    private var healthBarFill: SKSpriteNode?
+    private var healthBarRoot: SKNode?
+
+    /// Types that show a health bar once hit. Only the ones that soak enough rounds for
+    /// the readout to matter, and none that spin as a whole — a bar that rotates with
+    /// its owner is worse than no bar.
+    private var showsHealthBar: Bool {
+        guard maxHealth >= 5 else { return false }
+        switch enemyType {
+        case .vortex, .spinner, .flanker, .bouncer, .ghost: return false
+        default: return true
+        }
+    }
+
     /// Bright hit flash plus a squash, for damage that doesn't kill.
     ///
     /// Fading the enemy *down* on a hit (the previous behaviour) reads as a
@@ -352,32 +459,67 @@ class Enemy: SKShapeNode {
     func flashDamage() {
         guard let path = self.path else { return }
 
-        let overlayName = "damageFlash"
-        childNode(withName: overlayName)?.removeFromParent()
+        let overlay: SKShapeNode
+        if let existing = hitFlashOverlay {
+            overlay = existing
+        } else {
+            overlay = SKShapeNode(path: path)
+            overlay.name = "damageFlash"
+            overlay.fillColor = .white
+            overlay.strokeColor = .white
+            overlay.lineWidth = 2
+            overlay.blendMode = .add
+            overlay.zPosition = 20
+            addChild(overlay)
+            hitFlashOverlay = overlay
+        }
+        overlay.removeAllActions()
+        overlay.alpha = 0.9
+        overlay.run(.fadeOut(withDuration: 0.12))
 
-        let overlay = SKShapeNode(path: path)
-        overlay.name = overlayName
-        overlay.fillColor = .white
-        overlay.strokeColor = .white
-        overlay.lineWidth = 2
-        overlay.blendMode = .add
-        overlay.alpha = 0
-        overlay.zPosition = 20
-        addChild(overlay)
+        // Recoil: a brief squash sells the transfer of momentum. Relative to the resting
+        // scale, and only restarted once the previous one has mostly played out, so a
+        // stream of hits reads as a shudder rather than a frozen squash.
+        if action(forKey: "hitSquash") == nil {
+            let base = restingScale
+            let squash = SKAction.sequence([
+                .group([.scaleX(to: base * 1.14, duration: 0.04), .scaleY(to: base * 0.88, duration: 0.04)]),
+                .group([.scaleX(to: base, duration: 0.09), .scaleY(to: base, duration: 0.09)])
+            ])
+            run(squash, withKey: "hitSquash")
+        }
 
-        overlay.run(.sequence([
-            .fadeAlpha(to: 0.85, duration: 0.04),
-            .fadeOut(withDuration: 0.16),
-            .removeFromParent()
-        ]))
+        updateHealthBar()
+    }
 
-        // Recoil: a brief squash sells the transfer of momentum.
-        removeAction(forKey: "hitSquash")
-        let squash = SKAction.sequence([
-            .group([.scaleX(to: 1.16, duration: 0.05), .scaleY(to: 0.86, duration: 0.05)]),
-            .group([.scaleX(to: 1.0, duration: 0.12), .scaleY(to: 1.0, duration: 0.12)])
-        ])
-        run(squash, withKey: "hitSquash")
+    private func updateHealthBar() {
+        guard showsHealthBar, maxHealth > 0 else { return }
+
+        if healthBarRoot == nil {
+            let bounds = path?.boundingBoxOfPath ?? CGRect(x: -12, y: -12, width: 24, height: 24)
+            let width = max(22, bounds.width * 0.9)
+
+            let root = SKNode()
+            root.position = CGPoint(x: 0, y: bounds.minY - 7)
+            root.zPosition = 25
+            addChild(root)
+
+            let track = SKSpriteNode(color: UIColor(white: 0, alpha: 0.55), size: CGSize(width: width + 2, height: 4))
+            root.addChild(track)
+
+            let fill = SKSpriteNode(color: enemyType.strokeColor, size: CGSize(width: width, height: 2))
+            fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+            fill.position = CGPoint(x: -width / 2, y: 0)
+            fill.zPosition = 1
+            root.addChild(fill)
+
+            healthBarRoot = root
+            healthBarFill = fill
+        }
+
+        let fraction = max(0, min(1, CGFloat(health) / CGFloat(maxHealth)))
+        healthBarFill?.xScale = fraction
+        healthBarFill?.color = fraction > 0.35 ? enemyType.strokeColor : UIColor(red: 1.0, green: 0.35, blue: 0.3, alpha: 1)
     }
 
     /// Retires an enemy that left the playfield under its own steam.
@@ -823,9 +965,12 @@ class Enemy: SKShapeNode {
         }
 
         self.path = path
-        self.fillColor = enemyType.color
+        // Dark tinted glass under a lit edge. The films draw their entities in light,
+        // and a flat bright fill beside them reads as a sticker; the bloom below still
+        // throws the type's full colour.
+        self.fillColor = Self.glass(enemyType.color)
         self.strokeColor = enemyType.strokeColor
-        self.lineWidth = 2.5
+        self.lineWidth = 2.2
         self.name = "enemy"
 
         // Spawn position - flankers come from sides, others from top
@@ -851,13 +996,12 @@ class Enemy: SKShapeNode {
         // Add cockpit/core detail (skip for meteor swarm, flanker, ghost, vortex, mirror)
         if enemyType != .meteorSwarm && enemyType != .flanker && enemyType != .ghost &&
            enemyType != .vortex && enemyType != .mirror {
+            // A small turning crystal with a white-hot centre: the hostile entities of
+            // the opening film, at the heart of every ship that carries one.
             let coreSize: CGFloat = 3 * sizeMultiplier
-            let core = SKShapeNode(circleOfRadius: coreSize)
-            core.fillColor = UIColor.white.withAlphaComponent(0.8)
-            core.strokeColor = enemyType.strokeColor
-            core.lineWidth = 1.5
-            core.position = CGPoint(x: 0, y: 0)
-            core.zPosition = 1
+            let core = VectorFX3D.createCore(radius: coreSize * 1.8, shape: Self.coreShape(for: enemyType),
+                                             color: enemyType.strokeColor)
+            core.zPosition = 3
             addChild(core)
         } else {
             // Add rocky texture details for meteors
@@ -988,6 +1132,7 @@ class Enemy: SKShapeNode {
                 muzzle.lineWidth = 1
                 muzzle.position = CGPoint(x: 0, y: barrelLength)
                 barrel.addChild(muzzle)
+                turretMuzzle = muzzle
 
                 // Add central hub
                 let hub = SKShapeNode(circleOfRadius: 5 * sizeMultiplier)
@@ -1044,24 +1189,7 @@ class Enemy: SKShapeNode {
 
         // Add special effects for new enemy types
         if enemyType == .ghost {
-            // Add ethereal glow
-            self.alpha = 0.7
-
-            // Cue the phase-out. `SoundManager.playGhostPhaseSound` and its preloaded
-            // effect already existed but had no caller, so ghosts went transparent —
-            // the moment they become hard to hit — in complete silence. Only the
-            // fade-out is voiced: cueing both ends as well would double the rate for
-            // no extra information, and several ghosts are alive at once.
-            let phaseCue = SKAction.run { [weak self] in
-                guard let self = self else { return }
-                SoundManager.shared.playGhostPhaseSound(on: self)
-            }
-            let fadeAction = SKAction.sequence([
-                phaseCue,
-                SKAction.fadeAlpha(to: 0.3, duration: ghostPhaseInterval),
-                SKAction.fadeAlpha(to: 0.7, duration: ghostPhaseInterval)
-            ])
-            run(SKAction.repeatForever(fadeAction), withKey: "ghostFade")
+            startGhostPhasing()
         }
 
         if enemyType == .shield {
@@ -1224,7 +1352,24 @@ class Enemy: SKShapeNode {
         add3DVectorEffects()
     }
 
-    /// Adds pseudo-3D vector effects based on enemy type
+    /// A type's colour as the dark glass of its hull.
+    static func glass(_ color: UIColor) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return UIColor(red: r * 0.3 + 0.012, green: g * 0.3 + 0.012, blue: b * 0.3 + 0.03, alpha: a * 0.92)
+    }
+
+    /// Which of the film's entities sits at the heart of a type.
+    private static func coreShape(for type: EnemyType) -> VectorFX3D.CoreShape {
+        switch type {
+        case .heavy, .tank, .bomber, .turret, .turretSpiral: return .cage
+        case .commander, .eliteGuard, .sniper, .laser, .kamikaze: return .spiked
+        case .shield, .splitter, .spinner, .bouncer, .teleporter, .mine: return .sphere
+        default: return .octahedron
+        }
+    }
+
+    /// Adds 3D vector effects based on enemy type
     private func add3DVectorEffects() {
         let baseSize: CGFloat = 12
         let sizeMultiplier = enemyType.size
@@ -1583,13 +1728,7 @@ class Enemy: SKShapeNode {
         switch enemyType {
         case .basic, .fast, .heavy, .kamikaze:
             // Straight downward movement
-            let moveAction = SKAction.moveTo(y: -20, duration: movementDuration)
-            let removeAction = SKAction.run { [weak self] in
-                guard let self = self, !self.hasCompletedMovement else { return }
-                self.despawn()
-                completion()
-            }
-            run(SKAction.sequence([moveAction, removeAction]))
+            performStraightDescent(completion: completion)
 
         case .zigzag:
             // Zigzag movement pattern
@@ -1666,9 +1805,23 @@ class Enemy: SKShapeNode {
             performMirrorMovement(completion: completion)
 
         case .formation, .scout, .eliteGuard, .bomber, .spinner, .commander:
-            // Formation enemies start with no movement - controlled by FormationManager
-            break
+            // Formation members are flown by FormationManager, which never calls this,
+            // so getting here means one was spawned loose. This used to `break`, which
+            // parked it just above the top edge for good — unreachable, still firing,
+            // and holding up any round that waits for the screen to clear (endless did
+            // exactly that). Loose, it flies a plain dive instead.
+            performStraightDescent(completion: completion)
         }
+    }
+
+    private func performStraightDescent(completion: @escaping () -> Void) {
+        let moveAction = SKAction.moveTo(y: -20, duration: movementDuration)
+        let removeAction = SKAction.run { [weak self] in
+            guard let self = self, !self.hasCompletedMovement else { return }
+            self.despawn()
+            completion()
+        }
+        run(SKAction.sequence([moveAction, removeAction]))
     }
 
     // Move along a bezier curve path (for formation attacks)
@@ -1725,6 +1878,14 @@ class Enemy: SKShapeNode {
         // began their attack run — the one phase where they are closest to the player.
         if firesOnATimer {
             startShooting()
+        }
+
+        // Likewise any alpha loop cut off mid-fade, which would leave the hull wherever
+        // it stopped — and a ghost left under 0.5 would be immune to the player's rounds
+        // for the rest of its run. The ghost gets its loop back, from solid.
+        alpha = 1
+        if enemyType == .ghost {
+            startGhostPhasing()
         }
 
         moveAlongPath(path, duration: duration, completion: completion)
@@ -1915,29 +2076,24 @@ class Enemy: SKShapeNode {
         // Stop rotating
         turretRotationNode?.removeAction(forKey: "turretRotation")
 
-        // Stop visual effects
+        // Stop visual effects. The pulse is cut off wherever it was, so put the hull back
+        // to opaque or it flies on as faded as the pulse happened to leave it.
         removeAction(forKey: "dockGlow")
+        alpha = 1
 
         // Stop shooting
         removeAction(forKey: "turretSpiralShoot")
     }
 
     private func startTurretSpiralShooting() {
-        var shotCount = 0
         let shotsPerBurst = 10
         let burstInterval: TimeInterval = 1.5 // Pause between bursts
 
+        // The burst length is the `repeat` count below and nothing else. A shot counter
+        // in here used to spend one call of each burst resetting itself, so after the
+        // first burst of ten every burst came out at nine.
         let shootAction = SKAction.run { [weak self] in
-            guard let self = self else { return }
-
-            if shotCount < shotsPerBurst {
-                // Shoot based on current rotation
-                self.shootTurretSpiralBullet()
-                shotCount += 1
-            } else {
-                // Reset counter for next burst (will happen after pause)
-                shotCount = 0
-            }
+            self?.shootTurretSpiralBullet()
         }
 
         let rapidWait = SKAction.wait(forDuration: shootInterval)
@@ -1959,35 +2115,15 @@ class Enemy: SKShapeNode {
         // Play enemy shoot sound
         SoundManager.shared.playEnemyShootSound(on: scene)
 
-        // Shoot in the direction the turret is currently facing
-        let angle = rotationNode.zRotation
+        // Shoot the way the barrel points. It is drawn along the mount's local +y, so its
+        // heading is a quarter turn on from the mount's rotation; the shots used to take
+        // the rotation as is and left at right angles to the barrel, from the hub.
+        let angle = zRotation + rotationNode.zRotation + .pi / 2
 
-        // Create turret bullet
-        let bullet = SKShapeNode(circleOfRadius: 4)
-        bullet.fillColor = UIColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 1.0)  // Cyan
-        bullet.strokeColor = UIColor(red: 0.6, green: 1.0, blue: 1.0, alpha: 1.0)  // Light cyan
-        bullet.lineWidth = 2
-        bullet.position = position
-        bullet.name = "enemyBullet"
-
-        // Add energy core
-        let core = SKShapeNode(circleOfRadius: 2)
-        core.fillColor = UIColor.white.withAlphaComponent(0.9)
-        core.strokeColor = .clear
-        core.zPosition = 1
-        bullet.addChild(core)
-
-        // Setup physics
-        bullet.physicsBody = SKPhysicsBody(circleOfRadius: 4)
-        bullet.physicsBody?.isDynamic = true
-        bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-        bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
-        bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-        bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-        // Add glow
-        GlowHelper.addEnhancedGlow(to: bullet, color: UIColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 1.0), intensity: 1.0)
-
+        // Hostile palette, not the turret's own cyan: cyan is the player's colour. See
+        // `ProjectileFX`.
+        let bullet = ProjectileFX.hostileRound(.orb)
+        bullet.position = turretMuzzle.map { $0.convert(CGPoint.zero, to: scene.gameContentNode) } ?? position
         scene.gameContentNode.addChild(bullet)
 
         // Calculate velocity based on rotation angle
@@ -2033,8 +2169,9 @@ class Enemy: SKShapeNode {
         // Stop rotating
         turretRotationNode?.removeAction(forKey: "turretRotation")
 
-        // Stop visual effects
+        // Stop visual effects, and undo whatever fade the pulse was cut off at.
         removeAction(forKey: "dockGlow")
+        alpha = 1
 
         // Stop shooting
         removeAction(forKey: "turretBurstShoot")
@@ -2067,31 +2204,8 @@ class Enemy: SKShapeNode {
     }
 
     private func shootTurretBullet(scene: SKScene, angle: CGFloat) {
-        // Create turret bullet
-        let bullet = SKShapeNode(circleOfRadius: 4)
-        bullet.fillColor = UIColor(red: 0.8, green: 0.2, blue: 1.0, alpha: 1.0)  // Purple
-        bullet.strokeColor = UIColor(red: 1.0, green: 0.6, blue: 1.0, alpha: 1.0)  // Light purple
-        bullet.lineWidth = 2
+        let bullet = ProjectileFX.hostileRound(.orb)
         bullet.position = position
-        bullet.name = "enemyBullet"
-
-        // Add energy core
-        let core = SKShapeNode(circleOfRadius: 2)
-        core.fillColor = UIColor.white.withAlphaComponent(0.9)
-        core.strokeColor = .clear
-        core.zPosition = 1
-        bullet.addChild(core)
-
-        // Setup physics
-        bullet.physicsBody = SKPhysicsBody(circleOfRadius: 4)
-        bullet.physicsBody?.isDynamic = true
-        bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-        bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
-        bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-        bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-        // Add glow
-        GlowHelper.addEnhancedGlow(to: bullet, color: UIColor(red: 0.8, green: 0.2, blue: 1.0, alpha: 1.0), intensity: 1.0)
 
         // Add bullet to game content node
         if let gameScene = scene as? GameScene {
@@ -2169,23 +2283,25 @@ class Enemy: SKShapeNode {
         run(SKAction.repeatForever(armPulse), withKey: "armingPulse")
     }
 
-    private func startMineCountdown(completion: @escaping () -> Void) {
+    /// Internal rather than private so tests can start the countdown without waiting out
+    /// the descent and arming.
+    func startMineCountdown(completion: @escaping () -> Void) {
         var timeRemaining = Int(mineCountdown)
 
         // Stop the arming pulse and start countdown pulse
         removeAction(forKey: "armingPulse")
 
-        // Activate mine radar warning - make it pulse faster and more visible
+        // Activate mine radar warning - make it sweep faster and more visible.
+        //
+        // The radar is a `WireBody`, which animates from its own "wireBody" action. This
+        // used to `removeAllActions()` on it and then look for a sweep-line shape child
+        // that a wire body doesn't have, so the countdown froze the radar dead instead of
+        // speeding it up. Running its clock faster speeds up everything it draws.
         if let radar = childNode(withName: "mineRadar") {
             radar.run(SKAction.sequence([
                 SKAction.fadeAlpha(to: 0.9, duration: 0.2),
-                SKAction.run {
-                    // Speed up radar rotation during countdown
-                    radar.removeAllActions()
-                    if let sweepLine = radar.children.first(where: { $0 is SKShapeNode && $0.name != "radarCircle" }) {
-                        let fastRotate = SKAction.rotate(byAngle: .pi * 2, duration: 0.5) // Much faster
-                        sweepLine.run(SKAction.repeatForever(fastRotate))
-                    }
+                SKAction.run { [weak radar] in
+                    radar?.speed = 3.5
                 }
             ]))
         }
@@ -2261,18 +2377,18 @@ class Enemy: SKShapeNode {
             shootShrapnel(scene: scene, angle: angle, speed: isFullExplosion ? 300 : 200)
         }
 
-        // Force remove mine immediately to prevent it from staying on screen.
+        // Retire the mine now, not from an action on the mine. A frozen mine is paused,
+        // so a scheduled removal sat there until the freeze ended and the mine stayed on
+        // the playfield, still hittable and paying out a kill per round that hit it.
+        // Nothing above needs the mine in the tree afterwards: the explosion and the
+        // shrapnel took its position and live on the playfield.
+        //
         // Goes through the shared teardown so the mine leaves activeEnemies rather
         // than lingering there; `hasCompletedMovement` is already latched above, so
         // markAsDestroyed() is just doing the unregister and action cleanup here.
-        let wait = SKAction.wait(forDuration: 0.05)
-        let remove = SKAction.run { [weak self] in
-            guard let self = self else { return }
-            self.markAsDestroyed()
-            self.removeFromParent()
-            completion()
-        }
-        run(SKAction.sequence([wait, remove]), withKey: "mineRemoval")
+        markAsDestroyed()
+        removeFromParent()
+        completion()
     }
 
     private func createMineExplosion() {
@@ -2314,24 +2430,11 @@ class Enemy: SKShapeNode {
         // Play enemy shoot sound (only once per explosion, not for each shrapnel piece)
         // This is handled in the mineExplode function
 
-        // Create shrapnel bullet
-        let shrapnel = SKShapeNode(circleOfRadius: 3)
-        shrapnel.fillColor = UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0)  // Orange
-        shrapnel.strokeColor = UIColor(red: 1.0, green: 0.7, blue: 0.0, alpha: 1.0)  // Yellow-orange
-        shrapnel.lineWidth = 1.5
+        // Shrapnel is hostile fire like any other, so it wears the hostile palette.
+        // Orange made it read as part of the explosion that threw it.
+        let shrapnel = ProjectileFX.hostileRound(.orb)
         shrapnel.position = position
-        shrapnel.name = "enemyBullet"
-
-        // Setup physics
-        shrapnel.physicsBody = SKPhysicsBody(circleOfRadius: 3)
-        shrapnel.physicsBody?.isDynamic = true
-        shrapnel.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-        shrapnel.physicsBody?.contactTestBitMask = PhysicsCategory.player
-        shrapnel.physicsBody?.collisionBitMask = PhysicsCategory.none
-        shrapnel.physicsBody?.usesPreciseCollisionDetection = true
-
-        // Add glow
-        GlowHelper.addEnhancedGlow(to: shrapnel, color: UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0), intensity: 0.8)
+        shrapnel.setScale(0.75)
 
         // Add shrapnel to game content node
         if let gameScene = scene as? GameScene {
@@ -2356,14 +2459,8 @@ class Enemy: SKShapeNode {
         let startY = position.y
         let endY: CGFloat = -20
 
-        // Random diagonal angle (roughly 30-60 degrees from vertical)
-        let angleVariation = CGFloat.random(in: -0.3...0.3) // Small variation
-        let baseAngle: CGFloat = .pi * 1.35 // ~245 degrees (diagonal down-left to down-right)
-        let meteorAngle = baseAngle + angleVariation
-
-        // Calculate horizontal movement based on angle and distance
         let totalDistance = startY - endY
-        let horizontalDistance = cos(meteorAngle) * totalDistance * 0.6
+        let horizontalDistance = Self.meteorDrift(fromX: startX, sceneWidth: sceneSize.width, drop: totalDistance)
 
         // Create smooth diagonal path with very slight wobble for realism
         let steps = 30
@@ -2404,6 +2501,20 @@ class Enemy: SKShapeNode {
 
         // Add dust trail particle effect for meteors
         addMeteorTrail()
+    }
+
+    /// How far a meteor drifts sideways over a fall of `drop` points.
+    ///
+    /// The slant is the one the swarm always had — a heading of 1.35π ± 0.3, drifting
+    /// 10–42% of the fall — but that heading only ever had a negative cosine, so every
+    /// meteor in every swarm went down-left, and the ones spawned near the left edge were
+    /// off the screen within a second. The direction is now a coin weighted by the spawn
+    /// point: the nearer an edge, the likelier the meteor heads away from it.
+    static func meteorDrift(fromX x: CGFloat, sceneWidth: CGFloat, drop: CGFloat) -> CGFloat {
+        let heading = CGFloat.pi * 1.35 + CGFloat.random(in: -0.3...0.3)
+        let slant = abs(cos(heading)) * drop * 0.6
+        let towardRight = 1 - min(max(x / max(sceneWidth, 1), 0), 1)
+        return CGFloat.random(in: 0..<1) < towardRight ? slant : -slant
     }
 
     private func addMeteorTrail() {
@@ -2469,16 +2580,22 @@ class Enemy: SKShapeNode {
         run(SKAction.sequence([followAction, removeAction]))
 
         // Add energy trail
-        addFlankerTrail(fromLeft: fromLeft)
+        addFlankerTrail()
     }
 
-    private func addFlankerTrail(fromLeft: Bool) {
+    /// The exhaust, out of the tail.
+    ///
+    /// In the ship's own frame, which is the same for both sides: the nose is local +x,
+    /// and a flanker coming from the right is the same ship turned half a turn (see
+    /// `setupEnemy`). The trail used to mirror itself for that side as well, and the
+    /// two flips cancelled out — right-side flankers flew with their exhaust at the nose.
+    private func addFlankerTrail() {
         let trail = SKEmitterNode()
         trail.particleBirthRate = 20
         trail.particleLifetime = 0.4
         trail.particleLifetimeRange = 0.2
         // Trail points backward relative to movement direction
-        trail.emissionAngle = fromLeft ? .pi : 0
+        trail.emissionAngle = .pi
         trail.emissionAngleRange = .pi / 6
         trail.particleSpeed = 40
         trail.particleSpeedRange = 20
@@ -2491,7 +2608,7 @@ class Enemy: SKShapeNode {
         trail.particleColor = UIColor(red: 0.0, green: 0.9, blue: 0.7, alpha: 1.0)
         trail.particleColorBlendFactor = 1.0
         trail.particleBlendMode = .add // Glowing effect
-        trail.position = CGPoint(x: fromLeft ? -5 : 5, y: 0) // Trail from back
+        trail.position = CGPoint(x: -5, y: 0) // Trail from back
         trail.zPosition = -1
         trail.name = "flankerTrail"
 
@@ -2549,8 +2666,14 @@ class Enemy: SKShapeNode {
         run(repeatAction, withKey: shootActionKey)
     }
 
-    private func shoot() {
+    /// One volley. Internal rather than private so tests can fire it on demand instead of
+    /// waiting out `startShooting()`'s randomised interval.
+    func shoot() {
         guard let scene = gameScene, parent != nil else { return }
+
+        // A phased ghost can't be hit, so it doesn't fire either: a shot from the one
+        // state that is immune to return fire is not something the player can answer.
+        if isGhostPhased { return }
 
         // Different shooting patterns for different enemy types
         switch enemyType {
@@ -2571,38 +2694,8 @@ class Enemy: SKShapeNode {
             SoundManager.shared.playEnemyShootSound(on: gameScene)
         }
 
-        // Create enemy plasma bullet with energy effect
-        let bullet = SKShapeNode(circleOfRadius: 5)
-        bullet.fillColor = UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0)  // Orange-red
-        bullet.strokeColor = UIColor(red: 1.0, green: 0.6, blue: 0.0, alpha: 1.0)  // Lighter orange
-        bullet.lineWidth = 2
+        let bullet = ProjectileFX.hostileRound(.orb)
         bullet.position = position
-        bullet.name = "enemyBullet"
-
-        // Add energy core
-        let core = SKShapeNode(circleOfRadius: 2.5)
-        core.fillColor = UIColor(red: 1.0, green: 0.9, blue: 0.5, alpha: 1.0)
-        core.strokeColor = .clear
-        core.zPosition = 1
-        bullet.addChild(core)
-
-        // Add pulsing animation to core
-        let pulse = SKAction.sequence([
-            SKAction.scale(to: 1.3, duration: 0.2),
-            SKAction.scale(to: 1.0, duration: 0.2)
-        ])
-        core.run(SKAction.repeatForever(pulse))
-
-        // Setup physics for enemy bullet
-        bullet.physicsBody = SKPhysicsBody(circleOfRadius: 5)
-        bullet.physicsBody?.isDynamic = true
-        bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-        bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
-        bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-        bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-        // Add enhanced glow effect to enemy bullet
-        GlowHelper.addEnhancedGlow(to: bullet, color: UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0), intensity: 0.9)
 
         // Add bullet to game content node
         if let gameScene = scene as? GameScene {
@@ -2611,8 +2704,12 @@ class Enemy: SKShapeNode {
             scene.addChild(bullet)
         }
 
-        // Calculate bullet speed based on distance and constant speed
-        let bulletSpeed: CGFloat = 400.0
+        // Calculate bullet speed based on distance and constant speed.
+        //
+        // 330, down from 400. With more enemies on screen at once, slower fire makes
+        // for more rounds in the air and more weaving between them, rather than more
+        // rounds that arrive before they can be read — "bright, slow and deadly".
+        let bulletSpeed: CGFloat = 330.0
         let distance = position.y - (-20)
         let bulletDuration = TimeInterval(distance / bulletSpeed)
 
@@ -2631,27 +2728,8 @@ class Enemy: SKShapeNode {
         let angles: [CGFloat] = [-0.3, 0, 0.3] // Spread angles in radians
 
         for angle in angles {
-            let bullet = SKShapeNode(circleOfRadius: 6)
-            bullet.fillColor = UIColor(red: 0.3, green: 0.5, blue: 1.0, alpha: 1.0)  // Blue for tank
-            bullet.strokeColor = UIColor(red: 0.5, green: 0.7, blue: 1.0, alpha: 1.0)
-            bullet.lineWidth = 2
+            let bullet = ProjectileFX.hostileRound(.heavy)
             bullet.position = position
-            bullet.name = "enemyBullet"
-
-            let core = SKShapeNode(circleOfRadius: 3)
-            core.fillColor = UIColor.white.withAlphaComponent(0.8)
-            core.strokeColor = .clear
-            core.zPosition = 1
-            bullet.addChild(core)
-
-            bullet.physicsBody = SKPhysicsBody(circleOfRadius: 6)
-            bullet.physicsBody?.isDynamic = true
-            bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-            bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
-            bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-            bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-            GlowHelper.addEnhancedGlow(to: bullet, color: UIColor(red: 0.4, green: 0.6, blue: 1.0, alpha: 1.0), intensity: 1.0)
 
             // Add bullet to game content node
             if let gameScene = scene as? GameScene {
@@ -2661,7 +2739,7 @@ class Enemy: SKShapeNode {
             }
 
             // Calculate trajectory with angle
-            let bulletSpeed: CGFloat = 350.0
+            let bulletSpeed: CGFloat = 290.0
             let distance = position.y - (-20)
             let bulletDuration = TimeInterval(distance / bulletSpeed)
 
@@ -2676,8 +2754,14 @@ class Enemy: SKShapeNode {
     }
 
     private func shootAimed(scene: SKScene) {
-        // Sniper shoots precise bullets aimed at player
-        guard let playerNode = scene.childNode(withName: "player") else {
+        // Sniper shoots precise bullets aimed at player.
+        //
+        // The player lives under `gameContentNode`, not on the scene root, and a bare
+        // name only matches direct children — so this lookup used to fail every time
+        // and every sniper in the game silently fell back to `shootNormal`. The lock-on
+        // reticle and the aimed shot it telegraphs had never actually been fired.
+        guard let playerNode = (scene as? GameScene)?.gameContentNode.childNode(withName: "player")
+                ?? scene.childNode(withName: "//player") else {
             shootNormal(scene: scene)
             return
         }
@@ -2689,10 +2773,16 @@ class Enemy: SKShapeNode {
             }
         }
 
-        // Create targeting reticle on player
+        // Create targeting reticle on player.
+        //
+        // The aim point is taken once, here, and the shot goes through it. It used to be
+        // read off `playerNode` again when the shot fired, so the round chased wherever
+        // the ship had moved to and never went near the reticle — which then read as
+        // decoration rather than a warning that can be dodged.
         let lockDuration: TimeInterval = 0.8
+        let lockPoint = playerNode.position
         let reticle = VectorFX3D.createTargetingReticle(
-            at: playerNode.position,
+            at: lockPoint,
             color: UIColor.red,
             lockDuration: lockDuration
         )
@@ -2703,11 +2793,20 @@ class Enemy: SKShapeNode {
             scene.addChild(reticle)
         }
 
+        // A sniper killed mid-lock never fires, so its reticle goes with it rather than
+        // flashing a lock on a shot that is not coming.
+        reticle.run(SKAction.customAction(withDuration: lockDuration) { [weak self] node, _ in
+            guard let self = self, self.parent != nil, !self.hasCompletedMovement else {
+                node.removeFromParent()
+                return
+            }
+        })
+
         // Wait for lock, then shoot
         run(SKAction.sequence([
             SKAction.wait(forDuration: lockDuration),
             SKAction.run { [weak self] in
-                self?.executeAimedShot(scene: scene, playerPosition: playerNode.position)
+                self?.executeAimedShot(scene: scene, playerPosition: lockPoint)
 
                 // Fade out scan cone after shooting
                 if let scanCone = self?.childNode(withName: "scanCone") {
@@ -2723,27 +2822,8 @@ class Enemy: SKShapeNode {
             SoundManager.shared.playEnemyShootSound(on: gameScene)
         }
 
-        let bullet = SKShapeNode(circleOfRadius: 4)
-        bullet.fillColor = UIColor(red: 1.0, green: 0.2, blue: 0.0, alpha: 1.0)  // Bright red
-        bullet.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.2, alpha: 1.0)
-        bullet.lineWidth = 3
+        let bullet = ProjectileFX.hostileRound(.needle)
         bullet.position = position
-        bullet.name = "enemyBullet"
-
-        let core = SKShapeNode(circleOfRadius: 2)
-        core.fillColor = UIColor.white
-        core.strokeColor = .clear
-        core.zPosition = 1
-        bullet.addChild(core)
-
-        bullet.physicsBody = SKPhysicsBody(circleOfRadius: 4)
-        bullet.physicsBody?.isDynamic = true
-        bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-        bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
-        bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-        bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-        GlowHelper.addEnhancedGlow(to: bullet, color: UIColor.red, intensity: 1.2)
 
         // Add bullet to game content node
         if let gameScene = scene as? GameScene {
@@ -2752,15 +2832,20 @@ class Enemy: SKShapeNode {
             scene.addChild(bullet)
         }
 
-        // Calculate distance to target
+        // Fly *through* the point the sniper locked on and on off the screen. The shot
+        // used to `move(to:)` the player's position and vanish there — a round that
+        // stopped dead in mid-air wherever the ship had been.
         let dx = playerPosition.x - position.x
         let dy = playerPosition.y - position.y
-        let distance = sqrt(dx * dx + dy * dy)
+        let distance = max(1, sqrt(dx * dx + dy * dy))
+        let travel: CGFloat = 1400
+        bullet.zRotation = atan2(dy, dx) - .pi / 2
 
-        let bulletSpeed: CGFloat = 500.0 // Faster
-        let bulletDuration = TimeInterval(distance / bulletSpeed)
-
-        let moveAction = SKAction.move(to: playerPosition, duration: bulletDuration)
+        // 360, down from 500: an aimed shot is fair when it can be sidestepped after the
+        // lock-on reticle has said where it is going.
+        let bulletSpeed: CGFloat = 360.0
+        let moveAction = SKAction.moveBy(x: dx / distance * travel, y: dy / distance * travel,
+                                         duration: TimeInterval(travel / bulletSpeed))
         let removeAction = SKAction.removeFromParent()
         bullet.run(SKAction.sequence([moveAction, removeAction]))
     }
@@ -2771,6 +2856,17 @@ class Enemy: SKShapeNode {
 
         // Pause all actions
         isPaused = true
+
+        // Freeze solid. Pausing a ghost mid-phase would hold it below 0.5, where the
+        // player's rounds pass through it, for the whole freeze.
+        if enemyType == .ghost {
+            removeAction(forKey: "ghostFade")
+            alpha = 1
+        }
+
+        // A laser's beam is its child now and would freeze with it, still lit and still
+        // a hit volume, until the detonation. A frozen gun doesn't keep firing.
+        childNode(withName: Self.laserBeamName)?.removeFromParent()
 
         // Visual effect - add blue tint, sized to the enemy rather than a fixed
         // 50x50 box (which overhung small enemies and under-covered large ones).
@@ -2818,10 +2914,8 @@ class Enemy: SKShapeNode {
             guard let self = self, self.parent != nil else { return }
 
             // Use standard explosion effect from GameScene
-            if let gameScene = self.gameScene {
-                gameScene.createExplosionForFrozenEnemy(at: self.position)
-                gameScene.addScore(self.enemyType.points)
-            }
+            // GameScene pays it out like any other kill — shards included.
+            self.gameScene?.detonateFrozenEnemy(self)
 
             // Go through the normal destruction path so the enemy leaves the
             // GameScene cache instead of lingering in it until the next sweep.
@@ -2867,14 +2961,8 @@ class Enemy: SKShapeNode {
     }
 
     private func performGhostMovement(completion: @escaping () -> Void) {
-        // Ghost phases in and out while moving down
+        // Ghost drifts down; the phasing is its own loop, started in `setupEnemy`.
         let moveAction = SKAction.moveTo(y: -20, duration: movementDuration)
-
-        // Create phase effect - alternate between visible and semi-transparent
-        let fadeOut = SKAction.fadeAlpha(to: 0.3, duration: 0.5)
-        let fadeIn = SKAction.fadeAlpha(to: 1.0, duration: 0.5)
-        let phaseSequence = SKAction.sequence([fadeOut, fadeIn])
-        let phaseLoop = SKAction.repeatForever(phaseSequence)
 
         let removeAction = SKAction.run { [weak self] in
             guard let self = self, !self.hasCompletedMovement else { return }
@@ -2882,8 +2970,36 @@ class Enemy: SKShapeNode {
             completion()
         }
 
-        run(phaseLoop, withKey: "phasing")
         run(SKAction.sequence([moveAction, removeAction]))
+    }
+
+    /// The ghost's one alpha loop: solid, then a cue and a quick fade out, phased, then a
+    /// quick fade back.
+    ///
+    /// There used to be two loops fighting over `alpha`: this one (0.7 ↔ 0.3 over 4 s,
+    /// carrying the phase-out cue) and a 1 s 0.3 ↔ 1.0 loop from the movement routine,
+    /// which won every frame — so the cue sounded at moments that had nothing to do with
+    /// what the ghost was showing. Being phased now also means the player's rounds pass
+    /// through it, so both states have to be long enough to read: about 1.5 s either
+    /// side of the 0.5 line, with short crossings.
+    ///
+    /// The cue is `SoundManager.playGhostPhaseSound`. Only the fade-out is voiced:
+    /// cueing both ends would double the rate for no extra information, and several
+    /// ghosts are alive at once.
+    private func startGhostPhasing() {
+        alpha = 1
+        let phaseCue = SKAction.run { [weak self] in
+            guard let self = self else { return }
+            SoundManager.shared.playGhostPhaseSound(on: self)
+        }
+        let loop = SKAction.sequence([
+            SKAction.wait(forDuration: Self.ghostHoldDuration),
+            phaseCue,
+            SKAction.fadeAlpha(to: Self.ghostPhasedAlpha, duration: Self.ghostFadeDuration),
+            SKAction.wait(forDuration: Self.ghostHoldDuration),
+            SKAction.fadeAlpha(to: 1, duration: Self.ghostFadeDuration)
+        ])
+        run(SKAction.repeatForever(loop), withKey: "ghostFade")
     }
 
     private func performBouncerMovement(completion: @escaping () -> Void) {
@@ -2992,17 +3108,15 @@ class Enemy: SKShapeNode {
             beamCharger.run(SKAction.fadeAlpha(to: 0.8, duration: 0.2))
         }
 
-        // Add charge-up particle effect
+        // Add charge-up particle effect. On the ship, not the playfield: it used to be
+        // left behind where the charge began, and kept drawing in on an empty point if
+        // the ship died mid-charge.
         let chargeEffect = VectorFX3D.createChargeEffect(
-            at: CGPoint(x: position.x, y: position.y - 15),
+            at: CGPoint(x: 0, y: -15),
             color: UIColor.red,
-            duration: 1.0
+            duration: Self.laserChargeTime
         )
-        if let gameScene = scene as? GameScene {
-            gameScene.gameContentNode.addChild(chargeEffect)
-        } else {
-            scene.addChild(chargeEffect)
-        }
+        addChild(chargeEffect)
 
         // Pulsing charge effect
         let pulse = SKAction.sequence([
@@ -3012,8 +3126,7 @@ class Enemy: SKShapeNode {
         chargeIndicator.run(SKAction.repeat(pulse, count: 3))
 
         // After charging, fire laser beam
-        let chargeTime = 1.0
-        let wait = SKAction.wait(forDuration: chargeTime)
+        let wait = SKAction.wait(forDuration: Self.laserChargeTime)
         let fireLaser = SKAction.run { [weak self] in
             guard let self = self else { return }
             self.fireLaserBeam(scene: scene)
@@ -3051,37 +3164,43 @@ class Enemy: SKShapeNode {
         let beamWidth: CGFloat = 8
         let beamLength = position.y + 50
 
+        // The shape is the hit volume; the beam itself is drawn in light.
+        //
+        // A child of the ship, so the beam goes where the ship goes and dies with it.
+        // It used to be a fixed node on the playfield: the ship flew on before the beam
+        // was done, leaving it burning where the ship had been — and kept burning after
+        // the ship that fired it was shot down.
         let beam = SKShapeNode(rectOf: CGSize(width: beamWidth, height: beamLength))
-        beam.fillColor = UIColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 0.8)
-        beam.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.5, alpha: 1.0)
-        beam.lineWidth = 2
-        beam.position = CGPoint(x: position.x, y: position.y - beamLength / 2)
-        beam.name = "laserBeam"
+        beam.fillColor = .clear
+        beam.strokeColor = .clear
+        beam.position = CGPoint(x: 0, y: -beamLength / 2)
+        beam.name = Self.laserBeamName
         beam.zPosition = -1
 
-        // Add glow to laser beam
-        GlowHelper.addEnhancedGlow(to: beam, color: UIColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 1.0), intensity: 1.5)
+        let top = CGPoint(x: 0, y: beamLength / 2), bottom = CGPoint(x: 0, y: -beamLength / 2)
+        let halo = LightSprite.tube(from: bottom, to: top, width: 8, color: StoryPalette.red)
+        beam.addChild(halo)
+        beam.addChild(LightSprite.tube(from: bottom, to: top, width: 3.5, color: UIColor(red: 1.0, green: 0.5, blue: 0.45, alpha: 1)))
+        beam.addChild(LightSprite.tube(from: bottom, to: top, width: 1.2, color: .white))
+        halo.run(.repeatForever(.sequence([.scaleY(to: 1.3, duration: 0.05), .scaleY(to: 0.9, duration: 0.05)])))
+        let muzzle = LightSprite.flare(length: 70, thickness: 4, color: StoryPalette.red)
+        muzzle.position = top
+        beam.addChild(muzzle)
 
-        // Setup physics for laser beam
+        // Setup physics for laser beam. Must stay non-dynamic: a dynamic body on a child
+        // node is simulated on its own and would not follow the ship.
         beam.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: beamWidth, height: beamLength))
         beam.physicsBody?.isDynamic = false
         beam.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
         beam.physicsBody?.contactTestBitMask = PhysicsCategory.player
         beam.physicsBody?.collisionBitMask = PhysicsCategory.none
 
-        // Add beam to scene
-        if let gameScene = scene as? GameScene {
-            gameScene.gameContentNode.addChild(beam)
-        } else {
-            scene.addChild(beam)
-        }
+        addChild(beam)
 
-        // Laser lasts for 1.5 seconds
-        let duration: TimeInterval = 1.5
-        let fadeOut = SKAction.fadeOut(withDuration: 0.3)
+        let fadeOut = SKAction.fadeOut(withDuration: Self.laserBeamFadeDuration)
         let remove = SKAction.removeFromParent()
         beam.run(SKAction.sequence([
-            SKAction.wait(forDuration: duration),
+            SKAction.wait(forDuration: Self.laserBeamDuration),
             fadeOut,
             remove
         ]))
@@ -3193,8 +3312,11 @@ class Enemy: SKShapeNode {
                 })
             }
 
-            // Wait for laser to finish
-            actions.append(SKAction.wait(forDuration: 2.0))
+            // Hold until the beam is out, and a beat more. This was a flat 2.0 s against
+            // a 2.8 s charge and beam, so the ship set off again with its beam burning.
+            actions.append(SKAction.wait(
+                forDuration: Self.laserChargeTime + Self.laserBeamDuration + Self.laserBeamFadeDuration + 0.15
+            ))
         }
 
         // Final descent
@@ -3208,10 +3330,9 @@ class Enemy: SKShapeNode {
         }
         actions.append(removeAction)
 
+        // Fires only from the stops above. It used to restart the generic fire timer
+        // here too, which could start a beam mid-flight; see `firesOnATimer`.
         run(SKAction.sequence(actions))
-
-        // Start shooting behavior for other times
-        startShooting()
     }
 
     private func performVortexMovement(completion: @escaping () -> Void) {

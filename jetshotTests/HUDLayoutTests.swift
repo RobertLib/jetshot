@@ -133,4 +133,32 @@ final class HUDLayoutTests: XCTestCase {
             "the chain meter crowded the pause button on a 667pt screen"
         )
     }
+
+    // MARK: - Overdrive gauge
+
+    /// The gauge is a thumb target at the bottom of the screen, so it has to stay above
+    /// the home indicator on every device and clear of the heat gauge in the middle —
+    /// on the narrowest phone the game runs on as well as the widest.
+    @MainActor
+    func testOverdriveGaugeClearsTheHomeIndicatorAndTheHeatGauge() {
+        // The gauge's hit disc: radius 24 plus its 6pt of slop.
+        let reach: CGFloat = 30
+        let heatGaugeHalfWidth: CGFloat = 60
+
+        for inset in [0, 21, 34] as [CGFloat] {
+            let centre = GameScene.overdriveGaugePosition(safeAreaBottom: inset)
+            XCTAssertGreaterThanOrEqual(
+                centre.y - reach, inset,
+                "with a \(inset)pt inset the gauge sits on the home indicator"
+            )
+            XCTAssertGreaterThanOrEqual(centre.x - reach, 0, "the gauge runs off the left edge")
+
+            for width in [320, 375, 440] as [CGFloat] {
+                XCTAssertLessThan(
+                    centre.x + reach, width / 2 - heatGaugeHalfWidth,
+                    "on a \(Int(width))pt screen the gauge overlaps the heat bar"
+                )
+            }
+        }
+    }
 }

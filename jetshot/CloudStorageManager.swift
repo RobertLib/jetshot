@@ -37,8 +37,13 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     static let shared = CloudStorageManager()
 
     // MARK: - Properties
-    private let cloudStore = NSUbiquitousKeyValueStore.default
-    private let userDefaults = UserDefaults.standard
+    private let cloudStore: any ProgressKeyValueStore
+    private let userDefaults: any ProgressKeyValueStore
+
+    #if DEBUG
+    /// Installed before either real store is resolved, including the startup merge.
+    let testStores: (local: MemoryProgressStore, cloud: MemoryProgressStore)?
+    #endif
 
     /// The one serial queue every read and write is funnelled through, so that a
     /// merge and a gameplay save can never interleave on the same key.
@@ -55,7 +60,7 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
 
     // MARK: - Keys
     //
-    // These four are the whole store. A `lastSyncDate` key used to sit here too, which
+    // These are the whole store. A `lastSyncDate` key used to sit here too, which
     // nothing ever read or wrote — `resetProgress()` does not clear it either, so it was
     // never a key at all, just a name.
     struct Keys {
@@ -70,6 +75,96 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
         /// merge below with the other `[String: Int]` collections, which is exactly the
         /// semantics a personal best wants across two devices.
         static let endlessRecords = "endlessRecords"
+
+        /// Medals per level, as `["<level>": MedalSet.rawValue]`.
+        ///
+        /// Merged with a bitwise OR rather than the `max` the other per-level
+        /// dictionaries use: medals are a set, not a score. Two devices that each earned
+        /// a different medal on the same level hold 0b001 and 0b010, and `max` would keep
+        /// only one of them.
+        static let levelMedals = "levelMedals"
+
+        /// How many times progress has been reset, as an `Int`; absent means 0.
+        ///
+        /// The merge below only ever adds — a union, a max, an OR — which is right for
+        /// two devices playing the same save, and wrong the moment one of them resets
+        /// it: the other still holds the old progress, pushes it back up on its next
+        /// merge, and the reset comes undone everywhere. Every reset opens a new epoch,
+        /// and the merge only unions stores that share one. See `reconcile(local:cloud:)`.
+        static let progressEpoch = "progressEpoch"
+
+        /// Every key that is the player's progress: what a reset clears, and what the
+        /// merge reconciles.
+        static let progress = [completedLevels, levelScores, levelStars, levelWeapons, endlessRecords, levelMedals]
+    }
+
+    // MARK: - Reconciling
+
+    /// One store's copy of the player's progress: the value of each progress key it
+    /// holds, and the reset epoch it was written under.
+    struct Snapshot {
+        var values: [String: Any]
+        var epoch: Int
+    }
+
+    /// What both stores should hold once a merge is done.
+    ///
+    /// Two stores in the same epoch are two devices playing one save, so they are
+    /// unioned — completed levels joined, scores, stars and endless records kept at
+    /// their best, medal bits combined, each arsenal slot at its best. Two stores in
+    /// different epochs are not: the newer one was reset after the older one's progress
+    /// was made, so it is taken whole, keys it lacks included. A union there is exactly
+    /// what used to bring a reset save back.
+    ///
+    /// Pure, so `ProgressEpochTests` can cover it without either real store.
+    static func reconcile(local: Snapshot, cloud: Snapshot) -> Snapshot {
+        if local.epoch != cloud.epoch {
+            return local.epoch > cloud.epoch ? local : cloud
+        }
+
+        var merged: [String: Any] = [:]
+        let l = local.values, c = cloud.values
+
+        // A key neither side holds stays absent: there is nothing to write.
+        func eitherHolds(_ key: String) -> Bool { l[key] != nil || c[key] != nil }
+
+        // Completed levels: union of both sides.
+        if eitherHolds(Keys.completedLevels) {
+            let levels = (c[Keys.completedLevels] as? [Int] ?? []) + (l[Keys.completedLevels] as? [Int] ?? [])
+            merged[Keys.completedLevels] = Array(Set(levels)).sorted()
+        }
+
+        // Scores, stars and endless records: element-wise max per key.
+        for key in [Keys.levelScores, Keys.levelStars, Keys.endlessRecords] where eitherHolds(key) {
+            let cloud = c[key] as? [String: Int] ?? [:]
+            let local = l[key] as? [String: Int] ?? [:]
+            merged[key] = cloud.merging(local) { max($0, $1) }
+        }
+
+        // Medals: element-wise union of the bit sets.
+        if eitherHolds(Keys.levelMedals) {
+            let cloud = c[Keys.levelMedals] as? [String: Int] ?? [:]
+            let local = l[Keys.levelMedals] as? [String: Int] ?? [:]
+            merged[Keys.levelMedals] = cloud.merging(local) { $0 | $1 }
+        }
+
+        // Weapons: element-wise max of each arsenal slot.
+        if eitherHolds(Keys.levelWeapons) {
+            let cloudWeapons = c[Keys.levelWeapons] as? [String: [String: Int]] ?? [:]
+            let localWeapons = l[Keys.levelWeapons] as? [String: [String: Int]] ?? [:]
+            var weapons: [String: [String: Int]] = [:]
+            for level in Set(cloudWeapons.keys).union(localWeapons.keys) {
+                let cloud = cloudWeapons[level] ?? [:]
+                let local = localWeapons[level] ?? [:]
+                weapons[level] = [
+                    "bulletCount": max(cloud["bulletCount"] ?? 1, local["bulletCount"] ?? 1),
+                    "sideMissileCount": max(cloud["sideMissileCount"] ?? 0, local["sideMissileCount"] ?? 0)
+                ]
+            }
+            merged[Keys.levelWeapons] = weapons
+        }
+
+        return Snapshot(values: merged, epoch: local.epoch)
     }
 
     // MARK: - Demo Store
@@ -78,7 +173,7 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     /// Progress served entirely from memory, for the App Store media pipeline.
     ///
     /// While this is non-nil the type is read-only: every read below answers out of it,
-    /// and every write — `mutate`, `removeObject`, the merge, the flush — returns
+    /// and every write — `mutate`, `resetProgress`, the merge, the flush — returns
     /// without touching `UserDefaults` or `NSUbiquitousKeyValueStore`. That is not a
     /// convenience. `Tools/appstore_media.sh` launches the game with `-unlockall` more
     /// than thirty times per run, and without this the first of those launches would
@@ -108,6 +203,24 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
 
     // MARK: - Initialization
     private init() {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        let isTesting = environment["JETSHOT_TEST_STORAGE"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+            || NSClassFromString("XCTestCase") != nil
+        if isTesting {
+            let local = MemoryProgressStore()
+            let cloud = MemoryProgressStore()
+            userDefaults = local
+            cloudStore = cloud
+            testStores = (local, cloud)
+            return
+        }
+        testStores = nil
+        #endif
+        userDefaults = UserDefaults.standard
+        cloudStore = NSUbiquitousKeyValueStore.default
         setupCloudSync()
     }
 
@@ -174,63 +287,17 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
         isMerging = true
         defer { isMerging = false }
 
-        // Set when any collection had to be written back up to iCloud, so the whole
-        // merge needs only a single synchronize() at the end.
-        var didPushToCloud = false
-
-        // Completed levels: union of both sides.
-        let cloudLevels = cloudStore.array(forKey: Keys.completedLevels) as? [Int] ?? []
-        let localLevels = userDefaults.array(forKey: Keys.completedLevels) as? [Int] ?? []
-        didPushToCloud = propagate(
-            Array(Set(cloudLevels + localLevels)).sorted(),
-            local: localLevels,
-            cloud: cloudLevels.sorted(),
-            forKey: Keys.completedLevels,
-            label: "completed levels"
-        ) || didPushToCloud
-
-        // Scores, stars and endless records: element-wise max per key.
-        for key in [Keys.levelScores, Keys.levelStars, Keys.endlessRecords] {
-            let cloud = cloudStore.dictionary(forKey: key) as? [String: Int] ?? [:]
-            let local = userDefaults.dictionary(forKey: key) as? [String: Int] ?? [:]
-            var merged: [String: Int] = [:]
-            for level in Set(cloud.keys).union(local.keys) {
-                merged[level] = max(cloud[level] ?? 0, local[level] ?? 0)
-            }
-            didPushToCloud = propagate(
-                merged, local: local, cloud: cloud, forKey: key, label: key
-            ) || didPushToCloud
-        }
-
-        // Weapons: element-wise max of each arsenal slot.
-        let cloudWeapons = cloudStore.dictionary(forKey: Keys.levelWeapons) as? [String: [String: Int]] ?? [:]
-        let localWeapons = userDefaults.dictionary(forKey: Keys.levelWeapons) as? [String: [String: Int]] ?? [:]
-        var mergedWeapons: [String: [String: Int]] = [:]
-        for level in Set(cloudWeapons.keys).union(localWeapons.keys) {
-            let cloud = cloudWeapons[level] ?? [:]
-            let local = localWeapons[level] ?? [:]
-            mergedWeapons[level] = [
-                "bulletCount": max(cloud["bulletCount"] ?? 1, local["bulletCount"] ?? 1),
-                "sideMissileCount": max(cloud["sideMissileCount"] ?? 0, local["sideMissileCount"] ?? 0)
-            ]
-        }
-        didPushToCloud = propagate(
-            mergedWeapons,
-            local: localWeapons,
-            cloud: cloudWeapons,
-            forKey: Keys.levelWeapons,
-            label: "level weapons"
-        ) || didPushToCloud
-
+        let didPushToCloud = reconcileStoredProgress()
         userDefaults.synchronize()
 
         // The merge is deliberately bidirectional. Before writes became unconditional
         // (see `write(array:forKey:)`), a level finished while signed out of iCloud
         // existed *only* in UserDefaults, and a cloud -> local merge alone meant that
         // progress was never uploaded and simply vanished when the player moved to
-        // another device. Because `merged` is the union / element-wise max of both
-        // sides, pushing it back up can only ever add progress — so this stays as a
-        // repair path for records written before the account was attached.
+        // another device. Within an epoch `merged` is the union / element-wise max of
+        // both sides, so pushing it back up can only ever add progress — this stays as
+        // a repair path for records written before the account was attached. Across
+        // epochs it carries a reset made on this device up to the others.
         if didPushToCloud {
             #if DEBUG
             print("☁️ Pushed merged local progress up to iCloud")
@@ -239,29 +306,119 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
         }
     }
 
-    /// Writes a merged value to whichever side is out of date.
+    /// Writes a merged value to whichever side is out of date. A nil `merged` — a key
+    /// the winning side of an epoch change does not hold — removes it.
     ///
     /// Comparison is on *contents*, not on key counts: another device improving a
     /// value for a level both sides already know about leaves the count unchanged, and
     /// a count-based check used to throw that merge away.
     ///
     /// - Returns: `true` if the cloud side needed updating.
-    private func propagate<T: Equatable>(
-        _ merged: T,
-        local: T,
-        cloud: T,
+    private func propagate(
+        _ merged: Any?,
+        local: Any?,
+        cloud: Any?,
         forKey key: String,
         label: String
     ) -> Bool {
-        if merged != local {
-            userDefaults.set(merged, forKey: key)
+        if !Self.same(merged, local) {
+            if let merged = merged {
+                userDefaults.set(merged, forKey: key)
+            } else {
+                userDefaults.removeObject(forKey: key)
+            }
             #if DEBUG
             print("☁️ Merged \(label) from iCloud")
             #endif
         }
-        guard merged != cloud else { return false }
-        cloudStore.set(merged, forKey: key)
+        guard !Self.same(merged, cloud) else { return false }
+        if let merged = merged {
+            cloudStore.set(merged, forKey: key)
+        } else {
+            cloudStore.removeObject(forKey: key)
+        }
         return true
+    }
+
+    /// Property-list equality: what the stores themselves would consider unchanged.
+    private static func same(_ a: Any?, _ b: Any?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): return true
+        case let (a?, b?): return (a as AnyObject).isEqual(b)
+        default: return false
+        }
+    }
+
+    // MARK: - Epochs
+
+    private var localEpoch: Int { (userDefaults.object(forKey: Keys.progressEpoch) as? NSNumber)?.intValue ?? 0 }
+
+    private var cloudEpoch: Int { (cloudStore.object(forKey: Keys.progressEpoch) as? NSNumber)?.intValue ?? 0 }
+
+    /// Must be called on `queue`.
+    private func localSnapshot() -> Snapshot {
+        var values: [String: Any] = [:]
+        for key in Keys.progress {
+            values[key] = userDefaults.object(forKey: key)
+        }
+        return Snapshot(values: values, epoch: localEpoch)
+    }
+
+    /// Must be called on `queue`.
+    private func cloudSnapshot() -> Snapshot {
+        var values: [String: Any] = [:]
+        for key in Keys.progress {
+            values[key] = cloudStore.object(forKey: key)
+        }
+        return Snapshot(values: values, epoch: cloudEpoch)
+    }
+
+    /// Reads both stores before a local mutation. A remote update may already be in the
+    /// cloud store while its notification is still waiting, even when epochs match.
+    /// Do not flush here: the mutation's coalesced flush covers reconciliation too.
+    @discardableResult
+    private func reconcileStoredProgress() -> Bool {
+        let local = localSnapshot()
+        let cloud = cloudSnapshot()
+        let merged = Self.reconcile(local: local, cloud: cloud)
+        var didPushToCloud = false
+        for key in Keys.progress {
+            didPushToCloud = propagate(merged.values[key], local: local.values[key], cloud: cloud.values[key],
+                                      forKey: key, label: key) || didPushToCloud
+        }
+        if merged.epoch != local.epoch {
+            userDefaults.set(merged.epoch, forKey: Keys.progressEpoch)
+        }
+        if merged.epoch != cloud.epoch {
+            cloudStore.set(Int64(merged.epoch), forKey: Keys.progressEpoch)
+            didPushToCloud = true
+        }
+        return didPushToCloud
+    }
+
+    /// Clears the player's progress from both stores and opens a new epoch, so no other
+    /// device's copy of the old progress can merge back in. See `Keys.progressEpoch`.
+    ///
+    /// The new epoch is one past the higher of the two sides, so a reset made on a
+    /// device that is itself behind still comes out newest.
+    func resetProgress() {
+        guard !Self.isDemo else { return }
+        queue.sync {
+            let epoch = max(localEpoch, cloudEpoch) + 1
+            for key in Keys.progress {
+                userDefaults.removeObject(forKey: key)
+                cloudStore.removeObject(forKey: key)
+            }
+            userDefaults.set(epoch, forKey: Keys.progressEpoch)
+            cloudStore.set(Int64(epoch), forKey: Keys.progressEpoch)
+            scheduleFlush()
+        }
+    }
+
+    /// The reset epoch this device's progress belongs to. Read-only, for
+    /// `jetshotTests`; a plain read for the reason `loadArray(forKey:)` gives.
+    var currentEpoch: Int {
+        localEpoch
     }
 
     // MARK: - Atomic Access
@@ -282,7 +439,8 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     func mutate(array key: String, _ transform: ([Any]) -> [Any]) {
         guard !Self.isDemo else { return }
         queue.sync {
-            let current = userDefaults.array(forKey: key) ?? []
+            reconcileStoredProgress()
+            let current = userDefaults.object(forKey: key) as? [Any] ?? []
             let updated = transform(current)
             write(array: updated, forKey: key)
             scheduleFlush()
@@ -294,19 +452,10 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     func mutate(dictionary key: String, _ transform: ([String: Any]) -> [String: Any]) {
         guard !Self.isDemo else { return }
         queue.sync {
-            let current = userDefaults.dictionary(forKey: key) ?? [:]
+            reconcileStoredProgress()
+            let current = userDefaults.object(forKey: key) as? [String: Any] ?? [:]
             let updated = transform(current)
             write(dictionary: updated, forKey: key)
-            scheduleFlush()
-        }
-    }
-
-    /// Remove a key from both local and cloud storage.
-    func removeObject(forKey key: String) {
-        guard !Self.isDemo else { return }
-        queue.sync {
-            userDefaults.removeObject(forKey: key)
-            cloudStore.removeObject(forKey: key)
             scheduleFlush()
         }
     }
@@ -332,7 +481,7 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
         #if DEBUG
         if let demo = Self.demoStore { return demo[key] as? [Any] }
         #endif
-        return userDefaults.array(forKey: key)
+        return userDefaults.object(forKey: key) as? [Any]
     }
 
     /// Load dictionary from local storage (kept up to date by the merge).
@@ -341,8 +490,29 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
         #if DEBUG
         if let demo = Self.demoStore { return demo[key] as? [String: Any] }
         #endif
-        return userDefaults.dictionary(forKey: key)
+        return userDefaults.object(forKey: key) as? [String: Any]
     }
+
+    /// Local-only progress preferences use the same isolated store during tests.
+    func loadLocalBool(forKey key: String) -> Bool {
+        (userDefaults.object(forKey: key) as? NSNumber)?.boolValue ?? false
+    }
+
+    func saveLocalBool(_ value: Bool, forKey key: String) {
+        guard !Self.isDemo else { return }
+        queue.sync { userDefaults.set(value, forKey: key) }
+    }
+
+    #if DEBUG
+    /// Replaces only XCTest's memory stores. Pending flushes never reference real stores.
+    func restoreTestStores(local: [String: Any], cloud: [String: Any]) {
+        precondition(testStores != nil, "Progress tests require isolated stores")
+        queue.sync {
+            testStores?.local.restore(local)
+            testStores?.cloud.restore(cloud)
+        }
+    }
+    #endif
 
     // MARK: - Writing
 
@@ -414,9 +584,9 @@ nonisolated final class CloudStorageManager: @unchecked Sendable {
     func printCloudStatus() {
         print("☁️ iCloud Status:")
         print("  Available: \(isCloudAvailable())")
-        print("  Completed Levels: \(cloudStore.array(forKey: Keys.completedLevels) ?? [])")
-        print("  Level Scores: \(cloudStore.dictionary(forKey: Keys.levelScores) ?? [:])")
-        print("  Level Stars: \(cloudStore.dictionary(forKey: Keys.levelStars) ?? [:])")
+        print("  Completed Levels: \(cloudStore.object(forKey: Keys.completedLevels) as? [Int] ?? [])")
+        print("  Level Scores: \(cloudStore.object(forKey: Keys.levelScores) as? [String: Int] ?? [:])")
+        print("  Level Stars: \(cloudStore.object(forKey: Keys.levelStars) as? [String: Int] ?? [:])")
     }
     #endif
 }

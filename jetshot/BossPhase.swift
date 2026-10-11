@@ -6,6 +6,80 @@
 import CoreGraphics
 import Foundation
 
+// Boss attack patterns.
+//
+// `nonisolated` like `PhysicsCategory` and `ExplosionSize`: a bare enum of cases carries
+// no state and has no business on the main actor. `BossPhaseRules` reasons about these
+// and is pure, so it cannot see a main-actor type — and nor can `jetshotTests`.
+nonisolated enum BossAttackPattern: CaseIterable, Sendable {
+    case straightShot   // Single bullet straight down
+    case doubleShot     // Two bullets side by side
+    case tripleShot     // Three bullets
+    case spread         // Wide spread of bullets
+    case aimed          // Aimed at player position
+    case spiral         // Rotating spiral pattern
+    case wave           // Wave pattern
+    case burst          // Quick burst of bullets
+    case homing         // Slower bullets that track player
+    case laser          // Brief warning then laser beam
+    case circularBarrage // Dense fan of bullets around boss
+    case cascade         // Cascading bullets falling down from left to right
+    case doubleSpiral    // Two spirals rotating in opposite directions
+    case barrageRain     // Dense rain of bullets across screen width
+    case zigzagPattern   // Zigzag pattern of bullets
+    case sectorSweep     // Sweeping sector fire (rotating barrage)
+
+    // Signature moves: each belongs to an archetype and uses its hardware.
+
+    /// Warden: every gun pod fires an aimed burst in turn.
+    case podVolley
+    /// Warden, heart: the eye locks on and fires a beam down the line it locked.
+    case eyeLance
+    /// Mantis: a dive at the ship, slashing at the bottom of it.
+    case swoop
+    /// Mantis: streams from the blade tips that curve across each other.
+    case scytheArcs
+    /// Gyre, heart: the satellites spin up and fire outwards as they wheel round.
+    case orbitalSpiral
+    /// Gyre, maw, heart: a ring of rounds with one gap in it, then another.
+    case ringPulse
+    /// Hive, heart: slow mines that burst into rings.
+    case mineLayer
+    /// Hive: seekers out of every bay.
+    case broodSwarm
+    /// Lancer, heart: a beam that sweeps a sector, or two that close on a corridor.
+    case sweepBeam
+    /// Lancer: slow prisms that split into fans aimed at the ship.
+    case prismSplit
+    /// Serpent: every segment fires, head to tail, and back again aimed.
+    case segmentVolley
+    /// Serpent: alternate segments release rings.
+    case coilBurst
+    /// Wraith: vanishes, reappears elsewhere and bursts.
+    case blink
+    /// Wraith, heart: rifts open at the sides of the screen and fire across it.
+    case riftPortals
+    /// Tesseract: walls of rounds, each with a gap a little way along from the last.
+    case latticeWalls
+    /// Tesseract: folds out of space, unfolds at another station, fires a cross.
+    case hyperShift
+    /// Maw, heart: a ring of rounds closes on the ship from all sides but one.
+    case implosion
+    /// Maw, heart: spiral arms of rounds that curve as they fly.
+    case accretion
+
+    /// Whether the attack covers enough of the screen to earn the long wind-up.
+    var isHeavy: Bool {
+        switch self {
+        case .circularBarrage, .barrageRain, .sectorSweep, .doubleSpiral, .cascade, .laser,
+             .ringPulse, .latticeWalls, .riftPortals, .implosion, .sweepBeam, .eyeLance, .coilBurst:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 /// Structure for a boss fight: what the boss is allowed to do, and how fast, as its
 /// health falls.
 ///
@@ -13,29 +87,20 @@ import Foundation
 /// level to `spawnBoss()` and the only way out from there is killing it — so this is the
 /// climax the player reaches fifty times. It did not have a shape. `BossManager` drew
 /// each attack with `patterns.randomElement()` from one flat list, on a flat 1.5–3.5 s
-/// timer, from the boss's first frame to its last: a level 50 fight was six hundred hit
-/// points of the same random draw as its first, with nothing that escalated, nothing that
-/// could be read, and no way to tell from watching it whether you were winning.
+/// timer, from the boss's first frame to its last: nothing escalated and nothing could be
+/// read.
 ///
-/// Worse, the lists themselves stopped changing. From level 8 to level 50 every milestone
-/// declared the identical fourteen patterns, so thirty-five of the fifty bosses in the
-/// game fought exactly alike and differed only in how long they took to chew through.
-///
-/// These rules give a fight three acts on the health thresholds `Boss.applyDamageVisuals`
-/// was already using for its damage states — so the boss visibly cracks apart on the same
-/// beats that its behaviour turns up, and the two read as one escalation instead of two
-/// unrelated ones.
+/// These rules give a fight three acts on the health thresholds the boss's damage states
+/// use — so it visibly comes apart on the same beats that its behaviour turns up. Which
+/// attacks join in each act is authored per boss (`BossConfig.patternActs`): an opening
+/// act that introduces the machine with its signature, a second that adds pressure, and
+/// a third that brings out the move it is known for.
 ///
 /// `nonisolated` for the reason `GameRules` gives: pure arithmetic over plain values is
 /// the part worth pinning down in tests, and `jetshotTests` cannot reach main-actor state.
 nonisolated enum BossPhaseRules {
 
     /// Health fractions at which the boss escalates, descending.
-    ///
-    /// Deliberately the same 0.66 / 0.33 that `Boss.applyDamageVisuals(healthPercent:)`
-    /// already used to switch between its intact, cracked and burning silhouettes. Two
-    /// separate ladders would have the boss look wounded on one beat and start fighting
-    /// harder on another, and the player would read neither.
     static let thresholds: [CGFloat] = [0.66, 0.33]
 
     /// Number of acts a fight is divided into.
@@ -65,45 +130,24 @@ nonisolated enum BossPhaseRules {
         }
     }
 
-    /// The slice of a boss's authored pattern list available in an act.
+    /// How many of a boss's attacks are available in an act, given the act each one
+    /// joins in (non-decreasing, as `BossConfig` authors them). The result is a prefix
+    /// length.
     ///
-    /// Each `BossConfig` lists its patterns from lightest to heaviest, so taking a prefix
-    /// is what produces the escalation: the opening act is single shots and spreads, and
-    /// the barrages and lasers at the end of the list only appear once the boss is
-    /// actually in trouble. This is why the ordering of those arrays is load-bearing and
-    /// not merely tidy.
-    ///
-    /// Never fewer than two, or a wounded boss with a short list would repeat one attack.
-    static func patternCount(forPhase phase: Int, totalPatterns total: Int) -> Int {
-        guard total > 0 else { return 0 }
-
-        let fraction: CGFloat
-        switch phase {
-        case 0: fraction = 0.45
-        case 1: fraction = 0.75
-        default: fraction = 1.0
-        }
-
-        let count = Int((CGFloat(total) * fraction).rounded(.up))
-        return max(min(2, total), min(count, total))
+    /// Never fewer than two, or a boss with a thin opening act would repeat one attack:
+    /// `BossManager.nextAttack()` refuses to draw the same one twice running.
+    static func patternCount(forPhase phase: Int, acts: [Int]) -> Int {
+        guard !acts.isEmpty else { return 0 }
+        let unlocked = acts.prefix { $0 <= phase }.count
+        return max(min(2, acts.count), unlocked)
     }
 
     /// How long the boss winds up before an attack lands.
     ///
-    /// Nothing was telegraphed at all before this: bullets simply appeared, which makes a
-    /// dense pattern feel arbitrary rather than hard, because the only way to survive one
-    /// is to already have been somewhere else. A wind-up turns the same attack into
-    /// something the player is given the chance to read. The heavy end of a list gets
-    /// longer warning precisely because it covers the most screen.
-    static func telegraphDuration(forPatternIndex index: Int, totalPatterns total: Int) -> TimeInterval {
-        guard total > 0 else { return 0.4 }
-        return isHeavy(patternIndex: index, totalPatterns: total) ? 0.6 : 0.4
-    }
-
-    /// Whether a pattern sits in the heavy final third of its boss's list.
-    static func isHeavy(patternIndex index: Int, totalPatterns total: Int) -> Bool {
-        guard total > 0 else { return false }
-        return CGFloat(index) >= CGFloat(total) * (2.0 / 3.0)
+    /// A wind-up turns an attack into something the player is given the chance to read.
+    /// The ones that cover the most screen get the longer warning.
+    static func telegraphDuration(for pattern: BossAttackPattern) -> TimeInterval {
+        return pattern.isHeavy ? 0.6 : 0.4
     }
 
     /// Pause on a phase change, before the boss resumes attacking.
@@ -112,4 +156,16 @@ nonisolated enum BossPhaseRules {
     /// hands the player a breather at exactly the point the boss is about to get harder,
     /// which is what stops the last act reading as an unfair spike.
     static let phaseTransitionPause: TimeInterval = 1.1
+
+    /// Health of each destructible part, as a share of the boss's.
+    ///
+    /// Small enough that focusing a pod down takes a few seconds of fire, large enough
+    /// that a stream aimed at the core does not strip the hardware by accident. Every
+    /// round that lands on a part still comes off the boss's own bar as well, so going
+    /// for the guns never slows the fight.
+    static func partHealth(bossHealth: Int, partCount: Int) -> Int {
+        guard partCount > 0 else { return 0 }
+        let share = partCount > 5 ? 0.07 : 0.11
+        return max(3, Int((Double(bossHealth) * share).rounded()))
+    }
 }

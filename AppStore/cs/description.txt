@@ -1,7 +1,7 @@
 Opravdová vesmírná arkáda: padesát ručně stavěných úrovní, na konci každé z nich boss a nekonečná hra bez cílové čáry. Bez reklam, bez nákupů v aplikaci, bez účtu, bez čekání na energii.
 
 PADESÁT ÚROVNÍ, PADESÁT SOUBOJŮ S BOSSEM
-Každá úroveň končí bossem a každý souboj má tři dějství — začíná s hrstkou útoků a jak jeho pancíř praská na dvou třetinách a jedné třetině životů, střílí rychleji a sahá hlouběji do svého repertoáru. Za padesáti souboji stojí sedmnáct bossů a každý má vlastní rukopis, ne jen delší ukazatel životů: dvacátá úroveň tě loví mířenou a naváděnou palbou, pětadvacátá zaplavuje obrazovku z obou stran, třicátá otevírá lasery a padesátá si bere všechno, co hra umí.
+Každá úroveň končí bossem a každý souboj má tři dějství — začíná s hrstkou útoků a jak jeho pancíř praská na dvou třetinách a jedné třetině životů, střílí rychleji a sahá hlouběji do svého repertoáru. Za padesáti souboji stojí deset strojů, každý s vlastním letem, typickým útokem a výzbrojí, kterou mu ustřelíš, a vrací se silnější: kudlanka útočí střemhlav, přízrak mizí, epicentrum čeká na konci.
 
 ARZENÁL, KTERÝ SI POSTAVÍŠ — A MŮŽEŠ HO ZTRATIT
 Zbraně se skládají až na osm hlavní — čtyři přímé a čtyři šikmé — plus dvě boční raketnice. S čím dohraješ jednu úroveň, s tím začínáš další — a každý zásah ti z arzenálu něco strhne. Cestou padá třináct vylepšení:
@@ -9,10 +9,10 @@ Zbraně se skládají až na osm hlavní — čtyři přímé a čtyři šikmé 
 • Boční rakety — šikmé raketnice na křídlech
 • Štít — pět sekund, kdy se tě nic nedotkne
 • Rychlopalba — trojnásobná kadence
-• Blesk — ze zbraní se stane bouře, která smete obrazovku a ubere bossovi patnáct zásahů
+• Blesk — ze zbraní se stane bouře, která smete obrazovku a rve bosse na kusy
 • Naváděné rakety — šest raket, které si cíl najdou samy
-• Mrazivá bomba — všechno na dvě a půl sekundy zamrzne a pak vybuchne
-• Zpomalení času — nepřátelé, asteroidy i palba na poloviční rychlost
+• Mrazivá bomba — všechno zamrzne a pak vybuchne
+• Zpomalení času — celý boj na poloviční rychlost
 • Bariéra — rotující štít, který ničí všechno, čeho se dotkne
 • Magnet — mince si přiletí samy
 • Skóre x2 — dvanáct sekund dvojnásobných bodů
@@ -20,30 +20,33 @@ Zbraně se skládají až na osm hlavní — čtyři přímé a čtyři šikmé 
 • +1 život — až na čtyři
 
 DVACET SEDM NEPŘÁTEL, KAŽDÝ CHCE NĚCO JINÉHO
-Odstřelovači se zastaví a zamíří. Tanky snesou dva zásahy a odpoví trojitou salvou. Věže zakotví ve vzduchu a začnou se otáčet. Nepřátele se štítem musíš trefit zezadu. Rozdělovači se po zásahu rozpadnou na dva. Zrcadla ti vracejí tvou vlastní palbu. Duchové mizí z dohledu, teleportéři se přemísťují, víry polykají tvé střely a odrážeče lítají od stěn jako kulička v pinballu. Kolem toho všeho: dvanáct druhů překážek, asteroidová pole a formace, které přiletí i zaútočí jako jeden útvar.
+Odstřelovači se zastaví a zamíří. Tanky snesou celou dávku a odpoví trojitou salvou. Věže zakotví ve vzduchu a začnou se otáčet. Nepřátele se štítem musíš trefit zezadu. Rozdělovači se po zásahu rozpadnou na dva. Zrcadla ti vracejí tvou vlastní palbu. Duchové mizí z dohledu, teleportéři se přemísťují, víry polykají tvé střely a odrážeče lítají od stěn jako kulička v pinballu. Kolem nich: dvanáct druhů překážek, asteroidová pole a formace, které útočí jako jeden útvar.
 
 SÉRIE
-Zásahy, které padnou rychle za sebou, staví sérii a série násobí skóre až osmkrát. Jeden zásah do tvé lodi a série je pryč. Okno se s délkou série zkracuje, takže dlouhou sérii nesbíráš — udržuješ ji.
+Zničení rychle za sebou staví sérii, která násobí skóre až osmkrát. Jeden zásah do tvé lodi a série je pryč. Okno se s délkou série zkracuje, takže dlouhou sérii nesbíráš — udržuješ ji.
+
+PŘEPĚTÍ
+Každé zničení se rozletí v krystaly energie a každá střela, kolem které těsně proletíš, nabíjí ukazatel. Odpal ho druhým prstem nebo dvojklepem: všechna palba na obrazovce se rozpadne v krystaly a tvé zbraně na šest sekund zezlátnou. Nebo si ho šetři — plný ukazatel se odpálí sám a pohltí zásah, který jsi neviděl přicházet.
 
 TEPLOTA
-Držet spoušť je rozhodnutí. Pětadvacet výstřelů naplní ukazatel a zbraně se na půldruhé sekundy vypnou: dost dlouho, aby to bolelo, dost krátce, aby se dobrým letem dalo projet skrz.
+Sedm sekund nepřetržité palby a zbraně se na půldruhé sekundy vypnou. Těsné průlety kolem nepřátelské palby je chladí.
 
 NEKONEČNÁ HRA
-Odemkne se, jakmile dohraješ první úroveň. Kola se zvětšují a utahují, každé třetí kolo přibývají noví nepřátelé, každé páté přilétá boss — a násobič série je to, kolem čeho je celý režim postavený. Drží tvůj rekord i nejhlubší dosažené kolo.
+Odemkne se, jakmile dohraješ první úroveň. Kola se zvětšují a utahují, každé třetí přibývají noví nepřátelé a každé páté přilétá boss — po jeho porážce si vybereš jedno ze tří vylepšení na zbytek běhu. Drží tvůj rekord i nejhlubší kolo.
 
 PŘÍBĚH, KTERÝ MÁ KONEC
-Provedeš experimentální loď Singularita-7 posledními hodinami umírajícího vesmíru a sbíráš kvantovou energii, aby se dal zažehnout protokol Velký třesk nula. Po padesáti úrovních přijde skutečný konec, napsaný a odehraný.
+Provedeš experimentální loď Singularita-7 posledními hodinami umírajícího vesmíru. Po padesáti úrovních přijde skutečný konec.
 
 OVLÁDÁNÍ, KTERÉ UŽ UMÍŠ
-Táhni prstem kamkoli a loď letí. Zbraně střílejí samy. To je celé ovládání, a proto se dá hrát jednou rukou ve vlaku.
+Táhni prstem kamkoli a loď letí s ním, nikdy pod ním. Zbraně střílejí samy. Hraje se jednou rukou ve vlaku.
 
 NAKRESLENO SVĚTLEM
 Každá loď, střela i výbuch je svítící vektorový tvar nad vícevrstvým paralaxním hvězdným polem, nasvícený opravdovým bloomem. Sedm hudebních skladeb, další k příběhu a vibrace — vše se dá vypnout zvlášť.
 
 O CO SE HRAJE
 • Tři hvězdy za úroveň podle toho, kolik posbíráš mincí
+• Tři medaile za úroveň: bez zásahu, dlouhá série, 85 % zničených nepřátel
 • Osobní rekord na každé úrovni i v nekonečné hře
-• Padesát úrovní, odemykaných jedna po druhé
 • Postup přenášený mezi tvými zařízeními přes tvůj vlastní iCloud
 
 FÉROVÁ HRA

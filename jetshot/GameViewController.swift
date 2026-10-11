@@ -38,6 +38,13 @@ class GameViewController: UIViewController {
         view.preferredFramesPerSecond = 60
         // view.showsFPS = true
         // view.showsNodeCount = true
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-stats") {
+            view.showsFPS = true
+            view.showsNodeCount = true
+            view.showsDrawCount = true
+        }
+        #endif
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {

@@ -29,6 +29,11 @@ final class WeaponHeatSystem {
     private let cooldownRate: CGFloat = GameConfiguration.cooldownRate
     private let overheatCooldownTime: TimeInterval = GameConfiguration.overheatCooldownTime
 
+    /// One beat of the OVERHEATED flash: red for the first half, dark for the second.
+    private let overheatBlinkPeriod: TimeInterval = 0.6
+    /// How long the gauge stays up, lit green, once the guns are back.
+    private let readyFlashDuration: TimeInterval = 0.2
+
     // MARK: - State
 
     /// 0.0 to 1.0. Private: the gauge is the only thing that reads the raw level, and it
@@ -41,6 +46,13 @@ final class WeaponHeatSystem {
 
     private var overheatStartTime: TimeInterval = 0
 
+    /// Gameplay time as of the latest `update` or `registerShot`. The lockout flash and
+    /// the "guns ready" flash are drawn against it — see `update(deltaTime:currentTime:isFiring:)`.
+    private var now: TimeInterval = 0
+
+    /// When the "guns ready" flash lets go of the gauge; nil when none is showing.
+    private var readyFlashEndTime: TimeInterval?
+
     // MARK: - HUD
 
     private var heatBar: SKShapeNode?
@@ -49,6 +61,11 @@ final class WeaponHeatSystem {
     private var heatBarFillContainer: SKNode?
     private var heatBarBackground: SKShapeNode?
     private var heatBarLabel: SKLabelNode?
+
+    /// What the track and label are currently showing, so they are only restyled when
+    /// that changes rather than on every frame of a lockout.
+    private enum GaugeStatus { case normal, overheatLit, overheatDark, ready }
+    private var shownStatus: GaugeStatus?
 
     private weak var scene: SKScene?
 
@@ -125,6 +142,7 @@ final class WeaponHeatSystem {
         // Re-apply the live heat level. The HUD is rebuilt twice during startup and
         // again on every resize, and a freshly built bar starts empty, so without this
         // a mid-level relayout blanked the gauge.
+        shownStatus = nil
         updateHeatBar()
     }
 
@@ -137,12 +155,36 @@ final class WeaponHeatSystem {
     /// player paid for a shot that never left the barrel. Lockout is enforced by the
     /// `isOverheated` check in `GameScene.shoot()`, so blocking here as well is
     /// redundant.
-    func registerShot(currentTime: TimeInterval) {
-        heat += heatPerShot
+    ///
+    /// `scale` multiplies the heat this shot adds — the endless run's COOLANT perk.
+    func registerShot(currentTime: TimeInterval, scale: CGFloat = 1) {
+        now = currentTime
+        heat += heatPerShot * scale
         if heat >= maxHeat {
             heat = maxHeat
             triggerOverheat(currentTime: currentTime)
         }
+        updateHeatBar()
+    }
+
+    /// Takes `amount` off the gauge — grazing fire cools the guns (see `GrazeRules`).
+    /// Does nothing during a lockout: the lockout runs on its own timer.
+    func cool(by amount: CGFloat) {
+        guard !isOverheated, heat > 0 else { return }
+        heat = max(0, heat - amount)
+        updateHeatBar()
+    }
+
+    /// Empties the gauge and lifts any lockout, for an Overdrive's activation.
+    func reset() {
+        heat = 0
+        isOverheated = false
+        readyFlashEndTime = nil
+        // Stop a near-overheat breath mid-swell, or the track comes back scaled up the
+        // next time it shows. The OVERHEATED flash needs no cutting short any more: it
+        // is drawn from `isOverheated`, so `updateHeatBar()` below ends it.
+        heatBarBackground?.removeAction(forKey: "heatPulse")
+        heatBarBackground?.setScale(1)
         updateHeatBar()
     }
 
@@ -154,33 +196,37 @@ final class WeaponHeatSystem {
     /// than derived here because it depends on the ship's position relative to the touch,
     /// which is the scene's business — `GameScene.update(_:)` computes it and uses the
     /// same value to decide whether to fire.
+    ///
+    /// Also where the gauge's two flashes are drawn — OVERHEATED during the lockout and
+    /// green once it ends — from `currentTime`, the gameplay clock. They used to be
+    /// actions on the HUD layer, which never pauses: the red flash ran 3 x 0.6 s against
+    /// a 1.5 s lockout, so the label still claimed OVERHEATED after the guns were back,
+    /// and went on flashing behind the pause menu. The scene stops calling this while
+    /// paused, so the flashes now stop with everything else.
     func update(deltaTime: TimeInterval, currentTime: TimeInterval, isFiring: Bool) {
+        now = currentTime
+
         // If overheated, check if cooldown period is over
         if isOverheated {
             if currentTime - overheatStartTime >= overheatCooldownTime {
                 isOverheated = false
                 heat = 0.0
-                updateHeatBar()
-
-                // Visual feedback - flash green
-                if let background = heatBarBackground {
-                    let flash = SKAction.sequence([
-                        SKAction.run {
-                            background.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.0, alpha: 0.8)
-                        },
-                        SKAction.wait(forDuration: 0.2),
-                        SKAction.run {
-                            background.fillColor = UIColor(white: 0.2, alpha: 0.6)
-                        }
-                    ])
-                    background.run(flash)
-                }
+                // Holds the gauge up for the green flash. At heat 0 `updateHeatBar()`
+                // used to hide it on this same frame, before the flash it was about to
+                // run could be seen — only the sound got through.
+                readyFlashEndTime = currentTime + readyFlashDuration
 
                 if let scene = scene {
                     SoundManager.shared.playPowerUpSound(on: scene)
                 }
             }
+            updateHeatBar()
             return
+        }
+
+        if let end = readyFlashEndTime, currentTime >= end {
+            readyFlashEndTime = nil
+            updateHeatBar()
         }
 
         if !isFiring && heat > 0 {
@@ -200,10 +246,37 @@ final class WeaponHeatSystem {
               let background = heatBarBackground,
               let label = heatBarLabel else { return }
 
-        // Hide heat bar when heat is low (below 15%)
-        let shouldShow = heat > 0.15
+        // Hide heat bar when heat is low (below 15%) — unless it is flashing a lockout or
+        // its end, which is exactly when the heat is 0.
+        let isReadyFlashing = readyFlashEndTime.map { now < $0 } ?? false
+        let shouldShow = heat > 0.15 || isOverheated || isReadyFlashing
         background.alpha = shouldShow ? 1.0 : 0.0
         label.alpha = shouldShow ? 1.0 : 0.0
+
+        let status: GaugeStatus
+        if isOverheated {
+            let elapsed = max(0, now - overheatStartTime)
+            let lit = elapsed.truncatingRemainder(dividingBy: overheatBlinkPeriod) < overheatBlinkPeriod / 2
+            status = lit ? .overheatLit : .overheatDark
+        } else {
+            status = isReadyFlashing ? .ready : .normal
+        }
+        if status != shownStatus {
+            shownStatus = status
+            switch status {
+            case .normal, .overheatDark:
+                background.fillColor = UIColor(white: 0.2, alpha: 0.6)
+            case .overheatLit:
+                background.fillColor = UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 0.9)
+            case .ready:
+                background.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.0, alpha: 0.8)
+            }
+            let overheated = status == .overheatLit || status == .overheatDark
+            label.text = overheated ? L10n.HUD.overheated : L10n.HUD.heat
+            label.fontColor = overheated
+                ? UIColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
+                : UIColor(white: 0.8, alpha: 0.9)
+        }
 
         // Update bar width using xScale (much more efficient than recreating).
         // Scaled on the left-anchored container, so the fill grows rightwards from the
@@ -250,31 +323,10 @@ final class WeaponHeatSystem {
     private func triggerOverheat(currentTime: TimeInterval) {
         isOverheated = true
         overheatStartTime = currentTime
+        readyFlashEndTime = nil
 
-        // Visual feedback
-        if let background = heatBarBackground, let label = heatBarLabel {
-            // Flash red
-            let flash = SKAction.sequence([
-                SKAction.run {
-                    background.fillColor = UIColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 0.9)
-                    label.text = L10n.HUD.overheated
-                    label.fontColor = UIColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
-                },
-                SKAction.wait(forDuration: 0.3),
-                SKAction.run {
-                    background.fillColor = UIColor(white: 0.2, alpha: 0.6)
-                },
-                SKAction.wait(forDuration: 0.3)
-            ])
-
-            let flashSequence = SKAction.repeat(flash, count: 3)
-            let reset = SKAction.run {
-                label.text = L10n.HUD.heat
-                label.fontColor = UIColor(white: 0.8, alpha: 0.9)
-            }
-
-            background.run(SKAction.sequence([flashSequence, reset]))
-        }
+        // The red OVERHEATED flash is drawn by `updateHeatBar()` from here on, for as
+        // long as the lockout lasts — see `update(deltaTime:currentTime:isFiring:)`.
 
         // Haptic feedback
         HapticManager.shared.heavyTap()

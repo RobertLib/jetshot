@@ -37,26 +37,28 @@ BG_BOTTOM='#030310'
 cs_caption() {
     case "$1" in
         01) echo "Padesát úrovní."$'\n'"Zbraně střílejí samy." ;;
-        02) echo "Každá úroveň"$'\n'"končí bossem" ;;
-        03) echo "Série zásahů,"$'\n'"skóre až osmkrát" ;;
-        04) echo "Třináct vylepšení,"$'\n'"osm zbraní" ;;
-        05) echo "Padesát úrovní,"$'\n'"tři hvězdy za každou" ;;
-        06) echo "Nekonečná hra:"$'\n'"jak daleko doletíš?" ;;
-        07) echo "27 nepřátel,"$'\n'"12 překážek" ;;
-        08) echo "Bez reklam."$'\n'"Bez nákupů. Bez účtu." ;;
+        02) echo "Deset bossů."$'\n'"Padesát soubojů." ;;
+        03) echo "Nabij Přepětí"$'\n'"a smaž jejich palbu" ;;
+        04) echo "Série zásahů,"$'\n'"skóre až osmkrát" ;;
+        05) echo "Třináct vylepšení,"$'\n'"osm zbraní" ;;
+        06) echo "Nekonečná hra:"$'\n'"vylepšení za bosse" ;;
+        07) echo "Tři hvězdy, tři medaile"$'\n'"v každé úrovni" ;;
+        08) echo "27 nepřátel,"$'\n'"12 překážek" ;;
+        09) echo "Bez reklam."$'\n'"Bez nákupů. Bez účtu." ;;
     esac
 }
 
 en_caption() {
     case "$1" in
         01) echo "Fifty levels."$'\n'"The guns fire themselves." ;;
-        02) echo "Every level"$'\n'"ends with a boss" ;;
-        03) echo "Chain your kills,"$'\n'"score up to x8" ;;
-        04) echo "Thirteen power-ups,"$'\n'"eight barrels" ;;
-        05) echo "Fifty levels,"$'\n'"three stars each" ;;
-        06) echo "Endless:"$'\n'"how far can you get?" ;;
-        07) echo "27 enemies,"$'\n'"12 obstacles" ;;
-        08) echo "No ads. No purchases."$'\n'"No account." ;;
+        02) echo "Ten bosses."$'\n'"Fifty boss fights." ;;
+        03) echo "Charge Overdrive,"$'\n'"wipe out their fire" ;;
+        04) echo "Chain your kills,"$'\n'"score up to x8" ;;
+        05) echo "Thirteen power-ups,"$'\n'"eight barrels" ;;
+        06) echo "Endless: beat a boss,"$'\n'"pick an upgrade" ;;
+        07) echo "Three stars, three medals"$'\n'"on every level" ;;
+        08) echo "27 enemies,"$'\n'"12 obstacles" ;;
+        09) echo "No ads. No purchases."$'\n'"No account." ;;
     esac
 }
 
@@ -99,6 +101,7 @@ for locale_dir in "$SRC_ROOT"/*; do
         band_h=$(( H - card_h - margin - 2 * border ))
 
         out="$OUT_ROOT/$locale/$device"
+        rm -rf "$out"
         mkdir -p "$out"
         printf '\n\033[1m%s / %s\033[0m  (card %dx%d, band %d)\n' "$locale" "$device" "$card_w" "$card_h" "$band_h"
 

@@ -19,7 +19,26 @@ class SoundManager: NSObject {
     // Tracks are 128 kbps AAC (.m4a). They were 256 kbps MP3, which put 33 MB of
     // looping background music into a 51 MB app — over half the download for audio
     // no one listens to critically through a phone speaker.
-    private var musicPlayer: AVAudioPlayer?
+    //
+    // Readable so `jetshotTests` can tell a call that carried on with the playing
+    // track from one that tore it down and rebuilt it — the difference between the
+    // music running on across a screen change and jumping back to 0:00.
+    private(set) var musicPlayer: AVAudioPlayer?
+
+    /// The track `musicPlayer` holds, which is not always `currentMusicResource`.
+    ///
+    /// While the music is switched off, `setMusicForLevel` moves the selection on
+    /// without touching the paused player, so the two drift apart. Switching it back on
+    /// used to resume that player as it was, playing the previous level's track for the
+    /// rest of the level.
+    private(set) var musicPlayerResource: String?
+
+    /// A track on its way out under a fade (see `endSpecificMusic`), held so it is not
+    /// released mid-fade.
+    private var fadingMusicPlayer: AVAudioPlayer?
+
+    /// The last level track selected, which a one-off track hands back to when it ends.
+    private var rotationResource: String?
 
     /// Exposed so `jetshotTests` can assert every track is actually in the bundle.
     /// A renamed or unbundled track is otherwise silent at runtime, which is exactly
@@ -28,7 +47,7 @@ class SoundManager: NSObject {
     nonisolated static let musicTracks = [
         "music-1", "music-2", "music-3", "music-4", "music-5", "music-6", "music-7"
     ]
-    /// One-off track played over the story crawl, outside the level rotation.
+    /// One-off track played under the story films, outside the level rotation.
     nonisolated static let storyMusicTrack = "music-story"
 
     /// Resource name of the track that *should* be playing.
@@ -37,7 +56,7 @@ class SoundManager: NSObject {
     /// track is not in that array at all. With an index, an unexpected stop during
     /// the story crawl (see `audioPlayerDidFinishPlaying`) restarted whatever level
     /// track the index happened to point at instead of the story music.
-    private var currentMusicResource: String?
+    private(set) var currentMusicResource: String?
 
     var isMusicEnabled: Bool {
         get {
@@ -69,8 +88,6 @@ class SoundManager: NSObject {
     private var powerUpSound: SKAction?
     private var coinSound: SKAction?
     private var hitSound: SKAction?
-    private var gameOverSound: SKAction?
-    private var levelCompleteSound: SKAction?
     private var buttonClickSound: SKAction?
     private var menuSelectSound: SKAction?
     private var pauseSound: SKAction?
@@ -86,7 +103,6 @@ class SoundManager: NSObject {
     private var missileSound: SKAction?
     private var lightningSound: SKAction?
     private var warningSound: SKAction?
-    private var countdownSound: SKAction?
     private var levelStartSound: SKAction?
     private var playerSpawnSound: SKAction?
     private var playerExitSound: SKAction?
@@ -135,6 +151,7 @@ class SoundManager: NSObject {
             UserDefaults.standard.set(true, forKey: "isSoundEnabled")
             UserDefaults.standard.set(true, forKey: "hasSetSoundDefaults")
         }
+        configureAudioSession()
         // Preload off the init call stack so startup isn't blocked, but stay on the
         // main queue: every stored action is read from the main thread by the
         // play* methods, and filling ~50 non-atomic properties from a background
@@ -149,6 +166,45 @@ class SoundManager: NSObject {
             name: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance()
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    /// Puts the session in `.ambient`, once, before anything plays.
+    ///
+    /// `.ambient`, not `.playback`: game audio is non-primary, so it has to honour the
+    /// ring/silent switch. `.playback` ignores it, which made the game play music out
+    /// loud on a phone the player had deliberately silenced. `.ambient` also mixes with
+    /// other apps by default, so an explicit .mixWithOthers option is not needed.
+    ///
+    /// This used to be set only on the way into a music track, so with the music
+    /// switched off the session stayed at the system default, `.soloAmbient` — which
+    /// does not mix, and the first sound effect stopped whatever the player had on (their
+    /// own music, a podcast). SpriteKit's effects go through this same shared session,
+    /// so it is set here, as the manager comes up; `AppDelegate` brings it up at launch.
+    private func configureAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default)
+        } catch {
+            #if DEBUG
+            print("❌ Could not set the audio session category: \(error)")
+            #endif
+        }
+    }
+
+    /// Picks the music back up when the player returns to the game.
+    ///
+    /// Only a player that already exists is touched: with none, nothing has asked for
+    /// music yet, and starting the rotation here at launch would race the first scene's
+    /// own choice of track. Nothing pauses the music on purpose except the music switch,
+    /// which `resumeMusic()` honours — the pause menu leaves it playing.
+    @objc private func handleAppDidBecomeActive() {
+        guard musicPlayer != nil else { return }
+        resumeMusic()
     }
 
     @objc private func handleAudioSessionInterruption(_ notification: Notification) {
@@ -162,7 +218,13 @@ class SoundManager: NSObject {
         case .ended:
             let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-            guard options.contains(.shouldResume) else { return }
+            // `.shouldResume` used to be required, and it is often absent, which left
+            // the music silent until the next screen change. It is a hint for apps whose
+            // audio would take over from someone else's; this music is ambient and mixes
+            // with everything, so there is no one to defer to. Resume now if the game is
+            // in front — otherwise `handleAppDidBecomeActive()` does it on the way back.
+            guard options.contains(.shouldResume)
+                    || UIApplication.shared.applicationState == .active else { return }
             do {
                 try AVAudioSession.sharedInstance().setActive(true)
             } catch {
@@ -185,12 +247,19 @@ class SoundManager: NSObject {
     // .wav effects were referenced but never added to the bundle), so a missing
     // file now returns nil and trips an assertion in debug builds instead.
     private func createSoundAction(fileName: String) -> SKAction? {
+        guard resolveEffect(fileName) != nil else { return nil }
+        return SKAction.playSoundFileNamed(fileName, waitForCompletion: false)
+    }
+
+    /// The bundled file behind an effect, recorded in `requestedEffectResources` (and
+    /// `missingEffectResources` when it is not there) whichever way the effect plays.
+    private func resolveEffect(_ fileName: String) -> URL? {
         let name = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension
 
         requestedEffectResources.append(fileName)
 
-        guard Bundle.main.url(forResource: name, withExtension: ext) != nil else {
+        guard let url = Bundle.main.url(forResource: name, withExtension: ext) else {
             missingEffectResources.append(fileName)
             #if DEBUG
             print("❌ Missing sound resource in bundle: \(fileName)")
@@ -198,8 +267,7 @@ class SoundManager: NSObject {
             #endif
             return nil
         }
-
-        return SKAction.playSoundFileNamed(fileName, waitForCompletion: false)
+        return url
     }
 
     /// Every effect file `preloadSounds()` asked for, in the order it asked.
@@ -229,8 +297,6 @@ class SoundManager: NSObject {
         powerUpSound = createSoundAction(fileName: "power-up.mp3")
         coinSound = createSoundAction(fileName: "coin.mp3")
         hitSound = createSoundAction(fileName: "hit.mp3")
-        gameOverSound = createSoundAction(fileName: "game-over.mp3")
-        levelCompleteSound = createSoundAction(fileName: "level-complete.mp3")
         buttonClickSound = createSoundAction(fileName: "button-click.mp3")
         // No hover effect: nothing on a touch screen can hover, so the button-hover
         // cue had no caller and its file has been dropped from the bundle.
@@ -248,7 +314,6 @@ class SoundManager: NSObject {
         missileSound = createSoundAction(fileName: "missile.mp3")
         lightningSound = createSoundAction(fileName: "lightning.mp3")
         warningSound = createSoundAction(fileName: "warning.mp3")
-        countdownSound = createSoundAction(fileName: "countdown.mp3")
         levelStartSound = createSoundAction(fileName: "level-start.mp3")
         playerSpawnSound = createSoundAction(fileName: "player-spawn.mp3")
         playerExitSound = createSoundAction(fileName: "player-exit.mp3")
@@ -278,17 +343,49 @@ class SoundManager: NSObject {
         shieldBlockSound = createSoundAction(fileName: "shield-hit.mp3")
         laserChargeSound = createSoundAction(fileName: "mine-arm.mp3")
         laserFireSound = createSoundAction(fileName: "lightning.mp3")
+
+        detachedPlayers = [:]
+        for fileName in Self.detachedEffects {
+            guard let url = resolveEffect(fileName),
+                  let player = try? AVAudioPlayer(contentsOf: url) else { continue }
+            player.prepareToPlay()
+            detachedPlayers[fileName] = player
+        }
+    }
+
+    // MARK: - Rate limiting
+
+    /// When each effect last started, keyed by its action.
+    private var lastStarted: [ObjectIdentifier: CFTimeInterval] = [:]
+
+    /// Whether an effect may start now, recording it if so.
+    ///
+    /// `playSoundFileNamed` neither stops nor ducks a sound already playing, so a cue
+    /// fired faster than it decays piles up into a roar. That was tolerable at the old
+    /// 3.3 shots a second; with a dense stream of fire, dozens of hits a second on a
+    /// boss whose hit cue alone runs three seconds, and shards and grazes ticking in
+    /// between, the mix turned to mush. Each high-frequency cue now has a floor on how
+    /// often it may restart. Real time, not the gameplay clock: this is about what the
+    /// speaker can carry.
+    private func admit(_ sound: SKAction, minInterval: CFTimeInterval) -> Bool {
+        let key = ObjectIdentifier(sound)
+        let now = CACurrentMediaTime()
+        if let last = lastStarted[key], now - last < minInterval { return false }
+        lastStarted[key] = now
+        return true
     }
 
     // MARK: - Existing Sound Effects
 
     func playShootSound(on node: SKNode) {
         guard isSoundEnabled, let sound = shootSound else { return }
+        guard admit(sound, minInterval: 0.1) else { return }
         node.run(sound)
     }
 
     func playExplosionSound(on node: SKNode) {
         guard isSoundEnabled, let sound = explosionSound else { return }
+        guard admit(sound, minInterval: 0.06) else { return }
         node.run(sound)
     }
 
@@ -299,22 +396,51 @@ class SoundManager: NSObject {
 
     func playCoinSound(on node: SKNode) {
         guard isSoundEnabled, let sound = coinSound else { return }
+        guard admit(sound, minInterval: 0.07) else { return }
         node.run(sound)
     }
 
     func playHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = hitSound else { return }
+        guard admit(sound, minInterval: 0.1) else { return }
         node.run(sound)
     }
 
-    func playGameOverSound(on node: SKNode) {
-        guard isSoundEnabled, let sound = gameOverSound else { return }
-        node.run(sound)
+    // MARK: - Effects that outlive their scene
+
+    /// Cues fired by a scene in the act of leaving: the game-over and level-complete
+    /// jingles, and the click of a button that presents the next screen on the spot.
+    ///
+    /// Every other effect is an SKAction run on a node, and an action only starts when
+    /// its node's actions are next evaluated. These were queued on the outgoing scene a
+    /// moment before `presentScene(_:transition:)`, which pauses that scene for the fade
+    /// (`SKTransition.pausesOutgoingScene`) and then tears it down — so the action never
+    /// got to run and the cue never played. They go through players of their own here,
+    /// which belong to no scene.
+    private static let detachedEffects = ["game-over.mp3", "level-complete.mp3", "button-click.mp3"]
+
+    /// One player per `detachedEffects` cue, by file name. Readable for `jetshotTests`.
+    private(set) var detachedPlayers: [String: AVAudioPlayer] = [:]
+
+    private func playDetached(_ fileName: String) {
+        guard isSoundEnabled, let player = detachedPlayers[fileName] else { return }
+        // Full volume, as `playSoundFileNamed` plays every other effect.
+        player.currentTime = 0
+        player.play()
     }
 
-    func playLevelCompleteSound(on node: SKNode) {
-        guard isSoundEnabled, let sound = levelCompleteSound else { return }
-        node.run(sound)
+    func playGameOverSound() {
+        playDetached("game-over.mp3")
+    }
+
+    func playLevelCompleteSound() {
+        playDetached("level-complete.mp3")
+    }
+
+    /// The button click, for a tap that presents the next scene straight away — with no
+    /// press animation to give `playButtonClickSound(on:)` a frame to start in.
+    func playSceneExitClickSound() {
+        playDetached("button-click.mp3")
     }
 
     // MARK: - UI Sound Effects
@@ -353,6 +479,7 @@ class SoundManager: NSObject {
 
     func playShieldHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = shieldHitSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
@@ -412,6 +539,7 @@ class SoundManager: NSObject {
 
     func playBossHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = bossHitSound else { return }
+        guard admit(sound, minInterval: 0.16) else { return }
         node.run(sound)
     }
 
@@ -419,11 +547,13 @@ class SoundManager: NSObject {
 
     func playEnemyShootSound(on node: SKNode) {
         guard isSoundEnabled, let sound = enemyShootSound else { return }
+        guard admit(sound, minInterval: 0.08) else { return }
         node.run(sound)
     }
 
     func playMissileSound(on node: SKNode) {
         guard isSoundEnabled, let sound = missileSound else { return }
+        guard admit(sound, minInterval: 0.3) else { return }
         node.run(sound)
     }
 
@@ -436,11 +566,6 @@ class SoundManager: NSObject {
 
     func playWarningSound(on node: SKNode) {
         guard isSoundEnabled, let sound = warningSound else { return }
-        node.run(sound)
-    }
-
-    func playCountdownSound(on node: SKNode) {
-        guard isSoundEnabled, let sound = countdownSound else { return }
         node.run(sound)
     }
 
@@ -463,11 +588,13 @@ class SoundManager: NSObject {
 
     func playAsteroidHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = asteroidHitSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
     func playObstacleHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = obstacleHitSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
@@ -475,16 +602,19 @@ class SoundManager: NSObject {
 
     func playAbsorbSound(on node: SKNode) {
         guard isSoundEnabled, let sound = absorbSound else { return }
+        guard admit(sound, minInterval: 0.2) else { return }
         node.run(sound)
     }
 
     func playReflectSound(on node: SKNode) {
         guard isSoundEnabled, let sound = reflectSound else { return }
+        guard admit(sound, minInterval: 0.15) else { return }
         node.run(sound)
     }
 
     func playShieldBlockSound(on node: SKNode) {
         guard isSoundEnabled, let sound = shieldBlockSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
@@ -543,10 +673,15 @@ class SoundManager: NSObject {
 
     // MARK: - Background Music
 
-    /// Starts (or restarts) whichever track is currently selected.
+    /// Makes sure the selected track is playing, carrying on from where it is.
+    ///
+    /// Every screen calls this as it arrives. It used to rebuild the player whatever was
+    /// already playing, so the music jumped back to 0:00 on nearly every screen change
+    /// (menu, level select, victory screen) — `setMusicForLevel` had a guard against
+    /// exactly that, and this did not.
     func startBackgroundMusic() {
         guard isMusicEnabled else { return }
-        play(resource: currentMusicResource ?? Self.musicTracks[0])
+        ensurePlaying(currentMusicResource ?? Self.musicTracks[0])
     }
 
     /// Selects and starts the track belonging to a level.
@@ -556,40 +691,92 @@ class SoundManager: NSObject {
         let index = (max(1, level) - 1) % Self.musicTracks.count
         let resource = Self.musicTracks[index]
 
-        // Already playing the right thing: leave it alone rather than restarting it
-        // from the top, so consecutive levels that share a track play continuously.
-        if currentMusicResource == resource, musicPlayer?.isPlaying == true {
-            return
-        }
-
         currentMusicResource = resource
+        rotationResource = resource
         guard isMusicEnabled else { return }
-        play(resource: resource)
+        // Already playing the right thing: left alone rather than restarted from the
+        // top, so consecutive levels that share a track play continuously.
+        ensurePlaying(resource)
     }
 
-    /// Plays a one-off track that is not part of the level rotation (the story crawl).
+    /// Plays a one-off track that is not part of the level rotation (the story films).
+    ///
+    /// Always from the top, unlike the rotation: the story music is cut to its film.
     func playSpecificMusic(named resource: String) {
         currentMusicResource = resource
         guard isMusicEnabled else { return }
         play(resource: resource)
     }
 
+    /// Ends a one-off track and hands the music back to the level rotation.
+    ///
+    /// The story films used to end with `stopBackgroundMusic()` and
+    /// `startBackgroundMusic()`, but the selection was still the story track, so that
+    /// only restarted it: after the opening it played a second from the top before the
+    /// level's own track cut in, and after the ending it carried on under the victory
+    /// screen and the menu. The selection now goes back to the last level track, and
+    /// the story track fades out under the film's own fade rather than being cut. The
+    /// next screen starts the rotation track as it arrives, as every screen does.
+    func endSpecificMusic(fadeDuration: TimeInterval) {
+        guard let ending = currentMusicResource, !Self.musicTracks.contains(ending) else { return }
+        currentMusicResource = rotationResource
+
+        guard let player = musicPlayer, musicPlayerResource == ending else { return }
+        musicPlayer = nil
+        musicPlayerResource = nil
+        fadeOut(player, over: fadeDuration)
+    }
+
     func stopBackgroundMusic() {
         musicPlayer?.stop()
         musicPlayer = nil
+        musicPlayerResource = nil
+        stopFadingMusic()
     }
 
     func pauseMusic() {
         musicPlayer?.pause()
+        // Or a track still fading out plays on for a moment after the switch is off.
+        stopFadingMusic()
     }
 
+    /// Resumes the music — the selected track, not necessarily the one that was paused.
+    /// See `musicPlayerResource`.
     func resumeMusic() {
-        guard isMusicEnabled else { return }
-        if musicPlayer == nil {
-            startBackgroundMusic()
-        } else {
-            musicPlayer?.play()
+        startBackgroundMusic()
+    }
+
+    /// Plays `resource`: on in the player that already holds it (resumed if paused),
+    /// or in a new one when the player holds another track or there is none.
+    private func ensurePlaying(_ resource: String) {
+        if let player = musicPlayer, musicPlayerResource == resource {
+            if !player.isPlaying { player.play() }
+            return
         }
+        play(resource: resource)
+    }
+
+    /// How long a track coming in under one that is fading out takes to reach full
+    /// volume.
+    private static let crossfadeIn: TimeInterval = 1.0
+
+    private func fadeOut(_ player: AVAudioPlayer, over duration: TimeInterval) {
+        stopFadingMusic()
+        fadingMusicPlayer = player
+        player.setVolume(0, fadeDuration: duration)
+        // Compared by identity rather than by capturing the player, so a later fade
+        // that has replaced this one is left alone.
+        let fading = ObjectIdentifier(player)
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard let self = self, let player = self.fadingMusicPlayer,
+                  ObjectIdentifier(player) == fading else { return }
+            self.stopFadingMusic()
+        }
+    }
+
+    private func stopFadingMusic() {
+        fadingMusicPlayer?.stop()
+        fadingMusicPlayer = nil
     }
 
     /// Single loader for every music track.
@@ -610,12 +797,7 @@ class SoundManager: NSObject {
         }
 
         do {
-            // `.ambient`, not `.playback`: game audio is non-primary, so it has to
-            // honour the ring/silent switch. `.playback` ignores it, which made the
-            // game play music out loud on a phone the player had deliberately
-            // silenced. `.ambient` also mixes with other apps by default, so an
-            // explicit .mixWithOthers option is not needed.
-            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default)
+            // The category is set once, in `configureAudioSession()`.
             try AVAudioSession.sharedInstance().setActive(true)
 
             // Stop the outgoing player explicitly rather than relying on it being
@@ -631,8 +813,17 @@ class SoundManager: NSObject {
             // evaporate the moment that track ended.
             player.numberOfLoops = -1
             player.prepareToPlay()
-            player.play()
+            // Coming in under a track that is fading out (the end of a story film):
+            // rise under it rather than land at full volume on top of it.
+            if fadingMusicPlayer != nil {
+                player.volume = 0
+                player.play()
+                player.setVolume(musicVolume, fadeDuration: Self.crossfadeIn)
+            } else {
+                player.play()
+            }
             musicPlayer = player
+            musicPlayerResource = resource
         } catch {
             #if DEBUG
             print("❌ Could not play music file \(resource).\(Self.musicExtension): \(error)")
@@ -654,7 +845,11 @@ extension SoundManager: AVAudioPlayerDelegate {
         // means playback stopped for some reason other than the track ending.
         // Restart the current track rather than advancing: which track plays is a
         // property of the level, decided by setMusicForLevel(_:).
-        guard flag, isMusicEnabled, let resource = currentMusicResource else { return }
+        //
+        // Only for the current player: one already let go of (a fading one) ending says
+        // nothing about the track that should be playing now.
+        guard flag, player === musicPlayer, isMusicEnabled,
+              let resource = currentMusicResource else { return }
         play(resource: resource)
     }
 }

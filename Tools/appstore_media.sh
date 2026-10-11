@@ -37,6 +37,12 @@ BID=cz.rob.jetshot
 # do drop old devices eventually; the fallback records 1320 × 2868 and is scaled to
 # width with eleven rows cropped, which is what Minigolf has to do for every shot.
 #
+# Xcode 27 no longer ships either one in its default device set, but the iOS 27
+# runtime still runs the 11 Pro Max — it only has to be created once:
+#
+#     xcrun simctl create "iPhone 11 Pro Max" \
+#         com.apple.CoreSimulator.SimDeviceType.iPhone-11-Pro-Max
+#
 # Set IPHONE_NAME to force one. Apple scales a 6.5" set up for the larger displays
 # itself, so one iPhone set covers every iPhone slot.
 IPHONE_CANDIDATES=("iPhone 11 Pro Max" "iPhone 17 Pro Max")
@@ -75,6 +81,12 @@ udid_for() {
 
 boot_and_install() {
     local udid="$1"
+    # Shut down first, so every run starts on a fresh boot. A simulator that has been
+    # up for a while starts drawing the home indicator across the bottom of every
+    # frame on the iPhone — one that has just booted does not. What flips it is not
+    # obvious (not the app, the install, the status bar override, a recording or the
+    # other simulator booting); a reboot clears it every time.
+    xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
     xcrun simctl boot "$udid" >/dev/null 2>&1 || true
     xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
     xcrun simctl install "$udid" "$APP"
@@ -121,6 +133,12 @@ IPAD_UDID="$(udid_for "$IPAD_NAME")"
 [ -n "$IPAD_UDID" ] || { echo "no simulator named '$IPAD_NAME'"; exit 1; }
 printf '  iPhone: %s\n  iPad:   %s\n' "$IPHONE_NAME" "$IPAD_NAME"
 
+# A simulator that reports itself booted is still busy for a while after — and two
+# of them, freshly booted, are busy enough to slow the game's clock by a second or
+# more. Every capture here is timed, so the first set waited for nobody and paid
+# for it: level 33's Overdrive had not fired yet when the Czech iPhone shot landed.
+settle_after_boot() { sleep 45; }
+
 # ---------------------------------------------------------------- screenshots
 
 # name|settle|launch arguments.
@@ -132,29 +150,57 @@ printf '  iPhone: %s\n  iPad:   %s\n' "$IPHONE_NAME" "$IPAD_NAME"
 # and the damage burst that puts it into its third act.
 #
 # `-invincible` is on every gameplay shot for the obvious reason — the bot is not
-# good enough to survive level 45 unaided for twelve seconds — and `-autopilot` is
+# good enough to survive level 43 unaided for twelve seconds — and `-autopilot` is
 # on because a ship that is not being dragged does not fire, so a still frame of an
-# idle game has no bullets in it at all.
+# idle game has no bullets in it at all. `-cool` rides along with it: the bot holds
+# the trigger down for the whole run, and since 1.0.8's faster guns that locks them
+# out for a second and a half every nine — the first try at this list caught level
+# 34 in exactly that gap, a full arsenal and not one bullet on screen.
+#
+# `-chain 40` is on every gameplay shot from level 21 on, and not for the meter. Forty
+# is the chain medal's target there, and earning it puts a MEDAL EARNED banner across
+# the middle of the screen; seeded, the banner plays in the first second and is gone
+# long before the capture, where a chain built honestly reaches forty whenever it
+# likes — on the first run of this list, in four of the eight boss candidates.
+#
+# The boss settles are short because the guns are not what they were. Eight barrels
+# at 1.0.8's cadence take level 40's boss from 0.3 to nothing in about seven seconds,
+# and the 15 s this shot used to wait photographed an empty sky.
+#
+# A settle written `a/b` is `a` seconds on the iPhone and `b` on the iPad, taken as
+# they are; a plain one is the same on both, plus the iPad's extra second. Only the
+# boss needs it. The iPad's clock runs a few seconds behind the iPhone's, and at the
+# iPhone's settle plus one the Wraith was mid-blink at the edge of the screen in
+# both locales, where three seconds later it is back in the middle of its barrage.
 SHOTS=(
-    "01-wave|11|-level 34 -unlockall -guns 8 -missiles 2 -chain 12 -nointro -invincible -autopilot"
-    "02-boss|15|-level 40 -unlockall -guns 8 -missiles 2 -boss 0.28 -nointro -invincible -autopilot"
-    "03-chain|9|-level 22 -unlockall -guns 8 -missiles 1 -chain 40 -nointro -invincible -autopilot"
-    "04-powerups|10|-level 28 -unlockall -guns 6 -missiles 2 -powerups barrier,shield,rapidfire,magnet -nointro -invincible -autopilot"
-    "05-levels|4|-levelselect -level 25 -unlockall"
-    "06-endless|11|-endless -unlockall -guns 8 -missiles 2 -round 24 -banner -nointro -invincible -autopilot"
-    "07-enemies|12|-level 45 -unlockall -guns 8 -missiles 2 -nointro -invincible -autopilot"
-    "08-menu|4|-unlockall"
+    "01-wave|11|-level 34 -unlockall -guns 8 -missiles 2 -chain 40 -nointro -invincible -autopilot -cool"
+    "02-boss|9/12|-level 40 -unlockall -guns 8 -missiles 2 -chain 40 -boss 0.3 -nointro -invincible -autopilot -cool"
+    "03-overdrive|10|-level 33 -unlockall -guns 8 -missiles 2 -chain 40 -boss 0.6 -overdrivefire 9 -nointro -invincible -autopilot -cool"
+    "04-chain|9|-level 22 -unlockall -guns 8 -missiles 1 -chain 40 -nointro -invincible -autopilot -cool"
+    "05-powerups|10|-level 28 -unlockall -guns 6 -missiles 2 -chain 40 -powerups barrier,shield,rapidfire,magnet -nointro -invincible -autopilot -cool"
+    "06-upgrades|6|-endless -unlockall -guns 8 -missiles 2 -round 25 -perks -nointro -invincible -autopilot -cool"
+    "07-levels|4|-levelselect -level 25 -unlockall"
+    "08-enemies|12|-level 43 -unlockall -guns 8 -missiles 2 -chain 40 -nointro -invincible -autopilot -cool"
+    "09-menu|4|-unlockall"
 )
 
 shoot() { # shoot <udid> <locale> <device-dir> <extra-settle> <W> <H>
     local udid="$1" loc="$2" dev="$3" extra="$4" w="$5" h="$6"
     local dir="$OUT_ROOT/screenshots/$loc/$dev"
+    # Emptied first: a shot that has been renumbered or dropped would otherwise
+    # survive from the last run, and appstore_captions.sh captions by number.
+    rm -rf "$dir"
     mkdir -p "$dir"
     for entry in "${SHOTS[@]}"; do
         IFS='|' read -r name settle args <<<"$entry"
+        local secs
+        case "$settle" in
+            */*) case "$dev" in ipad-*) secs="${settle#*/}" ;; *) secs="${settle%%/*}" ;; esac ;;
+            *)   secs="$(awk "BEGIN{print $settle + $extra}")" ;;
+        esac
         # shellcheck disable=SC2086
         launch "$udid" "$loc" $args
-        sleep "$(awk "BEGIN{print $settle + $extra}")"
+        sleep "$secs"
         xcrun simctl io "$udid" screenshot "$dir/$name.png" >/dev/null 2>&1
         # Scale only when the capture is not already the upload size — on an
         # iPhone 11 Pro Max and the iPad it is, and this does nothing. Filling the
@@ -176,6 +222,7 @@ if [ "$MODE" = all ] || [ "$MODE" = screenshots ]; then
         || { echo "needs ImageMagick to size and squeeze the shots (brew install imagemagick)"; exit 1; }
     boot_and_install "$IPHONE_UDID"
     boot_and_install "$IPAD_UDID"
+    settle_after_boot
     for loc in "${LOCALES[@]}"; do
         say "Screenshots — iPhone 6.5\" / $loc"
         shoot "$IPHONE_UDID" "$loc" iphone-6.5 0 "${IPHONE_SHOT_SIZE[@]}"
@@ -212,17 +259,23 @@ fi
 # clip, long enough for the warning, the entrance and the damage burst to be over.
 # Recording through any of that would put a title card in the middle of the cut.
 #
-# The boss here is left at 0.45 health rather than the screenshot's 0.28, because a
-# clip has to hold for five seconds: at 0.28 the bot's eight barrels finish it
-# inside three and the tail of the window is an empty screen. For the same reason
-# the endless clip does not pass `-banner` while the screenshot does — held up over
-# five seconds of video the round banner cycles three times and reads as a flicker.
+# The bosses here are left healthier than in the screenshots, because a clip has to
+# hold for six seconds: at the stills' 0.3 the bot's eight barrels finish level 40's
+# boss about when the window opens and its tail is an empty screen. The overdrive
+# clip goes further still, to 0.8, because gold fire drains a boss roughly twice as
+# fast — and from there the cut catches its armour cracking at two-thirds, which is
+# a phase break the screenshot cannot show. The Overdrive itself fires nine seconds
+# in, so it lands half a second into the window and runs to its end.
+#
+# The endless clip does not pass `-banner` while the old screenshot did — held up
+# over five seconds of video the round banner cycles three times and reads as a
+# flicker. `-cool` and `-chain 40` are on for the reasons given above SHOTS.
 CLIPS=(
-    "c1-wave|5|13|-level 12 -unlockall -guns 6 -missiles 1 -nointro -invincible -autopilot"
-    "c2-swarm|8|13|-level 34 -unlockall -guns 8 -missiles 2 -chain 20 -nointro -invincible -autopilot"
-    "c3-powerups|7|13|-level 28 -unlockall -guns 8 -missiles 2 -powerups barrier,lightning,rapidfire -nointro -invincible -autopilot"
-    "c4-boss|12|14|-level 40 -unlockall -guns 8 -missiles 2 -boss 0.45 -nointro -invincible -autopilot"
-    "c5-endless|8|13|-endless -unlockall -guns 8 -missiles 2 -round 24 -nointro -invincible -autopilot"
+    "c1-swarm|8|13|-level 34 -unlockall -guns 8 -missiles 2 -chain 40 -nointro -invincible -autopilot -cool"
+    "c2-overdrive|8|13|-level 33 -unlockall -guns 8 -missiles 2 -chain 40 -boss 0.8 -overdrivefire 9 -nointro -invincible -autopilot -cool"
+    "c3-powerups|7|13|-level 28 -unlockall -guns 8 -missiles 2 -chain 40 -powerups barrier,lightning,rapidfire -nointro -invincible -autopilot -cool"
+    "c4-boss|12|14|-level 40 -unlockall -guns 8 -missiles 2 -chain 40 -boss 0.5 -nointro -invincible -autopilot -cool"
+    "c5-endless|8|13|-endless -unlockall -guns 8 -missiles 2 -round 24 -nointro -invincible -autopilot -cool"
     "c6-menu|4|8|-unlockall"
 )
 
@@ -238,10 +291,12 @@ CLIPS=(
 # preceding clip for those seconds instead. Starting on the keyframe is what makes
 # it render, and the screen is identical throughout anyway.
 #
-# The windows add up to 25.4 s, inside Connect's 15–30 s. `appstore_conform.swift`
-# refuses anything outside that range before it wastes an encode on it.
-CUTS=(c1-wave:1.0:5.2 c2-swarm:1.0:5.6 c3-powerups:1.0:5.4
-      c4-boss:1.0:6.2 c5-endless:1.0:5.4 c6-menu:0.0:2.6)
+# Each cut is clip:start:end, in seconds into that clip's recording — an end, not a
+# length. The windows add up to 28.4 s, inside Connect's 15–30 s.
+# `appstore_conform.swift` refuses anything outside that range before it wastes an
+# encode on it.
+CUTS=(c1-swarm:1.0:6.0 c2-overdrive:1.0:6.6 c3-powerups:1.0:5.6
+      c4-boss:1.0:7.0 c5-endless:1.0:5.6 c6-menu:0.0:2.6)
 
 record() { # record <udid> <locale> <clipdir>
     local udid="$1" loc="$2" dir="$3"
@@ -277,6 +332,7 @@ assemble() { # assemble <clipdir> <out.mp4> <W> <H> <cut...>
 if [ "$MODE" = all ] || [ "$MODE" = video ]; then
     boot_and_install "$IPHONE_UDID"
     boot_and_install "$IPAD_UDID"
+    settle_after_boot
     for loc in "${LOCALES[@]}"; do
         say "Preview — iPhone 6.5\" / $loc"
         record "$IPHONE_UDID" "$loc" "$WORK/clips/iphone-$loc"

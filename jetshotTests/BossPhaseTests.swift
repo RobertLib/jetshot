@@ -65,7 +65,7 @@ final class BossPhaseTests: XCTestCase {
         // where the patterns are heaviest.
         let fastestGap = GameConfiguration.bossAttackDelayMin
             * BossPhaseRules.attackDelayScale(forPhase: BossPhaseRules.phaseCount - 1)
-        let longestTelegraph = BossPhaseRules.telegraphDuration(forPatternIndex: 9, totalPatterns: 10)
+        let longestTelegraph = BossAttackPattern.allCases.map { BossPhaseRules.telegraphDuration(for: $0) }.max() ?? 0
 
         XCTAssertLessThan(
             longestTelegraph, fastestGap,
@@ -75,33 +75,33 @@ final class BossPhaseTests: XCTestCase {
 
     // MARK: - Pattern availability
 
-    func testTheOpeningPhaseWithholdsTheHeavyEndOfTheList() {
-        let total = 12
-        let opening = BossPhaseRules.patternCount(forPhase: 0, totalPatterns: total)
-        XCTAssertLessThan(opening, total, "the boss opens with everything it has")
-        XCTAssertGreaterThanOrEqual(opening, 2)
+    /// Acts as `BossConfig` authors them: an opening, the pressure, the finale.
+    private let typicalActs = [0, 0, 0, 1, 1, 1, 2, 2]
+
+    func testTheOpeningPhaseWithholdsLaterActs() {
+        let opening = BossPhaseRules.patternCount(forPhase: 0, acts: typicalActs)
+        XCTAssertEqual(opening, 3, "the opening act should hold exactly the act-0 attacks")
+        XCTAssertLessThan(opening, typicalActs.count, "the boss opens with everything it has")
+        XCTAssertEqual(BossPhaseRules.patternCount(forPhase: 1, acts: typicalActs), 6)
     }
 
     func testTheFinalPhaseUnlocksEverything() {
-        for total in 1...20 {
+        for acts in [[0, 1, 2], [0, 0, 1, 2, 2], typicalActs, [0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2]] {
             XCTAssertEqual(
-                BossPhaseRules.patternCount(forPhase: BossPhaseRules.phaseCount - 1, totalPatterns: total),
-                total,
-                "a dying boss is still holding something back from a \(total)-pattern list"
+                BossPhaseRules.patternCount(forPhase: BossPhaseRules.phaseCount - 1, acts: acts),
+                acts.count,
+                "a dying boss is still holding something back from \(acts)"
             )
         }
     }
 
     func testAvailablePatternsOnlyEverGrowAsTheBossWeakens() {
-        for total in 1...20 {
+        for acts in [[0, 1, 2], [0, 0, 1, 2, 2], typicalActs] {
             var previous = 0
             for phase in 0..<BossPhaseRules.phaseCount {
-                let count = BossPhaseRules.patternCount(forPhase: phase, totalPatterns: total)
-                XCTAssertGreaterThanOrEqual(
-                    count, previous,
-                    "phase \(phase) of a \(total)-pattern boss lost access to an attack"
-                )
-                XCTAssertLessThanOrEqual(count, total)
+                let count = BossPhaseRules.patternCount(forPhase: phase, acts: acts)
+                XCTAssertGreaterThanOrEqual(count, previous, "phase \(phase) of \(acts) lost access to an attack")
+                XCTAssertLessThanOrEqual(count, acts.count)
                 previous = count
             }
         }
@@ -110,38 +110,54 @@ final class BossPhaseTests: XCTestCase {
     func testEveryPhaseOfEveryListHasSomethingToChooseFrom() {
         // A phase that resolved to a single pattern would repeat it, and `nextAttack()`
         // deliberately refuses to draw the same index twice running — with one option it
-        // would step aside onto itself forever.
-        for total in 2...20 {
+        // would step aside onto itself forever. A thin opening act is topped up.
+        for acts in [[0, 1, 2], [0, 1, 1, 2], typicalActs] {
             for phase in 0..<BossPhaseRules.phaseCount {
                 XCTAssertGreaterThanOrEqual(
-                    BossPhaseRules.patternCount(forPhase: phase, totalPatterns: total), 2,
-                    "phase \(phase) of a \(total)-pattern boss has nothing to alternate between"
+                    BossPhaseRules.patternCount(forPhase: phase, acts: acts), 2,
+                    "phase \(phase) of \(acts) has nothing to alternate between"
                 )
             }
         }
     }
 
     func testAnEmptyListDegradesQuietly() {
-        // Not reachable through `BossConfig` — `BossConfigTests` proves every arm ships
-        // patterns — but `patternCount` divides work off the total and must not trap.
-        XCTAssertEqual(BossPhaseRules.patternCount(forPhase: 0, totalPatterns: 0), 0)
-        XCTAssertEqual(BossPhaseRules.patternCount(forPhase: 2, totalPatterns: 0), 0)
+        // Not reachable through `BossConfig` — `BossConfigTests` proves every boss ships
+        // patterns — but `patternCount` must not trap on it.
+        XCTAssertEqual(BossPhaseRules.patternCount(forPhase: 0, acts: []), 0)
+        XCTAssertEqual(BossPhaseRules.patternCount(forPhase: 2, acts: []), 0)
     }
 
     // MARK: - Telegraphs
 
     func testHeavyAttacksAreWarnedAboutForLonger() {
-        let total = 9
-        let light = BossPhaseRules.telegraphDuration(forPatternIndex: 0, totalPatterns: total)
-        let heavy = BossPhaseRules.telegraphDuration(forPatternIndex: total - 1, totalPatterns: total)
+        let light = BossPhaseRules.telegraphDuration(for: .straightShot)
+        let heavy = BossPhaseRules.telegraphDuration(for: .barrageRain)
 
         XCTAssertGreaterThan(heavy, light, "the screen-filling attacks get no more warning than a single shot")
         XCTAssertGreaterThan(light, 0, "an attack with no wind-up cannot be read")
     }
 
-    func testTheHeavyBandIsTheFinalThirdOfAList() {
-        XCTAssertFalse(BossPhaseRules.isHeavy(patternIndex: 5, totalPatterns: 9))
-        XCTAssertTrue(BossPhaseRules.isHeavy(patternIndex: 6, totalPatterns: 9))
-        XCTAssertTrue(BossPhaseRules.isHeavy(patternIndex: 8, totalPatterns: 9))
+    /// The attacks that cover the screen, or kill along a whole line, are the ones that
+    /// earn the long wind-up.
+    func testScreenFillingAttacksCountAsHeavy() {
+        for pattern in [BossAttackPattern.sweepBeam, .eyeLance, .laser, .implosion, .latticeWalls,
+                        .riftPortals, .ringPulse, .barrageRain, .circularBarrage] {
+            XCTAssertTrue(pattern.isHeavy, "\(pattern) covers the screen but gets the short wind-up")
+        }
+        for pattern in [BossAttackPattern.straightShot, .aimed, .podVolley, .swoop, .blink, .hyperShift] {
+            XCTAssertFalse(pattern.isHeavy, "\(pattern) is a light attack but gets the long wind-up")
+        }
+    }
+
+    // MARK: - Parts
+
+    func testPartsTakeAShareOfTheBossAndNeverNothing() {
+        XCTAssertEqual(BossPhaseRules.partHealth(bossHealth: 100, partCount: 0), 0)
+        XCTAssertGreaterThanOrEqual(BossPhaseRules.partHealth(bossHealth: 10, partCount: 2), 3)
+        let pod = BossPhaseRules.partHealth(bossHealth: 400, partCount: 2)
+        XCTAssertLessThan(pod * 2, 400, "shooting the pods off is a bigger job than killing the boss")
+        let segment = BossPhaseRules.partHealth(bossHealth: 400, partCount: 10)
+        XCTAssertLessThan(segment, pod, "a serpent's ten segments each take as long as a warden's pod")
     }
 }
