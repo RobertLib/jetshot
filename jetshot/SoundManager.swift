@@ -28,7 +28,7 @@ class SoundManager: NSObject {
     nonisolated static let musicTracks = [
         "music-1", "music-2", "music-3", "music-4", "music-5", "music-6", "music-7"
     ]
-    /// One-off track played over the story crawl, outside the level rotation.
+    /// One-off track played under the story films, outside the level rotation.
     nonisolated static let storyMusicTrack = "music-story"
 
     /// Resource name of the track that *should* be playing.
@@ -280,15 +280,39 @@ class SoundManager: NSObject {
         laserFireSound = createSoundAction(fileName: "lightning.mp3")
     }
 
+    // MARK: - Rate limiting
+
+    /// When each effect last started, keyed by its action.
+    private var lastStarted: [ObjectIdentifier: CFTimeInterval] = [:]
+
+    /// Whether an effect may start now, recording it if so.
+    ///
+    /// `playSoundFileNamed` neither stops nor ducks a sound already playing, so a cue
+    /// fired faster than it decays piles up into a roar. That was tolerable at the old
+    /// 3.3 shots a second; with a dense stream of fire, dozens of hits a second on a
+    /// boss whose hit cue alone runs three seconds, and shards and grazes ticking in
+    /// between, the mix turned to mush. Each high-frequency cue now has a floor on how
+    /// often it may restart. Real time, not the gameplay clock: this is about what the
+    /// speaker can carry.
+    private func admit(_ sound: SKAction, minInterval: CFTimeInterval) -> Bool {
+        let key = ObjectIdentifier(sound)
+        let now = CACurrentMediaTime()
+        if let last = lastStarted[key], now - last < minInterval { return false }
+        lastStarted[key] = now
+        return true
+    }
+
     // MARK: - Existing Sound Effects
 
     func playShootSound(on node: SKNode) {
         guard isSoundEnabled, let sound = shootSound else { return }
+        guard admit(sound, minInterval: 0.1) else { return }
         node.run(sound)
     }
 
     func playExplosionSound(on node: SKNode) {
         guard isSoundEnabled, let sound = explosionSound else { return }
+        guard admit(sound, minInterval: 0.06) else { return }
         node.run(sound)
     }
 
@@ -299,11 +323,13 @@ class SoundManager: NSObject {
 
     func playCoinSound(on node: SKNode) {
         guard isSoundEnabled, let sound = coinSound else { return }
+        guard admit(sound, minInterval: 0.07) else { return }
         node.run(sound)
     }
 
     func playHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = hitSound else { return }
+        guard admit(sound, minInterval: 0.1) else { return }
         node.run(sound)
     }
 
@@ -353,6 +379,7 @@ class SoundManager: NSObject {
 
     func playShieldHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = shieldHitSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
@@ -412,6 +439,7 @@ class SoundManager: NSObject {
 
     func playBossHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = bossHitSound else { return }
+        guard admit(sound, minInterval: 0.16) else { return }
         node.run(sound)
     }
 
@@ -419,11 +447,13 @@ class SoundManager: NSObject {
 
     func playEnemyShootSound(on node: SKNode) {
         guard isSoundEnabled, let sound = enemyShootSound else { return }
+        guard admit(sound, minInterval: 0.08) else { return }
         node.run(sound)
     }
 
     func playMissileSound(on node: SKNode) {
         guard isSoundEnabled, let sound = missileSound else { return }
+        guard admit(sound, minInterval: 0.3) else { return }
         node.run(sound)
     }
 
@@ -463,11 +493,13 @@ class SoundManager: NSObject {
 
     func playAsteroidHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = asteroidHitSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
     func playObstacleHitSound(on node: SKNode) {
         guard isSoundEnabled, let sound = obstacleHitSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
@@ -475,16 +507,19 @@ class SoundManager: NSObject {
 
     func playAbsorbSound(on node: SKNode) {
         guard isSoundEnabled, let sound = absorbSound else { return }
+        guard admit(sound, minInterval: 0.2) else { return }
         node.run(sound)
     }
 
     func playReflectSound(on node: SKNode) {
         guard isSoundEnabled, let sound = reflectSound else { return }
+        guard admit(sound, minInterval: 0.15) else { return }
         node.run(sound)
     }
 
     func playShieldBlockSound(on node: SKNode) {
         guard isSoundEnabled, let sound = shieldBlockSound else { return }
+        guard admit(sound, minInterval: 0.12) else { return }
         node.run(sound)
     }
 
@@ -567,7 +602,7 @@ class SoundManager: NSObject {
         play(resource: resource)
     }
 
-    /// Plays a one-off track that is not part of the level rotation (the story crawl).
+    /// Plays a one-off track that is not part of the level rotation (the story films).
     func playSpecificMusic(named resource: String) {
         currentMusicResource = resource
         guard isMusicEnabled else { return }

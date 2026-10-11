@@ -137,11 +137,38 @@ final class WeaponHeatSystem {
     /// player paid for a shot that never left the barrel. Lockout is enforced by the
     /// `isOverheated` check in `GameScene.shoot()`, so blocking here as well is
     /// redundant.
-    func registerShot(currentTime: TimeInterval) {
-        heat += heatPerShot
+    ///
+    /// `scale` multiplies the heat this shot adds — the endless run's COOLANT perk.
+    func registerShot(currentTime: TimeInterval, scale: CGFloat = 1) {
+        heat += heatPerShot * scale
         if heat >= maxHeat {
             heat = maxHeat
             triggerOverheat(currentTime: currentTime)
+        }
+        updateHeatBar()
+    }
+
+    /// Takes `amount` off the gauge — grazing fire cools the guns (see `GrazeRules`).
+    /// Does nothing during a lockout: the lockout runs on its own timer.
+    func cool(by amount: CGFloat) {
+        guard !isOverheated, heat > 0 else { return }
+        heat = max(0, heat - amount)
+        updateHeatBar()
+    }
+
+    /// Empties the gauge and lifts any lockout, for an Overdrive's activation.
+    func reset() {
+        let wasOverheated = isOverheated
+        heat = 0
+        isOverheated = false
+        if wasOverheated {
+            // Cut the OVERHEATED flash short rather than let it go on claiming a
+            // lockout that is over.
+            heatBarBackground?.removeAllActions()
+            heatBarBackground?.setScale(1)
+            heatBarBackground?.fillColor = UIColor(white: 0.2, alpha: 0.6)
+            heatBarLabel?.text = L10n.HUD.heat
+            heatBarLabel?.fontColor = UIColor(white: 0.8, alpha: 0.9)
         }
         updateHeatBar()
     }

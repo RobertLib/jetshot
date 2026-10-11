@@ -8,18 +8,18 @@ import XCTest
 
 /// The keys that hold everything persisted about a player's progress.
 ///
-/// Must stay in step with what `LevelManager.resetProgress()` clears, which is what the
-/// snapshot below is undoing. `endlessRecords` was missing here while `resetProgress()`
-/// cleared it, so every test that used `withCleanProgress` wiped five keys and put four
-/// back — permanently destroying whatever endless record the developer had set in the
-/// simulator. Exactly the failure this helper exists to prevent.
-private let progressKeys = [
-    CloudStorageManager.Keys.completedLevels,
-    CloudStorageManager.Keys.levelScores,
-    CloudStorageManager.Keys.levelStars,
-    CloudStorageManager.Keys.levelWeapons,
-    CloudStorageManager.Keys.endlessRecords
-]
+/// The same list `LevelManager.resetProgress()` clears, which is what the snapshot below
+/// is undoing — read from the one place that defines it. A hand-kept copy here once
+/// missed `endlessRecords` while `resetProgress()` cleared it, so every test that used
+/// `withCleanProgress` wiped five keys and put four back — permanently destroying
+/// whatever endless record the developer had set in the simulator. Exactly the failure
+/// this helper exists to prevent.
+///
+/// The reset epoch (`Keys.progressEpoch`) is deliberately *not* snapshotted: each
+/// `resetProgress()` here opens a new one in both stores, and putting the old, lower
+/// number back locally would make the next merge treat this device as stale and adopt
+/// the cloud's freshly wiped copy over the progress just restored.
+private let progressKeys = CloudStorageManager.Keys.progress
 
 /// Runs `body` against a wiped progress store, then puts back whatever was there before.
 ///

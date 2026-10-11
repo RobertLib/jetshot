@@ -7,14 +7,12 @@
 
 import SpriteKit
 
+/// The run is over, told in the boss warning's language: the world on red alert, a
+/// flatline where the ship's signal was, and the title glitching in over it.
 class GameOverScene: SKScene {
 
-    /// Shared vertical rhythm for the results panels. See `UITheme.PanelRhythm`.
+    /// Shared vertical rhythm for the results screens. See `UITheme.PanelRhythm`.
     private typealias Rhythm = UITheme.PanelRhythm
-
-    /// How far the figure block rises during its entrance. It starts this far below
-    /// its laid-out position and ends exactly on it.
-    private static let figuresRise: CGFloat = 10
 
     private let finalScore: Int
     private let currentLevel: Int
@@ -25,6 +23,10 @@ class GameOverScene: SKScene {
     /// new figure, so comparing here would compare the run against itself.
     private let isEndlessRecord: Bool
     private var isInitialized = false
+    /// Every button here leaves the screen, once. See `FilmUI.Exit`.
+    private let exit = FilmUI.Exit()
+
+    private static let red = StoryPalette.red
 
     init(
         size: CGSize,
@@ -48,13 +50,7 @@ class GameOverScene: SKScene {
 
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
-
-        StarfieldHelper.addDepthLayers(to: self)
-        addChild(StarfieldHelper.createStarfield(for: self))
-        NeonFX.attachGrade(to: self, zPosition: -5)
-        addChild(StarfieldHelper.createShootingStars(for: self))
-        addChild(StarfieldHelper.createMeteors(for: self))
-        setupUI()
+        buildScene()
         isInitialized = true
 
         // Continue background music
@@ -62,228 +58,122 @@ class GameOverScene: SKScene {
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
-        // Only handle resize after initial setup
-        guard isInitialized else { return }
-
-        // Remove and recreate all elements
+        // Not while leaving — see `LevelCompleteScene.didChangeSize(_:)`.
+        guard isInitialized, !exit.isTaken else { return }
         removeAllChildren()
-
-        StarfieldHelper.addDepthLayers(to: self)
-        addChild(StarfieldHelper.createStarfield(for: self))
-        NeonFX.attachGrade(to: self, zPosition: -5)
-        addChild(StarfieldHelper.createShootingStars(for: self))
-        addChild(StarfieldHelper.createMeteors(for: self))
-        setupUI()
+        buildScene()
     }
 
     override func willMove(from view: SKView) {
-        // Clean up all resources before scene is removed
         removeAllActions()
         removeAllChildren()
     }
 
+    private func buildScene() {
+        GameBackdrop.attachAmbient(to: self, look: isEndless ? .forEndlessRound(1) : .forLevel(currentLevel)).setAlert(true)
+        NeonFX.attachGrade(to: self, zPosition: -5)
+        addAlertGrade()
+        setupUI()
+    }
+
+    /// The edges of the picture burn red and breathe, as they do under the boss warning.
+    private func addAlertGrade() {
+        let grade = NeonFX.gradeOverlay(size: size)
+        grade.name = "alertGrade"
+        grade.color = Self.red
+        grade.colorBlendFactor = 1
+        grade.blendMode = .add
+        grade.alpha = 0
+        grade.zPosition = -4
+        addChild(grade)
+
+        let breathe = SKAction.sequence([
+            .fadeAlpha(to: 0.42, duration: 1.4),
+            .fadeAlpha(to: 0.2, duration: 1.4)
+        ])
+        grade.run(.sequence([.fadeAlpha(to: 0.6, duration: 0.25), .fadeAlpha(to: 0.3, duration: 0.6),
+                             .repeatForever(breathe)]))
+    }
+
     private func setupUI() {
-        // Add red warning particles in background
-        addWarningParticles()
+        let card = ResultsCard(sceneWidth: size.width)
+        let red = Self.red
+        let tint = StoryPalette.mix(red, .white, 0.3)
 
-        // Main panel background with rounded corners and glow
-        let panelWidth: CGFloat = min(size.width - 60, UITheme.Dimensions.panelWidthMax)
-
-        // Content is built and measured *before* the panel, because the panel is sized
-        // to hold it. The fixed 420/460 heights this replaces were tuned by eye and left
-        // ~40pt of dead space above the icon and ~35pt below the buttons, while the
-        // figures underneath the score sat on a tighter pitch than anything around them.
-        // See `UITheme.PanelStack`.
-        let defeatIcon = createDefeatIcon()
-        defeatIcon.setScale(0.8) // Make it smaller
-        let iconHeight = defeatIcon.calculateAccumulatedFrame().height
-
-        let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = L10n.GameOver.title
-        title.fontSize = UITheme.Typography.sizeMedium
-        title.fontColor = UITheme.Colors.dangerRed
-        title.horizontalAlignmentMode = .center
-        let titleHeight = UITheme.capBandHeight(of: title)
-
-        let figures = createScoreDisplay()
-        let buttonHeight = UITheme.Dimensions.buttonHeight
-
-        var stack = UITheme.PanelStack()
-        stack.add(gapAbove: Rhythm.edge, height: iconHeight)
-        stack.add(gapAbove: Rhythm.emblemToTitle, height: titleHeight)
-        stack.add(gapAbove: Rhythm.aroundFigures, height: figures.height)
-        stack.add(gapAbove: Rhythm.aroundFigures, height: buttonHeight)
-        stack.add(gapAbove: Rhythm.buttonRow, height: buttonHeight)
-
-        let panelHeight = stack.height
-        let panel = UITheme.createPanel(
-            width: panelWidth,
-            height: panelHeight,
-            borderColor: UITheme.Colors.dangerRed
+        let sector = (currentLevel - 1) / 5 + 1
+        let tag = card.tag(
+            isEndless
+                ? "\(L10n.HUD.endless)  ·  \(L10n.HUD.round(max(1, endlessRound)))"
+                : "\(L10n.HUD.level(currentLevel))  ·  \(L10n.Sector.name(sector))",
+            color: tint, delay: 0.25
         )
-        panel.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        panel.alpha = 0
+        card.add(tag, gapAbove: Rhythm.edge, height: 14, reveal: false)
 
-        // Add outer glow effect
-        if let glowPanel = panel.copy() as? SKShapeNode {
-            glowPanel.fillColor = .clear
-            glowPanel.strokeColor = UITheme.Colors.dangerRedLight
-            glowPanel.lineWidth = UITheme.Dimensions.lineWidthGlowStrong
-            glowPanel.setScale(1.02)
-            glowPanel.alpha = 0
-            addChild(glowPanel)
+        let flatline = createFlatline(width: min(card.width, 220))
+        card.add(flatline, gapAbove: 18, height: 40, reveal: false)
 
-            // Pulse animation for glow
-            glowPanel.run(SKAction.sequence([
-                SKAction.wait(forDuration: 0.6),
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationMedium),
-                UITheme.createGlowPulseAnimation()
-            ]))
-        }
-
-        addChild(panel)
-
-        // Animate panel entrance
-        panel.run(SKAction.sequence([
-            SKAction.wait(forDuration: UITheme.Animations.durationQuick),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationMedium),
-                SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationMedium)
-            ])
-        ]))
-        panel.setScale(0.8)
-
-        // Placement pass, walking the same rows back down from the panel's top edge.
-        stack.start(panelHeight: panelHeight)
-
-        // X mark icon (defeat symbol)
-        defeatIcon.position = CGPoint(
-            x: 0,
-            y: stack.next(gapAbove: Rhythm.edge, height: iconHeight)
-        )
-        defeatIcon.alpha = 0
-        panel.addChild(defeatIcon)
-
-        // Animated icon entrance with shake
-        defeatIcon.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.4),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.sequence([
-                    SKAction.scale(to: 0.9, duration: 0.15),
-                    SKAction.scale(to: 0.8, duration: 0.15)
-                ]),
-                SKAction.sequence([
-                    SKAction.rotate(byAngle: 0.2, duration: UITheme.Animations.durationFast),
-                    SKAction.rotate(byAngle: -0.4, duration: UITheme.Animations.durationFast),
-                    SKAction.rotate(byAngle: 0.2, duration: UITheme.Animations.durationFast)
-                ])
-            ])
-        ]))
-
-        // "LEVEL FAILED" title
-        UITheme.centerOnCapBand(
-            title,
-            centerY: stack.next(gapAbove: Rhythm.emblemToTitle, height: titleHeight)
-        )
+        let title = FilmUI.title(L10n.GameOver.title, size: 34, color: StoryPalette.mix(red, .white, 0.2),
+                                 glow: red, tracking: 6, maxWidth: card.width)
         title.alpha = 0
-        panel.addChild(title)
+        card.add(title, gapAbove: 16, height: title.frame.height, reveal: false)
 
-        // Animated title entrance
-        title.run(SKAction.sequence([
-            SKAction.wait(forDuration: UITheme.Animations.durationSlow),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.sequence([
-                    SKAction.scale(to: 1.2, duration: UITheme.Animations.durationQuick),
-                    SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationQuick)
-                ])
-            ])
-        ]))
+        let rule = FilmUI.drawnRule(width: min(card.width, 220), color: red, alpha: 0.6, delay: 0.75)
+        card.add(rule, gapAbove: 14, height: 1, reveal: false)
 
-        // Score display
-        let scoreContainer = figures.node
-        scoreContainer.position = CGPoint(
-            x: 0,
-            y: stack.next(gapAbove: Rhythm.aroundFigures, height: figures.height)
-        )
-        // The entrance rises *into* the slot rather than out of it. `moveBy` is
-        // relative and permanent, so running it from the laid-out position left the
-        // block sitting 10pt above where the stack put it for the rest of the scene's
-        // life — which is what tipped the figures off centre between the title and the
-        // button. Starting the same 10pt low makes the animation land on the layout.
-        scoreContainer.position.y -= Self.figuresRise
-        scoreContainer.alpha = 0
-        panel.addChild(scoreContainer)
-        scoreContainer.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.7),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.moveBy(x: 0, y: Self.figuresRise, duration: UITheme.Animations.durationNormal)
-            ])
-        ]))
+        let figures = createScoreDisplay(card: card)
+        card.add(figures.node, gapAbove: Rhythm.aroundFigures, height: figures.height)
 
-        // Buttons
-        setupButtons(
-            on: panel,
-            retryY: stack.next(gapAbove: Rhythm.aroundFigures, height: buttonHeight),
-            secondaryY: stack.next(gapAbove: Rhythm.buttonRow, height: buttonHeight)
-        )
+        let retryButton = UITheme.createButton(text: L10n.Common.retry, color: red,
+                                               width: card.primaryButtonWidth, name: "retryButton", primary: true)
+        let levelsButton = UITheme.createButton(text: L10n.Common.levels, color: FilmUI.neutral,
+                                                width: card.pairButtonWidth, name: "levelsButton")
+        let menuButton = UITheme.createButton(text: L10n.Common.menu, color: FilmUI.neutral,
+                                              width: card.pairButtonWidth, name: "menuButton")
+        card.addButtons(primary: retryButton, pair: (levelsButton, menuButton), gapAbove: Rhythm.aroundFigures)
+
+        card.install(in: self, accent: red,
+                     safeTop: GameConfiguration.safeAreaTop(in: view),
+                     safeBottom: GameConfiguration.safeAreaBottom(in: view),
+                     revealFrom: 0.9)
+
+        // The title lands hard, jittering, as the boss warning's does.
+        title.run(FilmUI.glitchIn(title, delay: 0.6))
     }
 
     /// The figures under the title, spaced by `UITheme.PanelRhythm` and centred on the
-    /// returned node's origin, with the optical height the outer stack needs.
-    private func createScoreDisplay() -> (node: SKNode, height: CGFloat) {
+    /// returned node's origin, with the height the outer stack needs.
+    private func createScoreDisplay(card: ResultsCard) -> (node: SKNode, height: CGFloat) {
         let container = SKNode()
 
-        // Score label "SCORE" with icon
-        let scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        scoreLabel.horizontalAlignmentMode = .center
-        scoreLabel.text = L10n.Common.score
-        scoreLabel.fontSize = UITheme.Typography.sizeRegular
-        scoreLabel.fontColor = UITheme.Colors.textSecondary
-
-        // Score value
-        let scoreValue = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        scoreValue.horizontalAlignmentMode = .center
-        scoreValue.text = "\(finalScore)"
-        scoreValue.fontSize = UITheme.Typography.sizeLarge
-        scoreValue.fontColor = UITheme.Colors.primaryGold
+        let caption = card.caption(L10n.Common.score)
+        let value = card.figure(finalScore, color: .white)
 
         // The caption rides tight against the number it labels; anything further down
         // is a separate figure and gets the wider gap.
         var rows: [(label: SKLabelNode, gapAbove: CGFloat)] = [
-            (scoreLabel, 0),
-            (scoreValue, Rhythm.captionToValue)
+            (caption, 0),
+            (value, Rhythm.captionToValue)
         ]
 
         // Endless has no completion screen, so the run's result is reported here or
         // nowhere: how deep it got, and whether it beat the standing record.
         if isEndless {
-            let roundLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-            roundLine.horizontalAlignmentMode = .center
-            roundLine.fontSize = 16
-            roundLine.text = L10n.GameOver.reachedRound(endlessRound)
-            roundLine.fontColor = UITheme.Colors.primaryCyanLight
-            rows.append((roundLine, Rhythm.figureLine))
+            rows.append((card.line(L10n.GameOver.reachedRound(endlessRound), color: UITheme.Colors.primaryCyanLight),
+                         Rhythm.figureLine))
 
-            let recordLine = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-            recordLine.horizontalAlignmentMode = .center
-            recordLine.fontSize = 15
-
-            let records = LevelManager.shared.getEndlessRecords()
             if isEndlessRecord {
-                recordLine.text = L10n.GameOver.newRecord
-                recordLine.fontColor = UITheme.Colors.successGreenLight
-                recordLine.run(.repeatForever(.sequence([
-                    .scale(to: 1.08, duration: 0.5),
-                    .scale(to: 1.0, duration: 0.5)
-                ])))
+                let record = card.line(L10n.GameOver.newRecord, color: UITheme.Colors.improvement)
+                record.run(.sequence([
+                    .wait(forDuration: 2.0),
+                    .repeatForever(.sequence([.fadeAlpha(to: 0.45, duration: 0.5), .fadeAlpha(to: 1, duration: 0.5)]))
+                ]))
+                rows.append((record, Rhythm.figureLine))
             } else {
-                recordLine.text = L10n.Common.endlessRecord(score: records.bestScore, round: records.bestRound)
-                recordLine.fontColor = UITheme.Colors.textSecondary
+                let records = LevelManager.shared.getEndlessRecords()
+                rows.append((card.line(L10n.Common.endlessRecord(score: records.bestScore, round: records.bestRound),
+                                       color: UITheme.Colors.textSecondary),
+                             Rhythm.figureLine))
             }
-            rows.append((recordLine, Rhythm.figureLine))
         }
 
         // Named so `ResultsPanelCentringTests` can find the block it is asserting on;
@@ -291,251 +181,98 @@ class GameOverScene: SKScene {
         container.name = "figureBlock"
 
         let height = UITheme.stackLabels(rows, in: container)
+        FilmUI.countUp(value, to: finalScore, delay: 1.0, duration: 0.7, glow: StoryPalette.ice)
         return (container, height)
     }
 
-    private func setupButtons(on panel: SKShapeNode, retryY: CGFloat, secondaryY: CGFloat) {
-        let buttonY = retryY
+    /// The ship's signal: a heartbeat traced in red light that spikes once and then
+    /// runs flat.
+    private func createFlatline(width: CGFloat) -> SKNode {
+        let node = SKNode()
+        let half = width / 2
+        let points: [CGPoint] = [
+            CGPoint(x: -half, y: 0), CGPoint(x: -half * 0.34, y: 0), CGPoint(x: -half * 0.24, y: 6),
+            CGPoint(x: -half * 0.16, y: -4), CGPoint(x: -half * 0.08, y: 18), CGPoint(x: 0, y: -16),
+            CGPoint(x: half * 0.08, y: 4), CGPoint(x: half * 0.14, y: 0), CGPoint(x: half, y: 0)
+        ]
+        // Traced left to right, a segment at a time, so the beat happens and then stops.
+        var delay: TimeInterval = 0.3
+        for (a, b) in zip(points, points.dropFirst()) {
+            let segment = FilmUI.tube(a, b, width: 1.6, color: Self.red)
+            segment.alpha = 0
+            let length = hypot(b.x - a.x, b.y - a.y)
+            segment.run(.sequence([.wait(forDuration: delay), .fadeIn(withDuration: 0.05)]))
+            node.addChild(segment)
+            delay += TimeInterval(length / width) * 0.5
+        }
 
-        // Retry button
-        let retryButton = UITheme.createButton(
-            text: L10n.Common.retry,
-            color: UITheme.Colors.successGreen,
-            width: UITheme.Dimensions.buttonWidthXLarge,
-            name: "retryButton"
-        )
-        retryButton.position = CGPoint(x: 0, y: buttonY)
-        retryButton.alpha = 0
-        panel.addChild(retryButton)
+        // The point of the trace, running ahead of it and dying out at the end.
+        let head = LightSprite.star(size: 22, color: StoryPalette.mix(Self.red, .white, 0.5))
+        head.position = points[0]
+        head.alpha = 0
+        var path: [SKAction] = [.wait(forDuration: 0.3), .fadeIn(withDuration: 0.05)]
+        for (a, b) in zip(points, points.dropFirst()) {
+            path.append(.move(to: b, duration: TimeInterval(hypot(b.x - a.x, b.y - a.y) / width) * 0.5))
+        }
+        path.append(.fadeOut(withDuration: 0.4))
+        head.run(.sequence(path))
+        node.addChild(head)
 
-        retryButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.9),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
+        // And once it has run flat, the whole trace slowly dims and returns, like a
+        // monitor still listening.
+        node.run(.sequence([
+            .wait(forDuration: delay + 0.6),
+            .repeatForever(.sequence([.fadeAlpha(to: 0.4, duration: 1.2), .fadeAlpha(to: 0.85, duration: 1.2)]))
         ]))
-
-        // Secondary buttons container
-        let secondaryButtonY = secondaryY
-
-        let levelsButton = UITheme.createButton(
-            text: L10n.Common.levels,
-            color: UITheme.Colors.buttonLevels,
-            width: UITheme.Dimensions.buttonWidthSmall,
-            name: "levelsButton"
-        )
-        levelsButton.position = CGPoint(x: -67, y: secondaryButtonY)
-        levelsButton.alpha = 0
-        panel.addChild(levelsButton)
-
-        let menuButton = UITheme.createButton(
-            text: L10n.Common.menu,
-            color: UITheme.Colors.buttonMenu,
-            width: UITheme.Dimensions.buttonWidthSmall,
-            name: "menuButton"
-        )
-        menuButton.position = CGPoint(x: 67, y: secondaryButtonY)
-        menuButton.alpha = 0
-        panel.addChild(menuButton)
-
-        levelsButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.0),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
-
-        menuButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.1),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
+        return node
     }
+
+    // MARK: - Input
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
+        guard !exit.isTaken, let touch = touches.first else { return }
         let location = touch.location(in: self)
-        let touchedNode = atPoint(location)
 
-        if let nodeName = touchedNode.name ?? touchedNode.parent?.name {
-            switch nodeName {
-            case "retryButton":
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleRetryButton()
-            case "levelsButton":
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleLevelsButton()
-            case "menuButton":
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleMenuButton()
-            default:
-                break
-            }
-        }
-    }
+        guard let button = FilmUI.button(at: location, under: self,
+                                         names: ["retryButton", "levelsButton", "menuButton"]),
+              exit.take() else { return }
+        HapticManager.shared.lightTap()
+        SoundManager.shared.playButtonClickSound(on: self)
 
-    private func handleRetryButton() {
-        // Button press animation
-        if let retryButton = childNode(withName: "//retryButton") as? SKShapeNode {
-            retryButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.restartGame()
-            })
+        let action: () -> Void
+        switch button.name {
+        case "retryButton": action = { [weak self] in self?.restartGame() }
+        case "levelsButton": action = { [weak self] in self?.goToLevelSelect() }
+        default: action = { [weak self] in self?.goToMenu() }
         }
-    }
-
-    private func handleLevelsButton() {
-        // Button press animation
-        if let levelsButton = childNode(withName: "//levelsButton") as? SKShapeNode {
-            levelsButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.goToLevelSelect()
-            })
-        }
-    }
-
-    private func handleMenuButton() {
-        // Button press animation
-        if let menuButton = childNode(withName: "//menuButton") as? SKShapeNode {
-            menuButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.goToMenu()
-            })
-        }
+        button.run(UITheme.createButtonPressAnimation(completion: action))
     }
 
     private func restartGame() {
-        guard let view = view else { return }
-        let gameScene = GameScene(size: view.bounds.size)
-        gameScene.scaleMode = scaleMode
-        gameScene.currentLevel = currentLevel // Restart the same level
-        // RETRY on an endless run starts another endless run, not the campaign.
-        gameScene.isEndless = isEndless
+        exit.present(from: self) { size in
+            let gameScene = GameScene(size: size)
+            gameScene.currentLevel = currentLevel // Restart the same level
+            // RETRY on an endless run starts another endless run, not the campaign.
+            gameScene.isEndless = isEndless
 
-        // Load weapon arsenal from previous level when restarting. Endless always starts
-        // from the default loadout — carrying an arsenal into an unbounded score chase
-        // would make the record depend on campaign progress rather than on the run.
-        if !isEndless, currentLevel > 1 {
-            let weapons = LevelManager.shared.getLevelWeapons(level: currentLevel - 1)
-            gameScene.startingBulletCount = weapons.bulletCount
-            gameScene.startingSideMissileCount = weapons.sideMissileCount
+            // Load weapon arsenal from previous level when restarting. Endless always
+            // starts from the default loadout — carrying an arsenal into an unbounded
+            // score chase would make the record depend on campaign progress rather than
+            // on the run.
+            if !isEndless, currentLevel > 1 {
+                let weapons = LevelManager.shared.getLevelWeapons(level: currentLevel - 1)
+                gameScene.startingBulletCount = weapons.bulletCount
+                gameScene.startingSideMissileCount = weapons.sideMissileCount
+            }
+            return gameScene
         }
-
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(gameScene, transition: transition)
     }
 
     private func goToLevelSelect() {
-        guard let view = view else { return }
-        let levelSelectScene = LevelSelectScene(size: view.bounds.size, startLevel: currentLevel)
-        levelSelectScene.scaleMode = scaleMode
-
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(levelSelectScene, transition: transition)
+        exit.present(from: self) { LevelSelectScene(size: $0, startLevel: currentLevel) }
     }
 
     private func goToMenu() {
-        guard let view = view else { return }
-        let menuScene = MenuScene(size: view.bounds.size)
-        menuScene.scaleMode = scaleMode
-
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(menuScene, transition: transition)
-    }
-
-    // MARK: - Visual Effects
-
-    private func createDefeatIcon() -> SKNode {
-        let container = SKNode()
-
-        // Red circle background
-        let circle = SKShapeNode(circleOfRadius: 35)
-        circle.fillColor = UIColor(red: 0.8, green: 0.15, blue: 0.15, alpha: 1.0)
-        circle.strokeColor = UIColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
-        circle.lineWidth = 4
-        container.addChild(circle)
-
-        // Add inner glow circle
-        let glowCircle = SKShapeNode(circleOfRadius: 32)
-        glowCircle.fillColor = .clear
-        glowCircle.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.5, alpha: 0.5)
-        glowCircle.lineWidth = 6
-        glowCircle.alpha = 0.6
-        container.addChild(glowCircle)
-
-        // Pulse animation for glow
-        glowCircle.run(SKAction.repeatForever(SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 0.8),
-            SKAction.fadeAlpha(to: 0.8, duration: 0.8)
-        ])))
-
-        // Sad face emoji
-        // Left eye
-        let leftEye = SKShapeNode(circleOfRadius: 4)
-        leftEye.fillColor = .white
-        leftEye.strokeColor = .white
-        leftEye.lineWidth = 2
-        leftEye.position = CGPoint(x: -10, y: 6)
-        container.addChild(leftEye)
-
-        // Right eye
-        let rightEye = SKShapeNode(circleOfRadius: 4)
-        rightEye.fillColor = .white
-        rightEye.strokeColor = .white
-        rightEye.lineWidth = 2
-        rightEye.position = CGPoint(x: 10, y: 6)
-        container.addChild(rightEye)
-
-        // Frowning mouth (upward arc, angry expression)
-        let mouthPath = CGMutablePath()
-        mouthPath.move(to: CGPoint(x: -12, y: -10))
-        mouthPath.addQuadCurve(
-            to: CGPoint(x: 12, y: -10),
-            control: CGPoint(x: 0, y: -2)
-        )
-
-        let mouth = SKShapeNode(path: mouthPath)
-        mouth.strokeColor = .white
-        mouth.lineWidth = 3
-        mouth.lineCap = .round
-        container.addChild(mouth)
-
-        return container
-    }
-
-    private func addWarningParticles() {
-        // Red fire effect from bottom
-        let particles = SKEmitterNode()
-
-        particles.particleTexture = ParticleTexture.softCircle(diameter: 32)
-
-        // Fire color sequence: white-hot -> yellow -> orange -> red -> dark
-        let colorSequence = SKKeyframeSequence(keyframeValues: [
-            UIColor(red: 1.0, green: 1.0, blue: 0.8, alpha: 1.0),   // Hot white
-            UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0),   // Yellow
-            UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0),   // Orange
-            UIColor(red: 0.8, green: 0.0, blue: 0.0, alpha: 0.8),   // Red
-            UIColor(red: 0.2, green: 0.0, blue: 0.0, alpha: 0.0)    // Dark fade
-        ], times: [0, 0.2, 0.4, 0.7, 1.0])
-        particles.particleColorSequence = colorSequence
-
-        particles.particleBirthRate = 50
-        particles.particleLifetime = 2.5
-        particles.particleLifetimeRange = 1.0
-        particles.particlePositionRange = CGVector(dx: size.width * 1.2, dy: 10)
-        particles.particleSpeed = 80
-        particles.particleSpeedRange = 40
-        particles.emissionAngle = .pi / 2  // Upward
-        particles.emissionAngleRange = .pi / 6
-        particles.particleAlpha = 0.8
-        particles.particleAlphaSpeed = -0.3
-        particles.particleScale = 0.4
-        particles.particleScaleRange = 0.3
-        particles.particleScaleSpeed = -0.1
-        particles.particleRotation = 0
-        particles.particleRotationSpeed = 3.0
-        particles.particleBlendMode = .add
-        particles.yAcceleration = 20
-        particles.xAcceleration = 0
-        particles.particleColorBlendFactor = 1.0
-        particles.position = CGPoint(x: size.width / 2, y: -20)
-        particles.zPosition = -1
-        particles.name = "warningParticles"
-        addChild(particles)
+        exit.present(from: self) { MenuScene(size: $0) }
     }
 }

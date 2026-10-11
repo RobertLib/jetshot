@@ -6,6 +6,7 @@
 //
 
 import SpriteKit
+import simd
 
 // Asteroid sizes - each splits into smaller ones
 enum AsteroidSize {
@@ -124,33 +125,37 @@ class Asteroid: SKShapeNode {
 
         self.path = path
 
-        // Warm stone rather than neutral charcoal: against a blue-black sky the
-        // old dark greys read as holes punched in the starfield.
-        let baseColor: UIColor
-        let strokeColor: UIColor
-
-        switch asteroidSize {
-        case .large:
-            baseColor = UIColor(red: 0.34, green: 0.30, blue: 0.27, alpha: 1.0)
-            strokeColor = UIColor(red: 0.62, green: 0.56, blue: 0.48, alpha: 1.0)
-        case .medium:
-            baseColor = UIColor(red: 0.36, green: 0.32, blue: 0.29, alpha: 1.0)
-            strokeColor = UIColor(red: 0.65, green: 0.58, blue: 0.50, alpha: 1.0)
-        case .small:
-            baseColor = UIColor(red: 0.39, green: 0.35, blue: 0.31, alpha: 1.0)
-            strokeColor = UIColor(red: 0.68, green: 0.61, blue: 0.53, alpha: 1.0)
-        }
-
-        self.fillColor = baseColor
-        self.strokeColor = strokeColor
-        self.lineWidth = 1.6
+        // The polygon is the physics outline only. What is drawn is a rock in real 3D,
+        // tumbling on its own axis in the films' light-tube wireframe, over a dark body
+        // that keeps the world's lines from showing through it.
+        let strokeColor = Self.rockColor
+        self.fillColor = .clear
+        self.strokeColor = .clear
+        self.lineWidth = 0
         self.glowWidth = 0
 
-        // Shaded stone surface. The ramp tumbles with the rock rather than
-        // staying fixed to the sun — at this size and spin rate it reads as
-        // albedo variation, and it avoids a per-asteroid crop/render pass.
-        SurfaceFX.applyMetal(to: self, tint: baseColor, specular: 0.25)
-        addSurfaceDetail(baseRadius: baseRadius, base: baseColor, rim: strokeColor)
+        let body = SKSpriteNode(texture: WireCanvas.discTexture,
+                                size: CGSize(width: baseRadius * 1.7, height: baseRadius * 1.7))
+        body.color = UIColor(red: 0.03, green: 0.02, blue: 0.02, alpha: 1)
+        body.colorBlendFactor = 1
+        body.alpha = 0.85
+        body.zPosition = -0.5
+        addChild(body)
+
+        let mesh = WireMesh.rock(radius: Float(baseRadius) * 0.92, seed: UInt64.random(in: 0...UInt64.max),
+                                 roughness: 0.34, subdivisions: asteroidSize == .small ? 0 : 1)
+        let axis = simd_normalize(Vec3(Float.random(in: -1...1), Float.random(in: -1...1), Float.random(in: -1...1)) + Vec3(0, 0, 0.01))
+        let tumble = Float.random(in: 0.5...1.1) * Float(asteroidSize.rotationSpeed) * 2
+        let glow = Self.emberColor
+        let rock = WireBody(extent: baseRadius * 1.05, perspective: 4.5, interval: 1.0 / 30,
+                            seed: Float.random(in: 0...50)) { frame in
+            let c = frame.canvas
+            c.glow(.zero, radius: Float(baseRadius) * 0.7, color: glow, alpha: 0.18)
+            c.mesh(mesh, rotation: rotation(frame.t * tumble, axis), color: strokeColor, alpha: 0.78,
+                   width: 1.0, backAlpha: 0.2)
+        }
+        rock.zPosition = 1
+        addChild(rock)
 
         // Position at top or specific position
         if let startPos = startPosition {
@@ -176,44 +181,17 @@ class Asteroid: SKShapeNode {
         )
         self.run(SKAction.repeatForever(rotateAction))
 
-        // Only a faint halo: rock is not a light source, and the old strong glow
-        // was what made asteroids look like glowing voids.
-        GlowHelper.addEnhancedGlow(to: self, color: strokeColor, intensity: 0.22)
+        // Only a faint halo: rock is not a light source.
+        GlowHelper.addEnhancedGlow(to: self, color: strokeColor, intensity: 0.16)
 
         self.name = "asteroid"
         self.zPosition = 10
     }
 
-    /// Craters and a lit edge, so the silhouette reads as stone with volume.
-    private func addSurfaceDetail(baseRadius: CGFloat, base: UIColor, rim: UIColor) {
-        let craterCount = asteroidSize == .small ? 2 : Int.random(in: 3...5)
-
-        for _ in 0..<craterCount {
-            let craterRadius = baseRadius * CGFloat.random(in: 0.11...0.24)
-            let angle = CGFloat.random(in: 0...(.pi * 2))
-            let distance = CGFloat.random(in: 0...(baseRadius * 0.52))
-            let centre = CGPoint(x: cos(angle) * distance, y: sin(angle) * distance)
-
-            let pit = SKShapeNode(circleOfRadius: craterRadius)
-            pit.fillColor = (base.darker(by: 0.10) ?? base).withAlphaComponent(0.85)
-            pit.strokeColor = .clear
-            pit.position = centre
-            pit.zPosition = 1
-            addChild(pit)
-
-            // Lit lip on the sun-facing side of the rim.
-            let lip = SKShapeNode(circleOfRadius: craterRadius)
-            lip.fillColor = .clear
-            lip.strokeColor = rim.withAlphaComponent(0.38)
-            lip.lineWidth = max(0.7, craterRadius * 0.22)
-            lip.position = CGPoint(
-                x: centre.x + cos(SurfaceFX.lightAngle) * craterRadius * 0.22,
-                y: centre.y + sin(SurfaceFX.lightAngle) * craterRadius * 0.22
-            )
-            lip.zPosition = 2
-            addChild(lip)
-        }
-    }
+    /// Sunlit stone, as light: warm enough to tell from every hostile's red and
+    /// every pickup's gold.
+    static let rockColor = UIColor(red: 0.9, green: 0.7, blue: 0.5, alpha: 1)
+    static let emberColor = UIColor(red: 1.0, green: 0.46, blue: 0.22, alpha: 1)
 
     func startMovement(completion: @escaping () -> Void) {
         self.movementCompletion = completion
@@ -273,32 +251,31 @@ class Asteroid: SKShapeNode {
     func createExplosionEffect() {
         guard let scene = gameScene else { return }
 
-        let particleCount = asteroidSize == .small ? 8 : 15
+        // The rock comes apart into lines of itself, tumbling outwards.
+        let count = asteroidSize == .small ? 7 : 12
+        let reach = asteroidSize.baseSize
+        for i in 0..<count {
+            let angle = CGFloat(i) / CGFloat(count) * .pi * 2 + CGFloat.random(in: -0.3...0.3)
+            let length = CGFloat.random(in: 0.25...0.5) * reach
+            let shard = LightSprite.tube(from: CGPoint(x: -length / 2, y: 0), to: CGPoint(x: length / 2, y: 0),
+                                         width: 1.3, color: i % 3 == 0 ? Self.emberColor : Self.rockColor)
+            shard.position = CGPoint(x: position.x + cos(angle) * reach * 0.4, y: position.y + sin(angle) * reach * 0.4)
+            shard.zRotation = CGFloat.random(in: 0...(.pi))
+            shard.zPosition = 5
+            scene.gameContentNode.addChild(shard)
 
-        for _ in 0..<particleCount {
-            let particle = SKShapeNode(circleOfRadius: CGFloat.random(in: 2...4))
-            particle.fillColor = self.fillColor
-            particle.strokeColor = self.strokeColor
-            particle.position = self.position
-            particle.zPosition = 5
-
-            scene.gameContentNode.addChild(particle)
-
-            // Random direction
-            let angle = CGFloat.random(in: 0...(2 * .pi))
-            let speed = CGFloat.random(in: 50...150)
-            let dx = cos(angle) * speed
-            let dy = sin(angle) * speed
-
-            let moveAction = SKAction.moveBy(x: dx, y: dy, duration: 0.5)
-            let fadeAction = SKAction.fadeOut(withDuration: 0.5)
-            let scaleAction = SKAction.scale(to: 0.1, duration: 0.5)
-
-            let group = SKAction.group([moveAction, fadeAction, scaleAction])
-
-            particle.run(group) {
-                particle.removeFromParent()
-            }
+            let speed = CGFloat.random(in: 60...160)
+            let move = SKAction.moveBy(x: cos(angle) * speed * 0.6, y: sin(angle) * speed * 0.6, duration: 0.6)
+            move.timingMode = .easeOut
+            let spin = SKAction.rotate(byAngle: CGFloat.random(in: -6...6), duration: 0.6)
+            shard.run(.sequence([.group([move, spin, .fadeOut(withDuration: 0.6), .scaleX(to: 0.3, duration: 0.6)]),
+                                 .removeFromParent()]))
         }
+        let dust = LightSprite.star(size: reach * 3, color: Self.emberColor)
+        dust.position = position
+        dust.zPosition = 4
+        dust.alpha = 0.6
+        scene.gameContentNode.addChild(dust)
+        dust.run(.sequence([.group([.scale(to: 1.6, duration: 0.4), .fadeOut(withDuration: 0.4)]), .removeFromParent()]))
     }
 }

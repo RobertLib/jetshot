@@ -120,6 +120,9 @@ enum L10n {
         static func page(_ current: Int, of total: Int) -> String {
             String(localized: "levelSelect.page", defaultValue: "Page \(current) / \(total)")
         }
+        static func medals(_ held: Int, of total: Int) -> String {
+            String(localized: "levelSelect.medals", defaultValue: "MEDALS  \(held) / \(total)")
+        }
         static var reset: String {
             String(localized: "levelSelect.reset", defaultValue: "RESET")
         }
@@ -135,6 +138,31 @@ enum L10n {
     }
 
     // MARK: - In-game HUD and overlays
+
+    /// The ten sectors of the campaign's route — the places of the opening film, in
+    /// the order the ship flies through them. See `BackdropLook`.
+    enum Sector {
+        /// "SECTOR 3".
+        static func label(_ number: Int) -> String {
+            String(localized: "sector.label", defaultValue: "SECTOR \(number)")
+        }
+
+        /// The sector's name, 1...10; anything else wraps round the route.
+        static func name(_ number: Int) -> String {
+            switch (max(1, number) - 1) % 10 + 1 {
+            case 1: return String(localized: "sector.1", defaultValue: "END OF AGES")
+            case 2: return String(localized: "sector.2", defaultValue: "DEAD CIVILIZATIONS")
+            case 3: return String(localized: "sector.3", defaultValue: "DIMENSIONAL RIFT")
+            case 4: return String(localized: "sector.4", defaultValue: "QUANTUM BLEED")
+            case 5: return String(localized: "sector.5", defaultValue: "GRAVITY WELLS")
+            case 6: return String(localized: "sector.6", defaultValue: "LAST LIGHT")
+            case 7: return String(localized: "sector.7", defaultValue: "BURNING RUINS")
+            case 8: return String(localized: "sector.8", defaultValue: "THE DEEP RIFT")
+            case 9: return String(localized: "sector.9", defaultValue: "OVERLAPPING DIMENSIONS")
+            default: return String(localized: "sector.10", defaultValue: "EPICENTER OF THE COLLAPSE")
+            }
+        }
+    }
 
     enum HUD {
         static var score: String { Common.score }
@@ -153,14 +181,116 @@ enum L10n {
         static var extremeDanger: String {
             String(localized: "hud.extremeDanger", defaultValue: "EXTREME DANGER")
         }
-        static var boss: String {
-            String(localized: "hud.boss", defaultValue: "⚡ BOSS ⚡")
-        }
         static var heat: String {
             String(localized: "hud.heat", defaultValue: "HEAT")
         }
         static var overheated: String {
             String(localized: "hud.overheated", defaultValue: "OVERHEATED!")
+        }
+        /// The meter's caption, and the banner when it fires.
+        static var overdrive: String {
+            String(localized: "hud.overdrive", defaultValue: "OVERDRIVE")
+        }
+        static var overdriveReady: String {
+            String(localized: "hud.overdriveReady", defaultValue: "OVERDRIVE READY")
+        }
+        /// How to fire it — kept to a few words, it runs under the banner mid-fight.
+        static var overdriveHint: String {
+            String(localized: "hud.overdriveHint", defaultValue: "SECOND FINGER OR DOUBLE TAP")
+        }
+        /// When a full meter fired itself to absorb a hit.
+        static var overdriveSaved: String {
+            String(localized: "hud.overdriveSaved", defaultValue: "OVERDRIVE SAVED YOU")
+        }
+    }
+
+    // MARK: - Bosses
+
+    /// The machine at the end of each level, named on its health bar and in the warning
+    /// that announces it. A later meeting adds a Roman numeral, which needs no
+    /// translation. See `BossArchetype`.
+    enum Boss {
+        static func name(_ archetype: BossArchetype) -> String {
+            switch archetype {
+            case .warden: return String(localized: "boss.warden", defaultValue: "WARDEN")
+            case .mantis: return String(localized: "boss.mantis", defaultValue: "MANTIS")
+            case .gyre: return String(localized: "boss.gyre", defaultValue: "GYRE")
+            case .hive: return String(localized: "boss.hive", defaultValue: "HIVE")
+            case .lancer: return String(localized: "boss.lancer", defaultValue: "LANCER")
+            case .serpent: return String(localized: "boss.serpent", defaultValue: "SERPENT")
+            case .wraith: return String(localized: "boss.wraith", defaultValue: "WRAITH")
+            case .tesseract: return String(localized: "boss.tesseract", defaultValue: "TESSERACT")
+            case .maw: return String(localized: "boss.maw", defaultValue: "MAW")
+            case .heart: return String(localized: "boss.heart", defaultValue: "EPICENTER")
+            }
+        }
+    }
+
+    // MARK: - Medals
+
+    /// The three per-level medals. See `MedalSet` and `MedalRules`.
+    enum Medal {
+        static var untouched: String {
+            String(localized: "medal.untouched", defaultValue: "NO HITS")
+        }
+        static func chain(_ multiplier: Int) -> String {
+            String(localized: "medal.chain", defaultValue: "CHAIN x\(multiplier)")
+        }
+        static func hunter(_ percent: Int) -> String {
+            String(localized: "medal.hunter", defaultValue: "\(percent)% KILLED")
+        }
+        /// The in-level banner when a medal is won mid-run.
+        static var earned: String {
+            String(localized: "medal.earned", defaultValue: "MEDAL EARNED")
+        }
+        /// Caption over a level's medal goals on the intro card.
+        static var goals: String {
+            String(localized: "medal.goals", defaultValue: "MEDALS")
+        }
+        /// Tag over a medal the run just won for the first time.
+        static var new: String {
+            String(localized: "medal.new", defaultValue: "NEW")
+        }
+    }
+
+    // MARK: - Endless perks
+
+    enum Perk {
+        static var title: String {
+            String(localized: "perk.title", defaultValue: "CHOOSE AN UPGRADE")
+        }
+        static func subtitle(round: Int) -> String {
+            String(localized: "perk.subtitle", defaultValue: "BOSS DOWN · ROUND \(round)")
+        }
+
+        static func name(_ perk: EndlessPerk) -> String {
+            switch perk {
+            case .fireRate: return String(localized: "perk.fireRate.name", defaultValue: "FIREPOWER")
+            case .coolant: return String(localized: "perk.coolant.name", defaultValue: "COOLANT")
+            case .capacitor: return String(localized: "perk.capacitor.name", defaultValue: "CAPACITOR")
+            case .longOverdrive: return String(localized: "perk.longOverdrive.name", defaultValue: "SUSTAIN")
+            case .daredevil: return String(localized: "perk.daredevil.name", defaultValue: "DAREDEVIL")
+            case .chainKeeper: return String(localized: "perk.chainKeeper.name", defaultValue: "MOMENTUM")
+            case .armor: return String(localized: "perk.armor.name", defaultValue: "HULL PLATING")
+            case .arsenal: return String(localized: "perk.arsenal.name", defaultValue: "ARMORY")
+            case .roundShield: return String(localized: "perk.roundShield.name", defaultValue: "ROUND SHIELD")
+            case .magnet: return String(localized: "perk.magnet.name", defaultValue: "MAGNET CORE")
+            }
+        }
+
+        static func detail(_ perk: EndlessPerk) -> String {
+            switch perk {
+            case .fireRate: return String(localized: "perk.fireRate.detail", defaultValue: "Your guns fire faster.")
+            case .coolant: return String(localized: "perk.coolant.detail", defaultValue: "Your guns heat up far more slowly.")
+            case .capacitor: return String(localized: "perk.capacitor.detail", defaultValue: "Overdrive charges faster.")
+            case .longOverdrive: return String(localized: "perk.longOverdrive.detail", defaultValue: "Overdrive lasts two seconds longer.")
+            case .daredevil: return String(localized: "perk.daredevil.detail", defaultValue: "A wider graze ring, and grazes pay double.")
+            case .chainKeeper: return String(localized: "perk.chainKeeper.detail", defaultValue: "Your chain holds longer between kills.")
+            case .armor: return String(localized: "perk.armor.detail", defaultValue: "One extra life, right now.")
+            case .arsenal: return String(localized: "perk.arsenal.detail", defaultValue: "One more barrel and one more launcher.")
+            case .roundShield: return String(localized: "perk.roundShield.detail", defaultValue: "Every round starts behind a shield.")
+            case .magnet: return String(localized: "perk.magnet.detail", defaultValue: "Coins fly to you for the rest of the run.")
+            }
         }
     }
 
@@ -169,9 +299,6 @@ enum L10n {
     enum Pause {
         static var title: String {
             String(localized: "pause.title", defaultValue: "PAUSED")
-        }
-        static func level(_ number: Int) -> String {
-            String(localized: "pause.level", defaultValue: "Level \(number)")
         }
         static var resume: String {
             String(localized: "pause.resume", defaultValue: "RESUME")
@@ -239,6 +366,12 @@ enum L10n {
         static var slowMotion: String {
             String(localized: "powerUp.slowMotion", defaultValue: "SLOW MOTION")
         }
+        /// The countdown bar's caption. The bar's caption space is narrow, and the pickup
+        /// banner's Czech "ZPOMALENÍ ČASU" overruns it by a fifth; every other power-up's
+        /// bar uses its banner wording as is. See `PowerUpTimerHUD.labelWidth`.
+        static var slowMotionShort: String {
+            String(localized: "powerUp.slowMotionShort", defaultValue: "SLOW MO")
+        }
         static var freezeBomb: String {
             String(localized: "powerUp.freezeBomb", defaultValue: "FREEZE BOMB")
         }
@@ -280,6 +413,9 @@ enum L10n {
         static func bestChain(length: Int, multiplier: Int) -> String {
             String(localized: "levelComplete.bestChain", defaultValue: "BEST CHAIN  \(length)  ·  x\(multiplier)")
         }
+        static func grazes(_ count: Int) -> String {
+            String(localized: "levelComplete.grazes", defaultValue: "GRAZES  \(count)")
+        }
         static var next: String {
             String(localized: "levelComplete.next", defaultValue: "NEXT")
         }
@@ -306,7 +442,7 @@ enum L10n {
 
     enum Completion {
         static var title: String {
-            String(localized: "completion.title", defaultValue: "🎉 VICTORY! 🎉")
+            String(localized: "completion.title", defaultValue: "VICTORY")
         }
         static var congratulations: String {
             String(localized: "completion.congratulations", defaultValue: "Congratulations!")
@@ -318,27 +454,35 @@ enum L10n {
             String(localized: "completion.thanks", defaultValue: "Thank you for playing!")
         }
         static var totalScore: String {
-            String(localized: "completion.totalScore", defaultValue: "Total Score:")
+            String(localized: "completion.totalScore", defaultValue: "TOTAL SCORE")
         }
         static var playAgain: String {
             String(localized: "completion.playAgain", defaultValue: "PLAY AGAIN")
         }
     }
 
-    // MARK: - Story crawls
+    // MARK: - Story films
 
-    /// The opening and ending crawls.
+    /// The narration of the opening and ending films.
     ///
-    /// Each paragraph is its own key rather than one blob with embedded newlines:
-    /// `StoryScene` lays the paragraphs out one at a time, measuring each label's
-    /// wrapped height to place the next, and a translator working paragraph-by-paragraph
-    /// cannot accidentally destroy that structure by reflowing a single long string.
-    ///
-    /// The empty strings that space the crawl out are not translated — they are layout,
-    /// and `storyParagraphs(for:)` re-inserts them around the localized text.
+    /// Each paragraph is its own key rather than one blob with embedded newlines: each
+    /// is tied to a shot of the film (`StoryOpening`, `StoryEnding`), and `StoryScene`
+    /// splits it into sentences for the subtitles. A translator working
+    /// paragraph-by-paragraph keeps the narration in step with the picture; reflowing
+    /// one long string would not.
     enum Story {
         static var skipHint: String {
             String(localized: "story.skipHint", defaultValue: "Tap anywhere to skip")
+        }
+
+        /// The ship's name, as the HUD tags it when the opening introduces it.
+        static var shipName: String {
+            String(localized: "story.shipName", defaultValue: "SINGULARITY-7")
+        }
+
+        /// The protocol, as the HUD tags it in both films.
+        static var protocolName: String {
+            String(localized: "story.protocolName", defaultValue: "PROTOCOL: BIG BANG ZERO")
         }
 
         static var openingTitle: String {
@@ -377,8 +521,8 @@ enum L10n {
                 String(localized: "story.ending.p8", defaultValue: "Perhaps someday, billions of years in the future, when this new universe grows and matures, someone will ask:"),
                 String(localized: "story.ending.p9", defaultValue: "\"How did it all begin?\""),
                 String(localized: "story.ending.p10", defaultValue: "And the answer will be hidden in the quantum foam of space, the story of a pilot who risked everything to give life a new chance."),
-                // Not translated: a symbol, and the one line of the crawl that is the
-                // same in every language.
+                // Not translated: a symbol, the same in every language. The ending
+                // film draws it rather than captioning it — see `StoryEnding.infinity`.
                 "∞",
                 String(localized: "story.ending.p11", defaultValue: "Thank you for playing!"),
                 String(localized: "story.ending.p12", defaultValue: "You saved not only the universe,"),

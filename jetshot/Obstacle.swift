@@ -260,27 +260,21 @@ class Obstacle: SKNode {
                 for col in 0..<blocksPerRow {
                     let block = SKShapeNode(rectOf: CGSize(width: blockSize, height: blockSize), cornerRadius: 3)
 
-                    // Slight color variation for visual interest
-                    let variation = CGFloat.random(in: -0.05...0.05)
-                    if let components = type.color.cgColor.components, components.count >= 3 {
-                        block.fillColor = UIColor(
-                            red: components[0] + variation,
-                            green: components[1] + variation,
-                            blue: components[2] + variation,
-                            alpha: 1.0
-                        )
-                    } else {
-                        block.fillColor = type.color
-                    }
-                    block.strokeColor = type.strokeColor
-                    block.lineWidth = 1.5
+                    // Glass bricks in a lit edge; a slight variation in the glass so the
+                    // wall reads as built from pieces, which is what it is.
+                    let variation = CGFloat.random(in: 0.8...1.25)
+                    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                    Enemy.glass(type.color).getRed(&r, green: &g, blue: &b, alpha: &a)
+                    block.fillColor = UIColor(red: r * variation, green: g * variation, blue: b * variation, alpha: a)
+                    block.strokeColor = Self.lightColor(for: type)
+                    block.lineWidth = 1.2
 
                     let x = startX + CGFloat(col) * (blockSize + blockSpacing) + blockSize / 2
                     let y = startY + CGFloat(row) * (blockSize + blockSpacing) + blockSize / 2
                     block.position = CGPoint(x: x, y: y)
 
                     // Add subtle glow to each block
-                    GlowHelper.addEnhancedGlow(to: block, color: type.color, intensity: 0.4)
+                    GlowHelper.addEnhancedGlow(to: block, color: Self.lightColor(for: type), intensity: 0.3)
 
                     // Physics for each block - IMPORTANT: Set all physics properties
                     block.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: blockSize, height: blockSize))
@@ -509,31 +503,61 @@ class Obstacle: SKNode {
 
         addChild(bodyNode)
 
-        // Shared industrial finish, so every obstacle type reads as lit hardware
-        // instead of a flat silhouette.
+        // Shared hard-light finish, so every obstacle reads as a constructed barrier
+        // of light, the way the world around it is drawn.
         if type != .destructibleWall {
-            applyIndustrialFinish()
-            GlowHelper.addEnhancedGlow(to: bodyNode, color: type.color, intensity: 0.55)
+            applyHardLightFinish()
+            GlowHelper.addEnhancedGlow(to: bodyNode, color: Self.lightColor(for: type), intensity: 0.5)
         }
     }
 
-    /// Lit metal, hazard markings and an edge highlight.
-    private func applyIndustrialFinish() {
-        let size = type.size
+    /// A type's colour pushed to full brightness: the colour of its edges.
+    static func lightColor(for type: ObstacleType) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        type.strokeColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let m = max(r, g, b, 0.01)
+        // Pushed apart from grey as well as up, or the pale types all read as white.
+        func lift(_ c: CGFloat) -> CGFloat { min(1, pow(c / m, 1.6)) }
+        return UIColor(red: lift(r), green: lift(g), blue: lift(b), alpha: 1)
+    }
 
-        // Only shade shapes that are actually filled; wireframe types (the ring)
-        // would just get muddied by a fill texture.
+    /// Dark glass inside a lit edge and a second, finer contour; slabs carry caution
+    /// stripes in light and a running beacon.
+    private func applyHardLightFinish() {
+        let size = type.size
+        let light = Self.lightColor(for: type)
+
+        // Only glaze shapes that are actually filled; wireframe types (the ring)
+        // stay open.
         if bodyNode.fillColor.cgColor.alpha > 0.05 {
-            SurfaceFX.applyMetal(to: bodyNode, tint: type.color)
+            bodyNode.fillColor = Enemy.glass(type.color)
         }
-        SurfaceFX.addEdgeHighlight(to: bodyNode)
+        bodyNode.strokeColor = light
+        bodyNode.lineWidth = min(bodyNode.lineWidth, 2.6)
+
+        if let path = bodyNode.path {
+            let box = path.boundingBoxOfPath
+            if box.width > 12, box.height > 12 {
+                var inset = CGAffineTransform(scaleX: (box.width - 8) / box.width, y: (box.height - 8) / box.height)
+                if let inner = path.copy(using: &inset) {
+                    let contour = SKShapeNode(path: inner)
+                    contour.fillColor = .clear
+                    contour.strokeColor = light.withAlphaComponent(0.4)
+                    contour.lineWidth = 1
+                    contour.blendMode = .add
+                    contour.zPosition = 2
+                    bodyNode.addChild(contour)
+                }
+            }
+        }
 
         // Plain slab-shaped hazards get caution stripes and a running light;
         // the shaped types (spinner, blades, hexagons) already read as dangerous.
         switch type {
         case .wall, .movingWall, .horizontalWall, .zigzagWall:
-            let stripes = SurfaceFX.hazardStripes(size: size, cornerRadius: 6)
-            stripes.alpha = 0.65
+            let stripes = SurfaceFX.hazardStripes(size: size, cornerRadius: 6, alpha: 0.42, stripeWidth: 3)
+            (stripes as? SKSpriteNode)?.blendMode = .add
+            stripes.alpha = 0.8
             bodyNode.addChild(stripes)
 
             let isVertical = size.height >= size.width
@@ -797,28 +821,16 @@ class Obstacle: SKNode {
     }
 
     private func createBlockExplosion(at position: CGPoint, in parent: SKNode) {
-        // Create small particle effect for block destruction
-        for _ in 0..<6 {
-            let particle = SKShapeNode(rectOf: CGSize(width: 4, height: 4))
-            particle.fillColor = type.color
-            particle.strokeColor = .clear
-            particle.position = position
-            particle.zPosition = 20
-
-            parent.addChild(particle)
-
-            let angle = CGFloat.random(in: 0...(2 * .pi))
-            let speed = CGFloat.random(in: 20...40)
-            let dx = cos(angle) * speed
-            let dy = sin(angle) * speed
-
-            let move = SKAction.moveBy(x: dx, y: dy, duration: 0.3)
-            let fadeOut = SKAction.fadeOut(withDuration: 0.3)
-            let scale = SKAction.scale(to: 0, duration: 0.3)
-            let group = SKAction.group([move, fadeOut, scale])
-            let remove = SKAction.removeFromParent()
-
-            particle.run(SKAction.sequence([group, remove]))
-        }
+        // The brick comes apart along its own edges, like everything else that breaks.
+        let half = blockSize / 2
+        let outline = CGPath(rect: CGRect(x: -half, y: -half, width: blockSize, height: blockSize), transform: nil)
+        let pieces = ExplosionFX.shatter(path: outline, color: Self.lightColor(for: type), at: position)
+        pieces.zPosition = 20
+        parent.addChild(pieces)
+        let flash = LightSprite.star(size: 36, color: Self.lightColor(for: type))
+        flash.position = position
+        flash.zPosition = 20
+        parent.addChild(flash)
+        flash.run(.sequence([.group([.scale(to: 1.5, duration: 0.2), .fadeOut(withDuration: 0.2)]), .removeFromParent()]))
     }
 }

@@ -2,13 +2,11 @@
 //  SurfaceFX.swift
 //  jetshot
 //
-//  Reusable surface treatments for solid objects: lit metal, hazard markings
-//  and edge highlights.
+//  Markings for hard-light hardware: caution stripes and running lights.
 //
-//  Flat `fillColor` is what made hardware read as plastic. These helpers produce
-//  cached grayscale ramps meant to be used as `SKShapeNode.fillTexture`, which
-//  SpriteKit multiplies with `fillColor` — so one texture shades every hull
-//  colour in the game.
+//  This used to shade hulls as lit metal, with a cached ramp for a fill texture
+//  and a highlighted edge. Everything solid is now dark glass under a lit edge,
+//  the way the story films draw it, and only the markings remain.
 //
 
 import SpriteKit
@@ -19,109 +17,6 @@ enum SurfaceFX {
 
     static func clearCaches() {
         textureCache.removeAll()
-    }
-
-    /// The scene's shared light direction, matching `PlanetHelper`: upper-left.
-    /// Consistency across planets, hulls and hardware is what makes a set of
-    /// unrelated vector shapes look like one world.
-    static let lightAngle: CGFloat = .pi * 0.75
-
-    // MARK: - Lit metal
-
-    /// Diagonal brightness ramp with a specular band, for use as a fill texture.
-    ///
-    /// Grayscale on purpose: multiplied by the node's `fillColor` it shades any
-    /// hue, so a single cached texture serves every obstacle and hull.
-    static func metalTexture(specular: CGFloat = 1.0) -> SKTexture {
-        let key = "metal|\(Int(specular * 100))"
-        if let cached = textureCache[key] { return cached }
-
-        let side: CGFloat = 128
-        let format = UIGraphicsImageRendererFormat.preferred()
-        format.opaque = true
-
-        let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
-            let cg = ctx.cgContext
-
-            // Base ramp: lit at the upper-left, falling into shadow bottom-right.
-            let stops: [(CGFloat, CGFloat)] = [
-                (0.0,  1.00),
-                (0.28, 0.82),
-                (0.55, 0.62),
-                (0.80, 0.46),
-                (1.0,  0.38)
-            ]
-            let colors = stops.map { UIColor(white: $0.1, alpha: 1.0).cgColor } as CFArray
-            if let gradient = CGGradient(
-                colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                colors: colors,
-                locations: stops.map { $0.0 }
-            ) {
-                cg.drawLinearGradient(
-                    gradient,
-                    start: .zero,
-                    end: CGPoint(x: side, y: side),
-                    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-                )
-            }
-
-            // Specular band across the lit third — the cue that reads as "metal"
-            // rather than "coloured paper".
-            if specular > 0 {
-                cg.saveGState()
-                cg.setBlendMode(.screen)
-                let bandStops: [(CGFloat, CGFloat)] = [(0.0, 0.0), (0.5, 0.32 * specular), (1.0, 0.0)]
-                if let band = CGGradient(
-                    colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                    colors: bandStops.map { UIColor(white: 1.0, alpha: $0.1).cgColor } as CFArray,
-                    locations: bandStops.map { $0.0 }
-                ) {
-                    cg.drawLinearGradient(
-                        band,
-                        start: CGPoint(x: side * 0.02, y: side * 0.24),
-                        end: CGPoint(x: side * 0.42, y: side * 0.64),
-                        options: []
-                    )
-                }
-                cg.restoreGState()
-            }
-        }
-
-        let texture = SKTexture(image: image)
-        texture.filteringMode = .linear
-        textureCache[key] = texture
-        return texture
-    }
-
-    /// Applies the lit-metal look to a shape, preserving its hue.
-    static func applyMetal(to node: SKShapeNode, tint: UIColor, specular: CGFloat = 1.0) {
-        node.fillTexture = metalTexture(specular: specular)
-        // Brightened, because the ramp darkens most of the surface.
-        node.fillColor = tint.lighter(by: 0.30) ?? tint
-    }
-
-    // MARK: - Edge highlight
-
-    /// Thin bright inline offset toward the light, so silhouettes read as solid
-    /// panels catching a sun rather than as filled outlines.
-    static func addEdgeHighlight(
-        to node: SKShapeNode,
-        color: UIColor = .white,
-        alpha: CGFloat = 0.34,
-        lineWidth: CGFloat = 1.4,
-        offset: CGFloat = 1.2
-    ) {
-        guard let path = node.path else { return }
-
-        let highlight = SKShapeNode(path: path)
-        highlight.name = "edgeHighlight"
-        highlight.fillColor = .clear
-        highlight.strokeColor = color.withAlphaComponent(alpha)
-        highlight.lineWidth = lineWidth
-        highlight.position = CGPoint(x: cos(lightAngle) * offset, y: sin(lightAngle) * offset)
-        highlight.zPosition = 3
-        highlight.blendMode = .add
-        node.addChild(highlight)
     }
 
     // MARK: - Hazard markings

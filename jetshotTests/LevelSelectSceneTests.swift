@@ -19,8 +19,9 @@ import SpriteKit
 @MainActor
 final class LevelSelectSceneTests: XCTestCase {
 
-    /// Mirrors `LevelSelectScene.levelsPerPage`, which is private.
-    private let levelsPerPage = 12
+    /// Two sectors of five. Read from the scene rather than restated, so the page
+    /// arithmetic below follows it if a page is ever cut differently.
+    private let levelsPerPage = LevelSelectScene.levelsPerPage
 
     private func presentGrid(_ harness: GameplayHarness, startLevel: Int? = nil) -> LevelSelectScene {
         let scene = LevelSelectScene(size: harness.view.bounds.size, startLevel: startLevel)
@@ -35,7 +36,7 @@ final class LevelSelectSceneTests: XCTestCase {
 
     // MARK: - Page arithmetic
 
-    func testTheFirstPageShowsTheFirstTwelveLevels() {
+    func testTheFirstPageShowsTheFirstTwoSectors() {
         let harness = GameplayHarness()
         defer { harness.teardown() }
 
@@ -45,7 +46,7 @@ final class LevelSelectSceneTests: XCTestCase {
             for level in 1...levelsPerPage {
                 XCTAssertNotNil(button(level, in: scene), "level \(level) is missing from the first page")
             }
-            XCTAssertNil(button(levelsPerPage + 1, in: scene), "the first page spilled past its 12 levels")
+            XCTAssertNil(button(levelsPerPage + 1, in: scene), "the first page spilled past its \(levelsPerPage) levels")
         }
     }
 
@@ -76,8 +77,8 @@ final class LevelSelectSceneTests: XCTestCase {
         }
     }
 
-    /// The final page is short — 50 levels over pages of 12 — so it must stop at the last
-    /// real level rather than rendering buttons for levels that do not exist.
+    /// The final page must stop at the last real level rather than rendering buttons for
+    /// levels that do not exist.
     func testTheLastPageStopsAtTheFinalLevel() {
         let harness = GameplayHarness()
         defer { harness.teardown() }
@@ -211,6 +212,146 @@ final class LevelSelectSceneTests: XCTestCase {
         }
     }
 
+    /// A second tap mid-refusal used to read the padlock's colour while the first flash
+    /// still had it red, and restore *that* — so a quick double-tap left it red for good.
+    func testRepeatedTapsOnALockedTileLeaveItsPadlockAtRest() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        withCleanProgress {
+            let scene = presentGrid(harness)
+            guard let locked = button(5, in: scene),
+                  let padlock = locked.childNode(withName: "padlock") as? SKShapeNode else {
+                return XCTFail("level 5 is missing, or has no padlock")
+            }
+            let rest = rgba(padlock.strokeColor)
+
+            tap(locked, in: scene)
+            harness.spin(0.1)
+            tap(locked, in: scene)
+            harness.spin(0.8)
+
+            let after = rgba(padlock.strokeColor)
+            for (channel, (a, b)) in zip(["red", "green", "blue", "alpha"], zip(rest, after)) {
+                XCTAssertEqual(a, b, accuracy: 0.01, "the padlock's \(channel) did not return to rest after two quick taps")
+            }
+            XCTAssertEqual(locked.zRotation, 0, accuracy: 0.001, "the refusal shake did not settle back to level")
+        }
+    }
+
+    // MARK: - Reset confirmation
+
+    /// The dialog owns every touch until it has *gone*, not just until it starts to fade.
+    /// Dismissing used to switch it off at once while it stayed on screen for 0.2s, and
+    /// the grid behind is hit-tested through any scrim — so the second tap of a
+    /// double-tap on NO started the level under the button, and a swipe paged the grid.
+    func testTheResetDialogStaysModalUntilItHasGone() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        withCleanProgress {
+            for level in 1...6 {
+                LevelManager.shared.completeLevel(level, score: 100)
+            }
+            let scene = presentGrid(harness)
+            scene.debugShowResetDialog()
+            harness.spin(0.4)
+
+            guard let no = scene.childNode(withName: "//confirmNo"),
+                  let open = button(7, in: scene),
+                  let locked = button(9, in: scene) else {
+                return XCTFail("the dialog or the tiles under it did not build")
+            }
+
+            tap(no, in: scene)
+
+            // Mid-fade: an unlocked tile, a locked one and a swipe all have to be ignored.
+            tap(open, in: scene)
+            tap(locked, in: scene)
+            swipe(from: CGPoint(x: scene.size.width * 0.8, y: scene.size.height / 2),
+                  to: CGPoint(x: scene.size.width * 0.2, y: scene.size.height / 2), in: scene)
+            harness.spin(0.08)
+
+            XCTAssertEqual(open.xScale, 1, accuracy: 0.01, "a tap through the closing dialog pressed level 7")
+            XCTAssertEqual(locked.zRotation, 0, accuracy: 0.001, "a tap through the closing dialog reached level 9")
+
+            harness.spin(0.6)
+            XCTAssertNil(scene.childNode(withName: "//confirmationDialog"), "NO did not close the dialog")
+            XCTAssertNotNil(button(1, in: scene), "a swipe through the closing dialog paged the grid")
+            XCTAssertNil(button(levelsPerPage + 1, in: scene), "a swipe through the closing dialog paged the grid")
+
+            // And once it has gone, the grid answers again.
+            tap(locked, in: scene)
+            harness.spin(0.08)
+            XCTAssertGreaterThan(abs(locked.zRotation), 0.001, "the grid stayed locked after the dialog had gone")
+        }
+    }
+
+    /// After YES the dialog stays modal until the grid has been rebuilt on the cleared
+    /// progress, so the stale tiles — still showing levels as open — cannot be reached.
+    func testAfterYesTheGridAnswersOnlyOnceRebuiltOnTheClearedProgress() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        withCleanProgress {
+            for level in 1...6 {
+                LevelManager.shared.completeLevel(level, score: 100)
+            }
+            let scene = presentGrid(harness)
+            scene.debugShowResetDialog()
+            harness.spin(0.4)
+
+            guard let yes = scene.childNode(withName: "//confirmYes"),
+                  let stale = button(1, in: scene) else {
+                return XCTFail("the dialog or the tiles under it did not build")
+            }
+
+            tap(yes, in: scene)
+            tap(stale, in: scene)
+            harness.spin(0.08)
+            XCTAssertEqual(stale.xScale, 1, accuracy: 0.01, "a tap reached the stale grid behind the closing dialog")
+
+            harness.spin(0.6)
+            XCTAssertFalse(LevelManager.shared.isLevelUnlocked(3), "YES did not clear the progress")
+            guard let rebuilt = button(3, in: scene) else {
+                return XCTFail("the grid was not rebuilt after the reset")
+            }
+            XCTAssertNotNil(rebuilt.childNode(withName: "padlock"), "the rebuilt grid still shows level 3 as open")
+
+            tap(rebuilt, in: scene)
+            harness.spin(0.08)
+            XCTAssertGreaterThan(abs(rebuilt.zRotation), 0.001, "the rebuilt grid does not answer taps")
+        }
+    }
+
+    /// The YES / NO pair is cut from the dialog's width. At the fixed half-column width
+    /// it came to 280pt, which overran the 272pt dialog a 320pt-wide screen gets — an
+    /// SE or a mini with Display Zoom on.
+    func testTheResetDialogsButtonsFitInsideItOnANarrowScreen() {
+        let harness = GameplayHarness(size: CGSize(width: 320, height: 568))
+        defer { harness.teardown() }
+
+        withCleanProgress {
+            let scene = presentGrid(harness)
+            scene.debugShowResetDialog()
+            harness.spin(0.4)
+
+            guard let glass = scene.childNode(withName: "//confirmationGlass") as? SKSpriteNode,
+                  let no = scene.childNode(withName: "//confirmNo") as? SKShapeNode,
+                  let yes = scene.childNode(withName: "//confirmYes") as? SKShapeNode,
+                  let noBox = no.path?.boundingBoxOfPath,
+                  let yesBox = yes.path?.boundingBoxOfPath else {
+                return XCTFail("the dialog did not build")
+            }
+
+            // All in the dialog's own points: the glass and the buttons share a parent.
+            let half = glass.size.width / 2
+            XCTAssertGreaterThanOrEqual(no.position.x + noBox.minX, -half, "NO pokes out of the dialog's left edge")
+            XCTAssertLessThanOrEqual(yes.position.x + yesBox.maxX, half, "YES pokes out of the dialog's right edge")
+            XCTAssertLessThan(no.position.x + noBox.maxX, yes.position.x + yesBox.minX, "NO and YES overlap")
+        }
+    }
+
     // MARK: - Helpers
 
     /// A tap is `touchesBegan` then `touchesEnded` at the same point: no movement keeps
@@ -220,5 +361,18 @@ final class LevelSelectSceneTests: XCTestCase {
         let point = node.parent?.convert(node.position, to: scene) ?? node.position
         scene.touchesBegan([HarnessTouch(point)], with: nil)
         scene.touchesEnded([HarnessTouch(point)], with: nil)
+    }
+
+    /// A fast horizontal flick: both ends share a zero timestamp, well inside the swipe's
+    /// time limit.
+    private func swipe(from start: CGPoint, to end: CGPoint, in scene: SKScene) {
+        scene.touchesBegan([HarnessTouch(start)], with: nil)
+        scene.touchesEnded([HarnessTouch(end)], with: nil)
+    }
+
+    private func rgba(_ color: UIColor) -> [CGFloat] {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return [r, g, b, a]
     }
 }

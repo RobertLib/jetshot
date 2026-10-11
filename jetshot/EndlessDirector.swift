@@ -56,8 +56,12 @@ nonisolated enum EndlessRules {
     /// The floor is `GameConfiguration.minSpawnInterval`, the same one the campaign's
     /// pacing pass respects, so an endless wave can never clump tighter than a level 50
     /// wave can.
+    ///
+    /// Opens at 0.83 s rather than the original 1.12: the first rounds were the slowest
+    /// stretch of the whole mode, and with enemies now soaking a few rounds each and the
+    /// guns firing a stream, round one emptied faster than it filled.
     static func spawnInterval(forRound round: Int) -> TimeInterval {
-        return max(GameConfiguration.minSpawnInterval, 1.15 - 0.03 * TimeInterval(round))
+        return max(GameConfiguration.minSpawnInterval, 0.85 - 0.025 * TimeInterval(round))
     }
 
     /// Every third round closes on a formation, for the same reason the campaign's levels

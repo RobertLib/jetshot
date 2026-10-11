@@ -152,6 +152,45 @@ class EnemyManager {
         enemy.startMovement {
             // Enemy left the screen - no action needed
         }
+
+        spawnWingman(for: enemy, in: parentNode, gameScene: gameScene)
+    }
+
+    /// Types that may fly in pairs: the line fighters, whose behaviour is a path from
+    /// wherever they spawn. Not the set-pieces (turrets, mines, the vortex, the tank),
+    /// which are meant to be met one at a time, and not flankers, whose entry side is
+    /// baked into their heading.
+    private static func canFlyInPairs(_ type: EnemyType) -> Bool {
+        switch type {
+        case .basic, .fast, .zigzag, .kamikaze, .formation, .sniper, .striker,
+             .scout, .eliteGuard, .bomber, .ghost, .splitter, .bouncer, .teleporter, .heavy:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Possibly sends a second enemy of the same type down the mirrored lane. See
+    /// `CombatRules.wingmanChance(forLevel:)`.
+    private func spawnWingman(for lead: Enemy, in parentNode: SKNode, gameScene: GameScene?) {
+        guard let scene = scene, Self.canFlyInPairs(lead.enemyType) else { return }
+        let level = gameScene?.enemyHealthLevel ?? 1
+        guard Double.random(in: 0..<1) < CombatRules.wingmanChance(forLevel: level) else { return }
+
+        let width = scene.size.width
+        var x = width - lead.position.x
+        // A lead near the centre line would mirror onto itself: fly alongside instead.
+        if abs(x - lead.position.x) < 70 {
+            x = lead.position.x + (lead.position.x < width / 2 ? 80 : -80)
+        }
+        x = min(max(x, 30), width - 30)
+
+        let wingman = Enemy(sceneSize: scene.size, scene: scene, type: lead.enemyType)
+        wingman.position = CGPoint(x: x, y: lead.position.y)
+        parentNode.addChild(wingman)
+        gameScene?.registerEnemy(wingman)
+        wingman.startMovement {}
+        totalEnemiesSpawned += 1
     }
 
     func areAllWavesSpawned() -> Bool {

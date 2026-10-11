@@ -116,14 +116,46 @@ class LevelManager {
 
     // Reset all progress (for testing)
     func resetProgress() {
-        cloudStorage.removeObject(forKey: completedLevelsKey)
-        cloudStorage.removeObject(forKey: levelScoresKey)
-        cloudStorage.removeObject(forKey: levelStarsKey)
-        cloudStorage.removeObject(forKey: levelWeaponsKey)
-        cloudStorage.removeObject(forKey: CloudStorageManager.Keys.endlessRecords)
+        // Every progress key, in both stores, and a new reset epoch with it: clearing
+        // the keys alone was undone by the next iCloud merge with any other device that
+        // still held the old progress. See `CloudStorageManager.Keys.progressEpoch`.
+        cloudStorage.resetProgress()
 
         // A full reset should feel like a fresh install, so the intro plays again.
         hasSeenOpeningStory = false
+    }
+
+    // MARK: - Medals
+
+    /// Medals earned on `level` across every run, on every device.
+    func getLevelMedals(level: Int) -> MedalSet {
+        let medals = cloudStorage.loadDictionary(forKey: CloudStorageManager.Keys.levelMedals) as? [String: Int] ?? [:]
+        return MedalSet(rawValue: medals["\(level)"] ?? 0)
+    }
+
+    /// Medals held across the whole campaign, for the level select's tally.
+    func getTotalMedalCount() -> Int {
+        let medals = cloudStorage.loadDictionary(forKey: CloudStorageManager.Keys.levelMedals) as? [String: Int] ?? [:]
+        return medals.values.reduce(0) { $0 + MedalSet(rawValue: $1).intersection(.all).count }
+    }
+
+    /// Adds a run's medals to the level's record and reports which ones are new.
+    ///
+    /// A union, never a replacement: a run that earned only the chain medal must not
+    /// take away the no-hit medal an earlier run won. Read-modify-write through `mutate`
+    /// for the reason `completeLevel` documents.
+    @discardableResult
+    func recordMedals(_ earned: MedalSet, level: Int) -> MedalSet {
+        let previous = getLevelMedals(level: level)
+        let newlyEarned = earned.subtracting(previous)
+        guard !newlyEarned.isEmpty else { return [] }
+
+        cloudStorage.mutate(dictionary: CloudStorageManager.Keys.levelMedals) { current in
+            var medals = current as? [String: Int] ?? [:]
+            medals["\(level)"] = (medals["\(level)"] ?? 0) | earned.rawValue
+            return medals
+        }
+        return newlyEarned
     }
 
     // MARK: - Endless Records

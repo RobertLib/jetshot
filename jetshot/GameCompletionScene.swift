@@ -9,15 +9,13 @@ import SpriteKit
 
 class GameCompletionScene: SKScene {
 
-    /// Shared vertical rhythm for the results panels. See `UITheme.PanelRhythm`.
+    /// Shared vertical rhythm for the results screens. See `UITheme.PanelRhythm`.
     private typealias Rhythm = UITheme.PanelRhythm
-
-    /// How far the figure block rises during its entrance. It starts this far below
-    /// its laid-out position and ends exactly on it.
-    private static let figuresRise: CGFloat = 10
 
     private let totalScore: Int
     private var isInitialized = false
+    /// Every button here leaves the screen, once. See `FilmUI.Exit`.
+    private let exit = FilmUI.Exit()
 
     init(size: CGSize, totalScore: Int) {
         self.totalScore = totalScore
@@ -28,14 +26,14 @@ class GameCompletionScene: SKScene {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// The victory screen, shown once the ending crawl has played.
+    /// The victory screen, shown once the ending film has played.
     ///
     /// `didMove(to:)` used to immediately present `StoryScene(type: .ending)` and return,
     /// which left this entire scene unreachable: `setupUI()` is only called from
     /// `didChangeSize`, and that is gated on `isInitialized`, which nothing ever set.
     /// So the trophy, the total score and all three buttons never rendered, and beating
     /// level 50 dropped the player from the crawl straight back to the level select.
-    /// The crawl now runs *before* this scene — see `LevelCompleteScene` and
+    /// The ending film now runs *before* this scene — see `LevelCompleteScene` and
     /// `StoryScene`'s `.ending` case — and this is the terminal screen.
     override func didMove(to view: SKView) {
         backgroundColor = UITheme.Colors.sceneBackground
@@ -48,6 +46,10 @@ class GameCompletionScene: SKScene {
     override func didChangeSize(_ oldSize: CGSize) {
         // Only handle resize after initial setup
         guard isInitialized else { return }
+        // Not while leaving: the rebuild would take the pressed button, and the press
+        // animation whose completion is the way out, with it — stranding the screen with
+        // its input already switched off.
+        guard !exit.isTaken else { return }
 
         // Remove and recreate all elements
         removeAllChildren()
@@ -55,11 +57,8 @@ class GameCompletionScene: SKScene {
     }
 
     private func buildScene() {
-        StarfieldHelper.addDepthLayers(to: self)
-        addChild(StarfieldHelper.createStarfield(for: self))
+        GameBackdrop.attachAmbient(to: self, look: BackdropLook(theme: .epicentre, variant: 0)).pulse()
         NeonFX.attachGrade(to: self, zPosition: -5)
-        addChild(StarfieldHelper.createShootingStars(for: self))
-        addChild(StarfieldHelper.createMeteors(for: self))
         setupUI()
     }
 
@@ -70,199 +69,69 @@ class GameCompletionScene: SKScene {
     }
 
     private func setupUI() {
-        // Epic celebration particles
-        addEpicCelebrationParticles()
+        addCelebration()
+        let card = ResultsCard(sceneWidth: size.width)
+        let gold = StoryPalette.gold
 
-        // Main panel
-        let panelWidth: CGFloat = min(size.width - 60, UITheme.Dimensions.panelWidthMax)
+        // The ending film's own title, carried over as the tag: this screen is its last
+        // frame.
+        let tag = card.tag(L10n.Story.endingTitle, color: StoryPalette.mix(gold, .white, 0.3), delay: 0.2)
+        card.add(tag, gapAbove: Rhythm.edge, height: 14, reveal: false)
 
-        // Measured before the panel exists, so the panel is sized to its content — see
-        // `UITheme.PanelStack`. The fixed 520 this replaces was picked against the
-        // English copy, and the two body blocks below wrap to a different number of
-        // lines in every other language.
-        let victoryTitle = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        victoryTitle.text = L10n.Completion.title
-        victoryTitle.fontSize = UITheme.Typography.sizeLarge
-        victoryTitle.fontColor = UITheme.Colors.primaryGold
-        victoryTitle.horizontalAlignmentMode = .center
-        let titleHeight = UITheme.capBandHeight(of: victoryTitle)
+        let emblem = createSingularity()
+        card.add(emblem, gapAbove: 18, height: 56, reveal: false)
 
-        let congratsText = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        congratsText.text = L10n.Completion.congratulations
-        congratsText.fontSize = UITheme.Typography.sizeMedium
-        congratsText.fontColor = UITheme.Colors.textPrimary
-        congratsText.horizontalAlignmentMode = .center
-        let congratsHeight = UITheme.capBandHeight(of: congratsText)
+        let title = FilmUI.title(L10n.Completion.title, size: 40, color: UITheme.Colors.primaryGold,
+                                 glow: gold, tracking: 9, maxWidth: card.width, bloom: 1.0)
+        title.alpha = 0
+        title.setScale(1.12)
+        let settle = SKAction.scale(to: 1, duration: 1.0)
+        settle.timingMode = .easeOut
+        title.run(.sequence([.wait(forDuration: 0.5), .group([.fadeIn(withDuration: 0.4), settle])]))
+        card.add(title, gapAbove: 16, height: title.frame.height, reveal: false)
 
-        let successText = createMultilineText(
-            text: L10n.Completion.success,
-            fontSize: UITheme.Typography.sizeRegular
-        )
-        let thanksText = createMultilineText(
-            text: L10n.Completion.thanks,
-            fontSize: UITheme.Typography.sizeRegular
-        )
-        let figures = createScoreDisplay()
-        let buttonHeight = UITheme.Dimensions.buttonHeight
+        let rule = FilmUI.drawnRule(width: min(card.width, 260), color: UITheme.Colors.primaryGold,
+                                    alpha: 0.7, delay: 0.8, duration: 0.9)
+        card.add(rule, gapAbove: 14, height: 1, reveal: false)
 
-        var stack = UITheme.PanelStack()
-        stack.add(gapAbove: Rhythm.edge, height: titleHeight)
-        stack.add(gapAbove: Rhythm.emblemToTitle, height: congratsHeight)
-        stack.add(gapAbove: Rhythm.aroundFigures, height: successText.height)
-        stack.add(gapAbove: Rhythm.figureLine, height: thanksText.height)
-        stack.add(gapAbove: Rhythm.aroundFigures, height: figures.height)
-        stack.add(gapAbove: Rhythm.aroundFigures, height: buttonHeight)
-        stack.add(gapAbove: Rhythm.buttonRow, height: buttonHeight)
+        let congrats = FilmUI.label(L10n.Completion.congratulations.uppercased(), size: 20, color: .white,
+                                    tracking: 3, maxWidth: card.width)
+        card.add(congrats, gapAbove: 22, height: congrats.frame.height)
 
-        let panelHeight = stack.height
-        let panel = UITheme.createPanel(
-            width: panelWidth,
-            height: panelHeight,
-            borderColor: UITheme.Colors.primaryGold
-        )
-        panel.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        panel.alpha = 0
+        let success = createMultilineText(L10n.Completion.success, width: card.width)
+        card.add(success.node, gapAbove: 12, height: success.height)
 
-        // Add outer golden glow effect
-        if let glowPanel = panel.copy() as? SKShapeNode {
-            glowPanel.fillColor = .clear
-            glowPanel.strokeColor = UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 0.8)
-            glowPanel.lineWidth = UITheme.Dimensions.lineWidthGlowStrong
-            glowPanel.setScale(1.03)
-            glowPanel.alpha = 0
-            addChild(glowPanel)
+        let thanks = createMultilineText(L10n.Completion.thanks, width: card.width)
+        card.add(thanks.node, gapAbove: Rhythm.bodyLine, height: thanks.height)
 
-            // Pulse animation for glow
-            glowPanel.run(SKAction.sequence([
-                SKAction.wait(forDuration: 0.5),
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationMedium),
-                SKAction.repeatForever(SKAction.sequence([
-                    SKAction.fadeAlpha(to: 0.5, duration: UITheme.Animations.durationGlowPulse),
-                    SKAction.fadeAlpha(to: 1.0, duration: UITheme.Animations.durationGlowPulse)
-                ]))
-            ]))
-        }
+        let figures = createScoreDisplay(card: card)
+        card.add(figures.node, gapAbove: Rhythm.aroundFigures, height: figures.height)
 
-        addChild(panel)
+        let playAgainButton = UITheme.createButton(text: L10n.Completion.playAgain, color: gold,
+                                                   width: card.primaryButtonWidth, name: "playAgainButton",
+                                                   primary: true)
+        let levelsButton = UITheme.createButton(text: L10n.Common.levels, color: FilmUI.neutral,
+                                                width: card.pairButtonWidth, name: "levelsButton")
+        let menuButton = UITheme.createButton(text: L10n.Common.menu, color: FilmUI.neutral,
+                                              width: card.pairButtonWidth, name: "menuButton")
+        card.addButtons(primary: playAgainButton, pair: (levelsButton, menuButton), gapAbove: Rhythm.aroundFigures)
 
-        // Animate panel entrance
-        panel.run(SKAction.sequence([
-            SKAction.wait(forDuration: UITheme.Animations.durationQuick),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationMedium),
-                SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationMedium)
-            ])
-        ]))
-        panel.setScale(0.8)
-
-        // Placement pass, walking the same rows back down from the panel's top edge.
-        stack.start(panelHeight: panelHeight)
-
-        // "VICTORY!" title
-        UITheme.centerOnCapBand(
-            victoryTitle,
-            centerY: stack.next(gapAbove: Rhythm.edge, height: titleHeight)
-        )
-        victoryTitle.alpha = 0
-        panel.addChild(victoryTitle)
-
-        // Animated title entrance with bounce
-        victoryTitle.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.6),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.sequence([
-                    SKAction.scale(to: 1.4, duration: UITheme.Animations.durationQuick),
-                    SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationQuick)
-                ])
-            ])
-        ]))
-
-        // Congratulations message
-        UITheme.centerOnCapBand(
-            congratsText,
-            centerY: stack.next(gapAbove: Rhythm.emblemToTitle, height: congratsHeight)
-        )
-        congratsText.alpha = 0
-        panel.addChild(congratsText)
-
-        congratsText.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.0),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
-
-        // Success message
-        successText.node.position = CGPoint(
-            x: 0,
-            y: stack.next(gapAbove: Rhythm.aroundFigures, height: successText.height)
-        )
-        successText.node.alpha = 0
-        panel.addChild(successText.node)
-
-        successText.node.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.3),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
-
-        // Thank you message
-        thanksText.node.position = CGPoint(
-            x: 0,
-            y: stack.next(gapAbove: Rhythm.figureLine, height: thanksText.height)
-        )
-        thanksText.node.alpha = 0
-        panel.addChild(thanksText.node)
-
-        thanksText.node.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.6),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
-
-        // Final score display
-        let scoreContainer = figures.node
-        scoreContainer.position = CGPoint(
-            x: 0,
-            y: stack.next(gapAbove: Rhythm.aroundFigures, height: figures.height)
-        )
-        // The entrance rises *into* the slot rather than out of it. `moveBy` is
-        // relative and permanent, so running it from the laid-out position left the
-        // block sitting 10pt above where the stack put it for the rest of the scene's
-        // life — which is what tipped the figures off centre between the title and the
-        // button. Starting the same 10pt low makes the animation land on the layout.
-        scoreContainer.position.y -= Self.figuresRise
-        scoreContainer.alpha = 0
-        panel.addChild(scoreContainer)
-
-        scoreContainer.run(SKAction.sequence([
-            SKAction.wait(forDuration: 1.9),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                SKAction.moveBy(x: 0, y: Self.figuresRise, duration: UITheme.Animations.durationNormal)
-            ])
-        ]))
-
-        // Buttons
-        setupButtons(
-            on: panel,
-            primaryY: stack.next(gapAbove: Rhythm.aroundFigures, height: buttonHeight),
-            secondaryY: stack.next(gapAbove: Rhythm.buttonRow, height: buttonHeight)
-        )
+        card.install(in: self, accent: gold,
+                     safeTop: GameConfiguration.safeAreaTop(in: view),
+                     safeBottom: GameConfiguration.safeAreaBottom(in: view),
+                     revealFrom: 1.1, revealStep: 0.15, shade: 0.8)
     }
 
     /// A block of body copy, one label per line, centred on the returned node's origin.
     ///
-    /// The caller no longer passes a `y`: the block reports its own height and the panel
-    /// stack decides where it goes. Line pitch comes from the rhythm rather than from
-    /// `fontSize + 8`, so a block of copy breathes the same as every other stack in the
-    /// results panels.
-    private func createMultilineText(text: String, fontSize: CGFloat) -> (node: SKNode, height: CGFloat) {
+    /// Line pitch comes from the rhythm rather than from the font, so a block of copy
+    /// breathes the same as every other stack on the results screens.
+    private func createMultilineText(_ text: String, width: CGFloat) -> (node: SKNode, height: CGFloat) {
         let container = SKNode()
 
         let rows = text.components(separatedBy: "\n").enumerated().map { index, line -> (label: SKLabelNode, gapAbove: CGFloat) in
-            let label = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-            label.text = line
-            label.fontSize = fontSize
-            label.fontColor = UITheme.Colors.textSecondary
-            label.horizontalAlignmentMode = .center
+            let label = FilmUI.label(line, font: UITheme.Typography.fontRegular, size: 17,
+                                     color: UITheme.Colors.textBody, tracking: 0.4, maxWidth: width, minimumSize: 12)
             return (label, index == 0 ? 0 : Rhythm.bodyLine)
         }
 
@@ -271,22 +140,15 @@ class GameCompletionScene: SKScene {
     }
 
     /// The caption and the total, as one tight pair. See `UITheme.PanelRhythm`.
-    private func createScoreDisplay() -> (node: SKNode, height: CGFloat) {
+    ///
+    /// The total does not count up: it is the sum of fifty levels the player has already
+    /// watched land one at a time, and here it is simply the number.
+    private func createScoreDisplay(card: ResultsCard) -> (node: SKNode, height: CGFloat) {
         let container = SKNode()
 
-        // "Total Score:" label
-        let scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        scoreLabel.text = L10n.Completion.totalScore
-        scoreLabel.fontSize = UITheme.Typography.sizeRegular
-        scoreLabel.fontColor = UITheme.Colors.textSecondary
-        scoreLabel.horizontalAlignmentMode = .center
-
-        // Score value
-        let scoreValue = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        scoreValue.text = "\(totalScore)"
-        scoreValue.fontSize = UITheme.Typography.sizeLarge
-        scoreValue.fontColor = UITheme.Colors.primaryGoldLight
-        scoreValue.horizontalAlignmentMode = .center
+        let caption = card.caption(L10n.Completion.totalScore)
+        let value = card.figure(totalScore, color: UITheme.Colors.primaryGoldLight, size: 42)
+        NeonFX.addTextBloom(to: value, color: StoryPalette.gold, blur: 12, intensity: 0.9)
 
         // Named so `ResultsPanelCentringTests` can find the block it is asserting on;
         // nothing looks it up at runtime. Structural matching would not do on this
@@ -294,214 +156,103 @@ class GameCompletionScene: SKScene {
         container.name = "figureBlock"
 
         let height = UITheme.stackLabels([
-            (scoreLabel, 0),
-            (scoreValue, Rhythm.captionToValue)
+            (caption, 0),
+            (value, Rhythm.captionToValue)
         ], in: container)
         return (container, height)
     }
 
-    private func setupButtons(on panel: SKShapeNode, primaryY: CGFloat, secondaryY: CGFloat) {
-        let buttonY = primaryY
+    /// The new singularity the ending film lights: a point of light in a ring, with the
+    /// anamorphic streak the films put through every bright source.
+    private func createSingularity() -> SKNode {
+        let node = SKNode()
+        node.alpha = 0
+        node.setScale(0.4)
 
-        // Play Again button (restart from level 1)
-        let playAgainButton = UITheme.createButton(
-            text: L10n.Completion.playAgain,
-            color: UIColor(red: 0.2, green: 0.7, blue: 0.3, alpha: 1.0),
-            width: UITheme.Dimensions.buttonWidthXLarge,
-            name: "playAgainButton"
-        )
-        playAgainButton.position = CGPoint(x: 0, y: buttonY)
-        playAgainButton.alpha = 0
-        panel.addChild(playAgainButton)
+        let glow = NeonFX.radialGlow(radius: 60, color: StoryPalette.gold)
+        glow.alpha = 0.35
+        node.addChild(glow)
 
-        playAgainButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.2),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
+        let flare = LightSprite.flare(length: 220, thickness: 7, color: StoryPalette.sun)
+        flare.alpha = 0.8
+        node.addChild(flare)
 
-        // Add subtle pulse to play again button
-        let pulse = SKAction.sequence([
-            SKAction.scale(to: 1.05, duration: UITheme.Animations.durationButtonPulse),
-            SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationButtonPulse)
-        ])
-        playAgainButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.5),
-            SKAction.repeatForever(pulse)
-        ]))
+        let ring = LightSprite.ring(radius: 22, color: StoryPalette.gold)
+        node.addChild(ring)
 
-        // Secondary buttons container
-        let secondaryButtonY = secondaryY
+        let core = LightSprite.star(size: 46, color: .white)
+        node.addChild(core)
 
-        let levelsButton = UITheme.createButton(
-            text: L10n.Common.levels,
-            color: UITheme.Colors.buttonLevels,
-            width: UITheme.Dimensions.buttonWidthSmall,
-            name: "levelsButton"
-        )
-        levelsButton.position = CGPoint(x: -67, y: secondaryButtonY)
-        levelsButton.alpha = 0
-        panel.addChild(levelsButton)
+        let open = SKAction.scale(to: 1, duration: 0.7)
+        open.timingMode = .easeOut
+        node.run(.sequence([.wait(forDuration: 0.25), .group([.fadeIn(withDuration: 0.3), open])]))
 
-        let menuButton = UITheme.createButton(
-            text: L10n.Common.menu,
-            color: UITheme.Colors.buttonMenu,
-            width: UITheme.Dimensions.buttonWidthSmall,
-            name: "menuButton"
-        )
-        menuButton.position = CGPoint(x: 67, y: secondaryButtonY)
-        menuButton.alpha = 0
-        panel.addChild(menuButton)
-
-        levelsButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.3),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
-
-        menuButton.run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.4),
-            SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal)
-        ]))
+        let breathe = SKAction.sequence([.scale(to: 1.15, duration: 1.4), .scale(to: 1.0, duration: 1.4)])
+        breathe.timingMode = .easeInEaseOut
+        ring.run(.repeatForever(breathe))
+        flare.run(.repeatForever(.sequence([.fadeAlpha(to: 0.45, duration: 1.4), .fadeAlpha(to: 0.85, duration: 1.4)])))
+        return node
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
+        guard !exit.isTaken, let touch = touches.first else { return }
         let location = touch.location(in: self)
-        let touchedNode = atPoint(location)
 
-        if let nodeName = touchedNode.name ?? touchedNode.parent?.name {
-            switch nodeName {
-            case "playAgainButton":
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handlePlayAgainButton()
-            case "levelsButton":
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleLevelsButton()
-            case "menuButton":
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playButtonClickSound(on: self)
-                handleMenuButton()
-            default:
-                break
-            }
-        }
-    }
+        guard let button = FilmUI.button(at: location, under: self,
+                                         names: ["playAgainButton", "levelsButton", "menuButton"]),
+              exit.take() else { return }
+        HapticManager.shared.lightTap()
+        SoundManager.shared.playButtonClickSound(on: self)
 
-    private func handlePlayAgainButton() {
-        if let playAgainButton = childNode(withName: "//playAgainButton") as? SKShapeNode {
-            playAgainButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.startNewGame()
-            })
+        let action: () -> Void
+        switch button.name {
+        case "playAgainButton": action = { [weak self] in self?.startNewGame() }
+        case "levelsButton": action = { [weak self] in self?.goToLevelSelect() }
+        default: action = { [weak self] in self?.goToMenu() }
         }
-    }
-
-    private func handleLevelsButton() {
-        if let levelsButton = childNode(withName: "//levelsButton") as? SKShapeNode {
-            levelsButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.goToLevelSelect()
-            })
-        }
-    }
-
-    private func handleMenuButton() {
-        if let menuButton = childNode(withName: "//menuButton") as? SKShapeNode {
-            menuButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.goToMenu()
-            })
-        }
+        button.run(UITheme.createButtonPressAnimation(completion: action))
     }
 
     private func startNewGame() {
-        guard let view = view else { return }
-        let gameScene = GameScene(size: view.bounds.size)
-        gameScene.scaleMode = scaleMode
-        gameScene.currentLevel = 1
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(gameScene, transition: transition)
+        exit.present(from: self) { size in
+            let gameScene = GameScene(size: size)
+            gameScene.currentLevel = 1
+            return gameScene
+        }
     }
 
     private func goToLevelSelect() {
-        guard let view = view else { return }
         // Show the last page with all completed levels
-        let levelSelectScene = LevelSelectScene(size: view.bounds.size, startLevel: LevelManager.shared.totalLevels)
-        levelSelectScene.scaleMode = scaleMode
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(levelSelectScene, transition: transition)
+        exit.present(from: self) { LevelSelectScene(size: $0, startLevel: LevelManager.shared.totalLevels) }
     }
 
     private func goToMenu() {
-        guard let view = view else { return }
-        let menuScene = MenuScene(size: view.bounds.size)
-        menuScene.scaleMode = scaleMode
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(menuScene, transition: transition)
+        exit.present(from: self) { MenuScene(size: $0) }
     }
 
     // MARK: - Visual Effects
 
-    private func addEpicCelebrationParticles() {
-        // Multi-colored confetti explosion
-        for _ in 0..<30 {
-            let particle = SKShapeNode(rectOf: CGSize(width: 10, height: 10), cornerRadius: 2)
-            let colors: [UIColor] = [
-                .red, .yellow, .green, .cyan, .magenta,
-                UITheme.Colors.primaryGold, .orange, .purple
-            ]
-            particle.fillColor = colors.randomElement() ?? .yellow
-            particle.strokeColor = .clear
-            particle.position = CGPoint(x: size.width / 2, y: size.height - 50)
-            particle.zPosition = 10
-            addChild(particle)
-
-            let randomX = CGFloat.random(in: -200...200)
-            let randomY = CGFloat.random(in: -300...100)
-            let duration = Double.random(in: 1.5...3.0)
-
-            let move = SKAction.moveBy(x: randomX, y: randomY, duration: duration)
-            let rotate = SKAction.rotate(byAngle: .pi * 6, duration: duration)
-            let fade = SKAction.fadeOut(withDuration: duration)
-
-            particle.run(SKAction.group([move, rotate, fade])) {
-                particle.removeFromParent()
-            }
+    /// Fireworks drawn in light: every so often a ring of light opens somewhere in the
+    /// picture and throws sparks, in the films' palette. The confetti squares this
+    /// replaces were the only solid, coloured, spinning things anywhere in the game.
+    private func addCelebration() {
+        let palette = [StoryPalette.gold, StoryPalette.sun, StoryPalette.cyan, StoryPalette.violet, StoryPalette.magenta]
+        let burst = SKAction.run { [weak self] in
+            guard let self = self else { return }
+            let point = CGPoint(x: CGFloat.random(in: self.size.width * 0.12...self.size.width * 0.88),
+                                y: CGFloat.random(in: self.size.height * 0.15...self.size.height * 0.85))
+            let color = palette.randomElement() ?? StoryPalette.gold
+            let ring = NeonFX.shockwave(at: point, startRadius: 4, endRadius: CGFloat.random(in: 50...90),
+                                        color: color, lineWidth: 2, duration: 0.8)
+            ring.zPosition = 2
+            self.addChild(ring)
+            let sparks = NeonFX.sparks(at: point, count: 16, color: color, speed: 120, length: 8, lifetime: 0.7)
+            sparks.zPosition = 2
+            self.addChild(sparks)
         }
-
-        // Golden fireworks from bottom
-        let fireworks = SKEmitterNode()
-
-        fireworks.particleTexture = ParticleTexture.softCircle(diameter: 32)
-
-        let colorSequence = SKKeyframeSequence(keyframeValues: [
-            UIColor(red: 1.0, green: 1.0, blue: 0.9, alpha: 1.0),
-            UIColor(red: 1.0, green: 0.95, blue: 0.5, alpha: 1.0),
-            UIColor(red: 1.0, green: 0.85, blue: 0.0, alpha: 1.0),
-            UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 0.6),
-            UIColor(red: 0.4, green: 0.2, blue: 0.0, alpha: 0.0)
-        ], times: [0, 0.2, 0.4, 0.7, 1.0])
-        fireworks.particleColorSequence = colorSequence
-
-        fireworks.particleBirthRate = 50
-        fireworks.particleLifetime = 3.0
-        fireworks.particleLifetimeRange = 1.5
-        fireworks.particlePositionRange = CGVector(dx: size.width * 1.5, dy: 20)
-        fireworks.particleSpeed = 120
-        fireworks.particleSpeedRange = 60
-        fireworks.emissionAngle = .pi / 2
-        fireworks.emissionAngleRange = .pi / 4
-        fireworks.particleAlpha = 0.9
-        fireworks.particleAlphaSpeed = -0.3
-        fireworks.particleScale = 0.5
-        fireworks.particleScaleRange = 0.3
-        fireworks.particleScaleSpeed = -0.1
-        fireworks.particleRotation = 0
-        fireworks.particleRotationSpeed = 4.0
-        fireworks.particleBlendMode = .add
-        fireworks.yAcceleration = 30
-        fireworks.particleColorBlendFactor = 1.0
-        fireworks.position = CGPoint(x: size.width / 2, y: -20)
-        fireworks.zPosition = -1
-
-        addChild(fireworks)
+        run(.sequence([
+            .wait(forDuration: 0.6),
+            .repeatForever(.sequence([burst, .wait(forDuration: 0.55, withRange: 0.5)]))
+        ]), withKey: "celebration")
     }
 }

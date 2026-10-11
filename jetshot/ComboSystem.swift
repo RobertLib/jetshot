@@ -113,6 +113,15 @@ final class ComboSystem {
     /// Tier last announced, so a step up fires its cue exactly once.
     private var announcedTier: Int = 0
 
+    /// Seconds added to every chain window — the endless run's MOMENTUM perk. Zero in
+    /// the campaign.
+    var windowBonus: TimeInterval = 0
+
+    /// The window the chain gets at its current length, bonus included.
+    private var currentWindow: TimeInterval {
+        return ComboRules.window(forChain: chain) + windowBonus
+    }
+
     /// Whether the meter is currently shown.
     ///
     /// Tracked explicitly rather than inferred from `meterNode.alpha`, which is what
@@ -253,7 +262,7 @@ final class ComboSystem {
         chain += 1
         bestChain = max(bestChain, chain)
         multiplier = ComboRules.multiplier(forChain: chain)
-        deadline = currentTime + ComboRules.window(forChain: chain)
+        deadline = currentTime + currentWindow
 
         let tier = ComboRules.tierIndex(forChain: chain)
         if tier > announcedTier {
@@ -283,6 +292,13 @@ final class ComboSystem {
         } else {
             hideMeter()
         }
+    }
+
+    /// Keeps a live chain from decaying: tops its window back up to full. Called every
+    /// frame of an Overdrive. A chain with no kills yet has nothing to hold.
+    func hold(currentTime: TimeInterval) {
+        guard deadline != nil else { return }
+        deadline = currentTime + currentWindow
     }
 
     /// Expires the chain when its window lapses. Driven from `GameScene.update(_:)` on
@@ -324,7 +340,7 @@ final class ComboSystem {
             chainLabel?.text = L10n.Combo.chain(chain)
         }
 
-        let window = ComboRules.window(forChain: chain)
+        let window = currentWindow
         let remaining = max(0, deadline - currentTime)
         decayFillContainer?.xScale = max(0.001, CGFloat(remaining / window))
     }

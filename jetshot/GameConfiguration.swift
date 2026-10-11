@@ -30,16 +30,27 @@ nonisolated struct GameConfiguration {
     /// Default player move speed for smooth animations
     static let playerMoveSpeed: TimeInterval = 0.2
 
-    /// Distance threshold for shooting (in points)
-    static let shootDistanceThreshold: CGFloat = 50
+    /// Drag multiplier: how far the ship moves per point the finger moves. A touch
+    /// over one so that a thumb resting low on the glass can still cross the screen
+    /// without running out of room.
+    static let dragSensitivity: CGFloat = 1.2
 
     // MARK: - Weapon System
 
-    /// Time between shots (in seconds)
-    static let defaultShootInterval: TimeInterval = 0.3
+    /// Time between shots (in seconds).
+    ///
+    /// 0.13, from 0.3. Three volleys a second read as a ship pecking at the screen; a
+    /// dense stream is what a shmup's guns are supposed to feel like. Enemies gained hit
+    /// points in the same pass (see `CombatRules`) so that the stream has something to
+    /// chew through rather than simply ending every fight sooner, and the heat per shot
+    /// below came down by the same ratio so overheating takes as long as it did.
+    static let defaultShootInterval: TimeInterval = 0.13
 
     /// Rapid fire shoot interval (in seconds)
-    static let rapidFireInterval: TimeInterval = 0.1
+    static let rapidFireInterval: TimeInterval = 0.075
+
+    /// Speed of a player bolt, in points per second.
+    static let playerBulletSpeed: CGFloat = 1150
 
     /// Maximum number of bullets player can have
     static let maxBulletCount: Int = 8
@@ -57,7 +68,12 @@ nonisolated struct GameConfiguration {
     /// which made the whole gauge, its colour ramp and the OVERHEATED state dead
     /// weight. 0.04 puts the limit at 25 shots (~7.5 s sustained, 2.5 s rapid fire),
     /// so holding the trigger down is a real trade-off and tapping stays unpunished.
-    static let heatPerShot: CGFloat = 0.04
+    ///
+    /// Then scaled by the fire-rate change (0.3 s → 0.13 s between volleys): 0.04 per
+    /// volley at the old cadence is 0.0173 at the new one, which keeps the limit at the
+    /// same ~7.5 s of unbroken fire rather than letting the faster guns cook themselves
+    /// in three.
+    static let heatPerShot: CGFloat = 0.0173
 
     /// Heat removed per second when not firing.
     ///
@@ -177,7 +193,10 @@ nonisolated struct GameConfiguration {
     // MARK: - Level System
 
     /// Delay before level completion after last enemy is destroyed (in seconds)
-    static let levelCompletionDelay: TimeInterval = 2.0
+    ///
+    /// 1.2, from 2.0: the gap between the last wave and the boss warning was the one
+    /// dead stretch left in a level, and the warning itself already gives the beat.
+    static let levelCompletionDelay: TimeInterval = 1.2
 
     /// Total number of levels in the game
     static let totalLevels: Int = 50
@@ -200,6 +219,12 @@ nonisolated struct GameConfiguration {
     /// 0.65 takes a 1.4 s cadence to 0.91 s, which puts roughly four enemies on screen
     /// at once instead of two — busy enough that there is always a target, and well
     /// short of a bullet-hell wall given the player has auto-fire and free movement.
+    ///
+    /// Left at 0.65 by the combat pass on purpose. Tightening it shortened every level
+    /// (a level 8 run reached its boss in half a minute), which is less game rather than
+    /// more happening. Density now comes from wingmen instead — see
+    /// `CombatRules.wingmanChance(forLevel:)` — so a level keeps its length and gains
+    /// its traffic.
     static let waveIntervalScale: TimeInterval = 0.65
 
     /// Extra tightening applied to the second half of a level. See `reprisedWaves`.
@@ -207,12 +232,12 @@ nonisolated struct GameConfiguration {
 
     /// Floor on the gap between two spawns, so the scaling can never turn a
     /// deliberately tight late-game wave into an unreadable clump.
-    static let minSpawnInterval: TimeInterval = 0.35
+    static let minSpawnInterval: TimeInterval = 0.28
 
     /// Multiplier and floor for the lead-in before each wave. The authored 2.0 s
     /// becomes 0.9 s: enough to read as a new wave arriving, not enough to be a lull.
-    static let waveDelayScale: TimeInterval = 0.45
-    static let minWaveDelay: TimeInterval = 0.5
+    static let waveDelayScale: TimeInterval = 0.35
+    static let minWaveDelay: TimeInterval = 0.4
 
     // MARK: - UI Configuration
 
@@ -250,9 +275,6 @@ nonisolated struct GameConfiguration {
     /// nothing, instantly cleared weapon heat and flushed every pending spawn
     /// timer at once. Two frames at 30 FPS is a generous ceiling for a real hitch.
     static let maxFrameDelta: TimeInterval = 1.0 / 30.0 * 2.0
-
-    /// Maximum cached textures in ParallaxBackgroundHelper
-    static let maxCachedTextures: Int = 10
 
     // MARK: - Coin System
 

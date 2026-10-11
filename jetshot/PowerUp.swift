@@ -141,32 +141,28 @@ class PowerUp: SKNode {
         // Main container with hexagonal shape
         shape = SKShapeNode()
 
-        // Create hexagonal border
+        // A glass hexagon for the icon to sit on, and the bloom's silhouette.
         let hexPath = createHexagonPath(radius: size / 2)
         let hexBorder = SKShapeNode(path: hexPath)
-        hexBorder.fillColor = powerUpType.color.withAlphaComponent(0.2)
-        hexBorder.strokeColor = powerUpType.color
-        hexBorder.lineWidth = 3.5
+        hexBorder.fillColor = Enemy.glass(powerUpType.color).withAlphaComponent(0.7)
+        hexBorder.strokeColor = powerUpType.color.withAlphaComponent(0.5)
+        hexBorder.lineWidth = 1.2
         shape.addChild(hexBorder)
 
-        // Add inner glow ring
-        let innerHex = SKShapeNode(path: createHexagonPath(radius: size / 2 - 6))
-        innerHex.fillColor = .clear
-        innerHex.strokeColor = powerUpType.color.withAlphaComponent(0.6)
-        innerHex.lineWidth = 2
-        shape.addChild(innerHex)
-
-        // Add decorative corners
-        for i in 0..<6 {
-            let angle = CGFloat(i) * .pi / 3
-            let x = (size / 2 - 3) * cos(angle)
-            let y = (size / 2 - 3) * sin(angle)
-            let corner = SKShapeNode(circleOfRadius: 2)
-            corner.fillColor = powerUpType.color
-            corner.strokeColor = .clear
-            corner.position = CGPoint(x: x, y: y)
-            shape.addChild(corner)
+        // Its frame in 3D: a hexagonal prism turning about its long axis, lit at the
+        // corners — the same wireframe the rest of the game is built from.
+        let color = powerUpType.color
+        let prism = WireMesh.hexPrism(radius: Float(size / 2) + 1, depth: Float(size) * 0.42)
+        let frame = WireBody(extent: size * 0.62, perspective: 4.5, interval: 1.0 / 30,
+                             seed: Float.random(in: 0...20)) { f in
+            let q = rotation(sin(f.t * 1.1) * 0.7, Vec3(0, 1, 0)) * rotation(0.35 + sin(f.t * 0.8) * 0.2, Vec3(1, 0, 0))
+            f.canvas.mesh(prism, rotation: q, color: color, alpha: 1, width: 1.4, backAlpha: 0.4)
+            for v in prism.vertices.prefix(6) {
+                f.canvas.dot(q.act(v), size: 6, color: StoryPalette.white, alpha: 0.7)
+            }
         }
+        frame.zPosition = 1
+        shape.addChild(frame)
 
         addChild(shape)
 
@@ -174,9 +170,10 @@ class PowerUp: SKNode {
         let iconNode = createIconNode()
         addChild(iconNode)
 
-        // Add glow effect
+        // Add glow effect. On the hexagon, which has a path to throw light from — the
+        // bare container this used to be given has none, so nothing was drawn.
         GlowHelper.addPulsingEnhancedGlow(
-            to: shape,
+            to: hexBorder,
             color: powerUpType.color,
             minIntensity: 0.6,
             maxIntensity: 1.0,
@@ -484,7 +481,7 @@ class PowerUp: SKNode {
         let physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: size, height: size))
         physicsBody.isDynamic = true
         physicsBody.categoryBitMask = PhysicsCategory.powerUp
-        physicsBody.contactTestBitMask = PhysicsCategory.player
+        physicsBody.contactTestBitMask = PhysicsCategory.collector
         physicsBody.collisionBitMask = PhysicsCategory.none
         physicsBody.usesPreciseCollisionDetection = true
         self.physicsBody = physicsBody

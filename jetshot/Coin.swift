@@ -42,6 +42,30 @@ class Coin: SKNode {
         // `self.scene` nil. GameScene.pruneCoinCache() does the eviction instead.
     }
 
+    /// The star-cut crystal, sized for the coin's radius (half its 24-point `size`).
+    fileprivate static let crystal: WireMesh = {
+        let radius: Float = 12
+        let inner = radius * 0.4
+        var vertices: [Vec3] = []
+        for i in 0..<10 {
+            // Same start as the star path in `setupVisuals`, so crystal and body agree.
+            let a = Float(i) * .pi / 5 - .pi / 2
+            let r = i % 2 == 0 ? radius : inner
+            vertices.append(Vec3(cos(a) * r, sin(a) * r, 0))
+        }
+        vertices.append(Vec3(0, 0, radius * 0.45))
+        vertices.append(Vec3(0, 0, -radius * 0.45))
+        var edges: [(Int, Int)] = []
+        for i in 0..<10 {
+            edges.append((i, (i + 1) % 10))
+            if i % 2 == 0 {
+                edges.append((i, 10))
+                edges.append((i, 11))
+            }
+        }
+        return WireMesh(vertices: vertices, edges: edges)
+    }()
+
     private func setupVisuals() {
         // Main container for star shape
         shape = SKShapeNode()
@@ -82,37 +106,24 @@ class Coin: SKNode {
         haloDown.timingMode = .easeInEaseOut
         halo.run(.repeatForever(.sequence([haloUp, haloDown])))
 
-        // Main star
+        // A faint gold body for the bloom to come off; the star itself is the crystal
+        // below, turning in 3D.
         let mainStar = SKShapeNode(path: starPath)
-        mainStar.fillColor = starColor
-        mainStar.strokeColor = starBorder
-        mainStar.lineWidth = 1.6
+        mainStar.fillColor = starColor.withAlphaComponent(0.22)
+        mainStar.strokeColor = starBorder.withAlphaComponent(0.35)
+        mainStar.lineWidth = 1
         shape.addChild(mainStar)
 
-        // Facets: a lit and a shaded triangle per arm. Because the star spins,
-        // the alternating wedges catch the eye as turning metal rather than a
-        // flat sticker — the cheapest way to make a 2D pickup look solid.
-        let litFacet = UIColor(red: 1.0, green: 0.98, blue: 0.72, alpha: 0.85)
-        let darkFacet = UIColor(red: 0.72, green: 0.46, blue: 0.02, alpha: 0.75)
-
-        for i in 0..<points * 2 {
-            let a1 = CGFloat(i) * .pi / CGFloat(points) - .pi / 2
-            let a2 = CGFloat(i + 1) * .pi / CGFloat(points) - .pi / 2
-            let r1 = i % 2 == 0 ? radius : innerRadius
-            let r2 = i % 2 == 0 ? innerRadius : radius
-
-            let facetPath = CGMutablePath()
-            facetPath.move(to: .zero)
-            facetPath.addLine(to: CGPoint(x: r1 * cos(a1), y: r1 * sin(a1)))
-            facetPath.addLine(to: CGPoint(x: r2 * cos(a2), y: r2 * sin(a2)))
-            facetPath.closeSubpath()
-
-            let facet = SKShapeNode(path: facetPath)
-            facet.fillColor = i % 2 == 0 ? litFacet : darkFacet
-            facet.strokeColor = .clear
-            facet.zPosition = 1
-            shape.addChild(facet)
+        // A star-cut crystal: the five-point outline raised to a point front and back,
+        // spinning on its axis so it flashes its faces like the energy the opening film
+        // shows being scooped up in the rift.
+        let crystal = WireBody(extent: radius * 1.1, perspective: 4.5, interval: 1.0 / 30,
+                               seed: Float.random(in: 0...20)) { frame in
+            let q = rotation(frame.t * 2.2, Vec3(0, 1, 0)) * rotation(0.3, Vec3(1, 0, 0))
+            frame.canvas.mesh(Coin.crystal, rotation: q, scale: 1, color: starBorder, alpha: 1, width: 1.2, backAlpha: 0.45)
         }
+        crystal.zPosition = 1
+        shape.addChild(crystal)
 
         // White-hot centre, which reads as a gemstone catching the light.
         let core = NeonFX.radialGlow(radius: radius * 0.55, color: UIColor(red: 1.0, green: 1.0, blue: 0.92, alpha: 1.0))
@@ -164,7 +175,7 @@ class Coin: SKNode {
         let physicsBody = SKPhysicsBody(circleOfRadius: size / 2)
         physicsBody.isDynamic = true
         physicsBody.categoryBitMask = PhysicsCategory.coin
-        physicsBody.contactTestBitMask = PhysicsCategory.player
+        physicsBody.contactTestBitMask = PhysicsCategory.collector
         physicsBody.collisionBitMask = PhysicsCategory.none
         physicsBody.usesPreciseCollisionDetection = true
         self.physicsBody = physicsBody

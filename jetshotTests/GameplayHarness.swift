@@ -61,8 +61,12 @@ import SpriteKit
 /// an Objective-C category method, so it is dispatched dynamically and a subclass can
 /// override it. `GameScene`'s touch handlers only ever ask a touch where it is, which is
 /// what makes real input reachable from a test at all.
+///
+/// The location is mutable because steering is relative: `GameScene` follows one touch
+/// by identity from `touchesBegan` to `touchesEnded`, so a drag has to be the *same*
+/// touch object reporting new positions, exactly as UIKit delivers it.
 final class HarnessTouch: UITouch {
-    private let point: CGPoint
+    var point: CGPoint
 
     init(_ point: CGPoint) {
         self.point = point
@@ -154,13 +158,15 @@ final class GameplayHarness {
         bulletCount: Int = 1,
         sideMissileCount: Int = 0,
         timeout: TimeInterval = 8.0,
-        suspendLevelProgression: Bool = true
+        suspendLevelProgression: Bool = true,
+        endless: Bool = false
     ) -> GameScene {
         let scene = startPlaying(
             level: level,
             bulletCount: bulletCount,
             sideMissileCount: sideMissileCount,
-            suspendLevelProgression: suspendLevelProgression
+            suspendLevelProgression: suspendLevelProgression,
+            endless: endless
         )
 
         // The intro parks the ship at y = -50 and animates it up to its resting spot;
@@ -264,7 +270,7 @@ final class GameplayHarness {
     /// Fires real bullets out of the player and parks them on `target`, so the physics
     /// engine reports a genuine contact on the next step. Returns the bullets.
     @discardableResult
-    func fireBullets(onto target: CGPoint) -> [SKShapeNode] {
+    func fireBullets(onto target: CGPoint) -> [PlayerRound] {
         let bullets = player.shoot()
         for bullet in bullets {
             bullet.position = target
@@ -278,7 +284,7 @@ final class GameplayHarness {
     /// hits matters — a bullet parked inside an enemy overlaps it for many frames, which
     /// is not how a shot behaves in play.
     @discardableResult
-    func fireMovingBullets(from origin: CGPoint) -> [SKShapeNode] {
+    func fireMovingBullets(from origin: CGPoint) -> [PlayerRound] {
         player.position = origin
         let bullets = player.shoot()
         for bullet in bullets {
@@ -354,31 +360,47 @@ final class GameplayHarness {
         return scene.childNode(withName: "//\(name)")
     }
 
+    /// The finger currently down, so moves and the lift reach the scene as the same
+    /// touch that began — see `HarnessTouch`.
+    private var activeTouch: HarnessTouch?
+
     func touchDown(at point: CGPoint) {
-        scene.touchesBegan([HarnessTouch(point)], with: nil)
+        let touch = HarnessTouch(point)
+        activeTouch = touch
+        scene.touchesBegan([touch], with: nil)
+    }
+
+    /// A second finger landing while the first is down. It is never tracked as the
+    /// active touch: it only ever exists to tap.
+    func secondFingerTap(at point: CGPoint) {
+        let touch = HarnessTouch(point)
+        scene.touchesBegan([touch], with: nil)
+        scene.touchesEnded([touch], with: nil)
     }
 
     func touchMove(to point: CGPoint) {
-        scene.touchesMoved([HarnessTouch(point)], with: nil)
+        let touch = activeTouch ?? HarnessTouch(point)
+        touch.point = point
+        scene.touchesMoved([touch], with: nil)
     }
 
-    /// Drags to `point` the way a finger does: `touchesMoved` repeatedly, over time.
-    ///
-    /// A single `touchesMoved` is not enough to observe. `touchesBegan` starts an animated
-    /// `moveTo` glide, and that action keeps rewriting the ship's position every frame —
-    /// so one `moveToInstant` is applied and then immediately overwritten. A real drag
-    /// delivers a move per frame, which is what actually wins against the glide.
+    /// Drags to `point` the way a finger does: `touchesMoved` repeatedly, over time,
+    /// sliding the finger there in steps rather than teleporting it.
     func drag(to point: CGPoint, duration: TimeInterval = 0.35) {
-        let deadline = Date().addingTimeInterval(duration)
-        while Date() < deadline {
-            touchMove(to: point)
+        let start = activeTouch?.point ?? point
+        let steps = max(1, Int(duration / 0.02))
+        for step in 1...steps {
+            let t = CGFloat(step) / CGFloat(steps)
+            touchMove(to: CGPoint(x: start.x + (point.x - start.x) * t, y: start.y + (point.y - start.y) * t))
             spin(0.02)
         }
-        touchMove(to: point)
     }
 
     func touchUp(at point: CGPoint) {
-        scene.touchesEnded([HarnessTouch(point)], with: nil)
+        let touch = activeTouch ?? HarnessTouch(point)
+        touch.point = point
+        scene.touchesEnded([touch], with: nil)
+        activeTouch = nil
     }
 
     /// Presses and holds directly over the ship — the normal way a player fires — then

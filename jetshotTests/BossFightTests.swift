@@ -26,6 +26,13 @@ import SpriteKit
 @MainActor
 final class BossFightTests: XCTestCase {
 
+    /// The health a boss is actually fought through: its authored figure scaled to the
+    /// current fire rate. See `CombatRules.bossHealth(authored:)`.
+    static func fightHealth(level: Int) -> Int {
+        return CombatRules.bossHealth(authored: BossConfig.config(for: level).maxHealth)
+    }
+
+
     /// Entrance is a 2.0s `moveTo`; the boss only becomes fightable on its completion.
     private let entranceDuration: TimeInterval = 2.0
 
@@ -103,7 +110,7 @@ final class BossFightTests: XCTestCase {
         let boss = startFight(harness, level: 1)
         waitForEntrance(harness)
 
-        for _ in 0..<BossConfig.config(for: 1).maxHealth {
+        for _ in 0..<Self.fightHealth(level: 1) {
             _ = harness.scene.bossManager.bossTakeDamage()
         }
 
@@ -144,7 +151,7 @@ final class BossFightTests: XCTestCase {
         defer { harness.teardown() }
 
         let boss = startFight(harness, level: 1)
-        let health = BossConfig.config(for: 1).maxHealth
+        let health = Self.fightHealth(level: 1)
 
         // Bullets land on the boss while it is mid-entrance.
         for _ in 0..<10 {
@@ -170,11 +177,13 @@ final class BossFightTests: XCTestCase {
 
     /// The patrol has to actually cross the screen, on the biggest boss in the game.
     ///
-    /// `startMovement()` insets each edge by a margin derived from `config.size`, and
-    /// using the full silhouette rather than its half width collapsed the sweep: the
-    /// level 50 boss (size 200) travelled two points on a 402pt iPhone, and on a 375pt
-    /// screen the range inverted. Neither crashed — `moveTo` takes any coordinate — so
-    /// the boss just sat still. Sampled over one full leg (`movementSpeed` is 1.0s here).
+    /// `enterScene(completion:)` insets each edge of the arena by a margin derived from
+    /// `config.size`, and using the full silhouette rather than its half width collapsed
+    /// the sweep: the level 50 boss of the time (size 200; the heart there now is 220)
+    /// travelled two points on a 402pt iPhone, and on a 375pt screen the range inverted.
+    /// Neither crashed — any coordinate is a valid position — so the boss just sat still.
+    /// Sampled over three seconds, most of one full orbit: the heart's leg is 1.0 s, and
+    /// an orbit sweeps one way in 1.6 legs.
     func testTheLargestBossPatrolsAcrossTheScreen() {
         let harness = GameplayHarness()
         defer { harness.teardown() }
@@ -217,10 +226,11 @@ final class BossFightTests: XCTestCase {
 
         let config = BossConfig.config(for: 1)
 
-        for hit in 1..<config.maxHealth {
+        let health = Self.fightHealth(level: 1)
+        for hit in 1..<health {
             XCTAssertFalse(
                 harness.scene.bossManager.bossTakeDamage().defeated,
-                "the boss died on hit \(hit), short of its \(config.maxHealth) health"
+                "the boss died on hit \(hit), short of its \(health) health"
             )
         }
 
@@ -244,7 +254,7 @@ final class BossFightTests: XCTestCase {
         startFight(harness, level: 1)
         waitForEntrance(harness)
 
-        for _ in 0..<BossConfig.config(for: 1).maxHealth {
+        for _ in 0..<Self.fightHealth(level: 1) {
             _ = harness.scene.bossManager.bossTakeDamage()
         }
 
@@ -264,7 +274,7 @@ final class BossFightTests: XCTestCase {
         waitForEntrance(harness)
 
         let config = BossConfig.config(for: 1)
-        for _ in 0..<config.maxHealth {
+        for _ in 0..<Self.fightHealth(level: 1) {
             _ = harness.scene.bossManager.bossTakeDamage()
         }
 
@@ -282,6 +292,129 @@ final class BossFightTests: XCTestCase {
             harness.scene.currentScore, scoreAfterKill + config.points,
             "late bullets paid out the boss bounty again"
         )
+    }
+
+    /// The same invariant enforced by the boss rather than by its callers: a blow landed
+    /// on a dead boss — through `bossTakeDamage` directly, with nothing in front of it
+    /// checking first — must not be a second kill. It used to run `die()` again and
+    /// report "defeated" with the full bounty a second time.
+    func testASecondKillingBlowIsNoKill() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 1)
+        waitForEntrance(harness)
+
+        let manager = harness.scene.bossManager!
+        let kill = manager.bossTakeDamage(amount: boss.maxHealthPoints)
+        XCTAssertTrue(kill.defeated)
+
+        let again = manager.bossTakeDamage(amount: boss.maxHealthPoints, part: boss.parts.first)
+        XCTAssertFalse(again.defeated, "a dead boss was killed a second time")
+        XCTAssertEqual(again.points, 0, "a dead boss paid its bounty a second time")
+        XCTAssertEqual(again.partBonus, 0, "a dead boss's pod paid out")
+        XCTAssertFalse(boss.takeDamage(amount: 1), "a dead boss took the killing blow again")
+    }
+
+    /// Damage before the entrance finishes is refused by the boss itself, not only by
+    /// `GameScene`'s check in front of it.
+    func testABossStillFlyingInTakesNoDamage() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 1)
+        let early = harness.scene.bossManager.bossTakeDamage(amount: boss.maxHealthPoints)
+
+        XCTAssertFalse(early.defeated, "the boss was killed while still flying in")
+        XCTAssertEqual(boss.healthFraction, 1, "the boss took damage while still flying in")
+    }
+
+    // MARK: - Health bar
+
+    /// The charge drains from both ends towards the middle, so each phase threshold is a
+    /// pair of notches, one where each end of the charge sits when the threshold is
+    /// crossed. They used to be single notches measured from the left end, as if the
+    /// charge drained to the left: the first threshold was marked nowhere, and the
+    /// charge reached both notches at once on the second.
+    func testThePhaseNotchesSitWhereTheChargeEndsAtEachThreshold() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 1)
+        waitForEntrance(harness)
+
+        let notches = boss.phaseNotchXs
+        XCTAssertEqual(notches.count, 2 * BossPhaseRules.thresholds.count, "one pair of notches per threshold")
+        for x in notches {
+            XCTAssertTrue(notches.contains { abs($0 + x) < 0.5 }, "the notch at \(x) has no partner across the middle")
+        }
+
+        // One hit's worth of charge: crossing a threshold can overshoot it by that much.
+        let oneHit = boss.healthBarFillHalfWidth / CGFloat(boss.maxHealthPoints)
+        for (index, threshold) in BossPhaseRules.thresholds.enumerated() {
+            while boss.currentPhase <= index {
+                _ = harness.scene.bossManager.bossTakeDamage()
+            }
+            let edge = boss.healthBarFillHalfWidth
+            for end in [edge, -edge] {
+                XCTAssertTrue(
+                    notches.contains { abs($0 - end) <= oneHit + 0.5 },
+                    "crossing \(threshold) left the end of the charge at \(end), on no notch (\(notches.sorted()))"
+                )
+            }
+        }
+    }
+
+    // MARK: - Flight
+
+    /// The boss eases from where its entrance leaves it onto its flight path. The
+    /// serpent's figure of eight starts 40 points below the station it flies in to, and
+    /// taking the path's first point literally dropped it there in a single frame.
+    func testTheBossEasesOntoItsFlightPathInsteadOfJumping() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 6)
+        XCTAssertEqual(boss.config.archetype, .serpent)
+
+        // Late in the entrance, where it has all but stopped, through the hand-over.
+        harness.spin(entranceDuration - 0.4)
+        var last = boss.position
+        var worst: CGFloat = 0
+        let deadline = Date().addingTimeInterval(1.2)
+        while Date() < deadline {
+            harness.spin(0.01)
+            worst = max(worst, abs(boss.position.y - last.y))
+            last = boss.position
+        }
+
+        XCTAssertLessThan(worst, 20, "the boss jumped \(worst)pt in one frame as its flight began")
+    }
+
+    // MARK: - Attacks
+
+    /// Every attack reports at least as long as its own volley takes to play out, so the
+    /// next one never winds up while it is still firing. The older patterns reported
+    /// nothing, and the warden's pod volley a fraction of its length.
+    func testEveryAttackReportsHowLongItKeepsTheBossBusy() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        // Level 26: the warden with four pods, whose pod volley is the longest.
+        startFight(harness, level: 26)
+        waitForEntrance(harness)
+
+        let manager = harness.scene.bossManager!
+        var busy: [BossAttackPattern: TimeInterval] = [:]
+        for pattern in BossAttackPattern.allCases {
+            busy[pattern] = manager.performAttack(pattern)
+            XCTAssertGreaterThanOrEqual(
+                busy[pattern] ?? 0, manager.lastAttackVolleyLength - 1e-9,
+                "\(pattern) reports \(busy[pattern] ?? 0)s busy, but its volley runs \(manager.lastAttackVolleyLength)s"
+            )
+        }
+        XCTAssertGreaterThan(busy[.doubleSpiral] ?? 0, 1.5, "the double spiral counts as instantaneous")
+        XCTAssertGreaterThan(busy[.podVolley] ?? 0, 1.5, "four pods' bursts count as a fraction of their length")
     }
 
     /// Closes the loop on the contact path itself: real bullets, dispatched through
@@ -309,13 +442,164 @@ final class BossFightTests: XCTestCase {
 
         XCTAssertFalse(
             harness.scene.bossManager.isBossActive(),
-            "\(rounds) rounds of real bullet contacts never killed a \(config.maxHealth) health boss — "
+            "\(rounds) rounds of real bullet contacts never killed a \(Self.fightHealth(level: 1)) health boss — "
             + "the bullet/boss contact path is not wired up"
         )
         XCTAssertGreaterThanOrEqual(
             harness.scene.currentScore, scoreBefore + config.points,
             "the boss kill did not pay its \(config.points) points"
         )
+    }
+
+    // MARK: - Parts
+
+    /// Level 1's warden carries two gun pods. Taking one off pays a bonus, takes its
+    /// muzzle out of the fight and leaves the other one firing.
+    func testShootingAPartOffPaysAndSilencesIt() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 1)
+        waitForEntrance(harness)
+        XCTAssertEqual(boss.parts.count, 2, "the warden lost its pods")
+        XCTAssertEqual(boss.liveMuzzles().count, 2)
+
+        let pod = boss.parts[0]
+        let result = harness.scene.bossManager.bossTakeDamage(amount: pod.health, part: pod)
+        harness.spin(0.1)
+
+        XCTAssertTrue(pod.isDestroyed, "a pod's full health in damage did not destroy it")
+        XCTAssertGreaterThan(result.partBonus, 0, "shooting a pod off paid nothing")
+        XCTAssertNil(pod.physicsBody, "a destroyed pod still soaks up rounds")
+        XCTAssertEqual(boss.liveMuzzles().count, 1, "the destroyed pod is still firing")
+        XCTAssertNotNil(boss.muzzle(boss.liveMuzzles()[0]))
+
+        let again = harness.scene.bossManager.bossTakeDamage(amount: 1, part: pod)
+        XCTAssertEqual(again.partBonus, 0, "a pod paid out twice")
+    }
+
+    /// Going for the guns must never make the fight longer: every round that lands on a
+    /// part comes off the boss's own health as well.
+    func testHitsOnAPartAlsoComeOffTheBoss() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 1)
+        waitForEntrance(harness)
+
+        let health = Self.fightHealth(level: 1)
+        let pod = boss.parts[1]
+        for hit in 1..<health {
+            XCTAssertFalse(
+                harness.scene.bossManager.bossTakeDamage(amount: 1, part: pod).defeated,
+                "the boss died on hit \(hit) of \(health) through its pod"
+            )
+        }
+        XCTAssertTrue(harness.scene.bossManager.bossTakeDamage(amount: 1, part: pod).defeated,
+                      "rounds on a pod did not count against the boss")
+    }
+
+    /// The contact path: real bullets parked on a pod, dispatched through
+    /// `didBegin(_:)`, destroy it.
+    func testRealBulletsOnAPartDestroyIt() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 1)
+        waitForEntrance(harness)
+
+        let pod = boss.parts[0]
+        var rounds = 0
+        while !pod.isDestroyed && harness.scene.bossManager.isBossActive() && rounds < 200 {
+            harness.fireBullets(onto: harness.scenePosition(of: pod))
+            harness.spin(0.03)
+            rounds += 1
+        }
+        XCTAssertTrue(pod.isDestroyed, "\(rounds) rounds of real fire on a pod never took it off")
+    }
+
+    /// The serpent's segments follow the head: they are spread out along its wake, not
+    /// stacked on it.
+    func testTheSerpentsSegmentsTrailBehindItsHead() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 6)
+        XCTAssertEqual(boss.config.archetype, .serpent)
+        waitForEntrance(harness)
+        harness.spin(1.5)
+
+        var previous = CGPoint.zero
+        for part in boss.parts {
+            let gap = hypot(part.position.x - previous.x, part.position.y - previous.y)
+            XCTAssertGreaterThan(gap, boss.bossSize * 0.2, "segment \(part.index) is bunched up on the one before it")
+            previous = part.position
+        }
+    }
+
+    // MARK: - Hazards
+
+    /// Flying into the hull costs the hit, the way flying into any other enemy does.
+    /// The mantis's dive depends on it.
+    func testFlyingIntoTheBossCostsTheHit() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        let boss = startFight(harness, level: 2)
+        waitForEntrance(harness)
+
+        let player = harness.player
+        XCTAssertNil(player.action(forKey: "invulnerability"), "player started out already hit")
+        for _ in 0..<10 {
+            player.position = boss.position
+            harness.spin(0.05)
+        }
+        XCTAssertNotNil(player.action(forKey: "invulnerability"), "ramming the boss did not hurt the player")
+    }
+
+    /// A beam is not used up by the ship it hits: it keeps burning for its full length.
+    /// Every other hostile round is removed on contact.
+    func testABeamSurvivesHittingTheShip() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+        harness.startPlaying(level: 2)
+
+        let player = harness.player
+        player.position = CGPoint(x: 200, y: 300)
+        let beam = SKNode()
+        beam.name = "bosslaser"
+        beam.position = player.position
+        let body = SKPhysicsBody(rectangleOf: CGSize(width: 14, height: 400))
+        body.categoryBitMask = PhysicsCategory.enemyBullet
+        body.contactTestBitMask = PhysicsCategory.player
+        body.collisionBitMask = PhysicsCategory.none
+        body.isDynamic = false
+        beam.physicsBody = body
+        harness.gameContent.addChild(beam)
+        harness.spin(0.5)
+
+        XCTAssertNotNil(player.action(forKey: "invulnerability"), "the beam did not hurt the player")
+        XCTAssertNotNil(beam.parent, "the beam was consumed by the ship like a bullet")
+    }
+
+    /// Whatever the boss leaves on the playfield besides bullets — beams, warnings,
+    /// portals — goes with it.
+    func testCleanupSweepsTheBossesHazards() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        startFight(harness)
+        waitForEntrance(harness)
+        for name in ["bosslaser", "bossFX"] {
+            let node = SKNode()
+            node.name = name
+            harness.gameContent.addChild(node)
+        }
+
+        harness.scene.bossManager.cleanup()
+
+        XCTAssertNil(harness.gameContent.childNode(withName: "bosslaser"), "a beam outlived the boss")
+        XCTAssertNil(harness.gameContent.childNode(withName: "bossFX"), "a warning outlived the boss")
     }
 
     // MARK: - Teardown

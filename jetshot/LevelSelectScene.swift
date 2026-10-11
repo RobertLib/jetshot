@@ -7,21 +7,58 @@
 
 import SpriteKit
 
+/// The level grid, laid out as the route the films fly: each page is two sectors of
+/// five levels, each sector a strip headed with its name, the world behind flying on to
+/// the sector the page opens on.
+///
+/// Pages used to be an arbitrary dozen levels in a 3×4 grid, which cut sectors in half
+/// — a page started on level 13, the third of a sector — so the names the level card
+/// and the backdrop are built around never appeared here at all.
 class LevelSelectScene: SKScene {
 
     private let levelManager = LevelManager.shared
     private var levelButtons: [SKNode] = []
     private var currentPage = 0
-    private let levelsPerPage = 12 // 3 columns x 4 rows
+
+    /// Levels in a sector — the route's unit, see `BackdropLook.forLevel`.
+    static let levelsPerSector = 5
+    /// Sectors on one page.
+    static let sectorsPerPage = 2
+    /// Not private, so the tests can derive the page arithmetic from the scene instead
+    /// of keeping their own copy of it.
+    static let levelsPerPage = levelsPerSector * sectorsPerPage
+    private var levelsPerPage: Int { Self.levelsPerPage }
+
+    /// Everything but the world and the frame: drawn larger on a wide screen, and laid
+    /// out in its own points against `layoutSize`.
+    private var content: SKNode!
+    private var layoutSize: CGSize = .zero
 
     private var pageContainer: SKNode!
-    private var leftArrow: SKShapeNode?
-    private var rightArrow: SKShapeNode?
-    private var pageIndicator: SKLabelNode!
+    private var gridCentre: CGPoint = .zero
+    private var leftArrow: SKNode?
+    private var rightArrow: SKNode?
+    private var pageLabel: SKLabelNode?
+    private var pageSegments: [SKSpriteNode] = []
 
     private var safeAreaTop: CGFloat = 0
     private var safeAreaBottom: CGFloat = 0
     private var isInitialized = false
+    /// A level tile and BACK leave this screen, once. See `FilmUI.Exit`.
+    private let exit = FilmUI.Exit()
+
+    /// Where the reset confirmation is in its life. It owns every touch from the moment
+    /// it opens until it has *gone* — and, after YES, until the grid has been rebuilt on
+    /// the cleared progress — not merely until it starts to fade. See `isConfirmingReset`.
+    private enum ResetDialogState {
+        case closed, open, closing
+    }
+    private var resetDialog: ResetDialogState = .closed
+
+    /// A locked tile's padlock at rest. The refusal flash restores this rather than
+    /// whatever colour the padlock had when it was tapped, which during a flash already
+    /// in progress is the flash's own red.
+    private static let padlockColor = UIColor(white: 0.62, alpha: 0.6)
 
     // Swipe gesture tracking
     private var touchStartLocation: CGPoint?
@@ -59,24 +96,23 @@ class LevelSelectScene: SKScene {
         backgroundColor = UITheme.Colors.sceneBackground
 
         readSafeArea(from: view)
-        buildScene(view: view)
+        buildScene(animated: true)
         isInitialized = true
 
         // `safeAreaInsets` is still zero during didMove(to:), so re-lay the scene
         // once the view has been through a layout pass. Without this the title
         // ends up tucked under the Dynamic Island.
         DispatchQueue.main.async { [weak self, weak view] in
-            guard let self = self, let view = view, self.view != nil else { return }
+            guard let self = self, let view = view, self.view != nil, !self.exit.isTaken else { return }
             let previousTop = self.safeAreaTop
             let previousBottom = self.safeAreaBottom
             self.readSafeArea(from: view)
             if self.safeAreaTop != previousTop || self.safeAreaBottom != previousBottom {
                 self.removeAllChildren()
-                self.buildScene(view: view)
+                self.buildScene(animated: false)
             }
         }
 
-        // Start background music
         SoundManager.shared.startBackgroundMusic()
     }
 
@@ -85,364 +121,381 @@ class LevelSelectScene: SKScene {
         safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)
     }
 
-    private func buildScene(view: SKView) {
-        StarfieldHelper.addDepthLayers(to: self)
-        addChild(StarfieldHelper.createStarfield(for: self))
-        addChild(StarfieldHelper.createShootingStars(for: self))
-        addChild(StarfieldHelper.createMeteors(for: self))
-        NeonFX.attachGrade(to: self, zPosition: 5)
-        setupTitle(view: view)
-        setupPageContainer()
-        setupNavigationArrows()
-        setupPageIndicator(view: view)
-        setupBackButton(view: view)
-        loadPage(currentPage)
-    }
-
     override func didChangeSize(_ oldSize: CGSize) {
-        guard isInitialized, let view = view else { return }
-
+        // Not while leaving — see `LevelCompleteScene.didChangeSize(_:)`.
+        guard isInitialized, !exit.isTaken, let view = view else { return }
         readSafeArea(from: view)
-
-        // Remove and recreate all elements
         removeAllChildren()
-        buildScene(view: view)
+        buildScene(animated: false)
     }
 
     override func willMove(from view: SKView) {
-        // Clean up all resources before scene is removed
         removeAllActions()
         removeAllChildren()
     }
 
-    private func setupTitle(view: SKView) {
-        let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = L10n.LevelSelect.title
-        title.fontSize = UITheme.Typography.sizeLarge
-        title.fontColor = UITheme.Colors.primaryGoldLight
-        title.zPosition = 10
+    // MARK: - Layout
 
-        // Position below safe area with minimum margin for all devices
-        let topMargin = max(safeAreaTop + 60, 70)
-        title.position = CGPoint(x: size.width / 2, y: size.height - topMargin)
-        addChild(title)
+    private func buildScene(animated: Bool) {
+        // Every rebuild starts from `removeAllChildren()`, which takes an open or closing
+        // reset dialog with it — so its state has to go too, or the grid would stay
+        // locked behind a dialog that no longer exists.
+        resetDialog = .closed
 
-        // Breathe the halo rather than the glyphs: fading the title itself down
-        // to 0.3 alpha (the old behaviour) just made the heading look broken.
-        NeonFX.addTextBloom(to: title, color: UITheme.Colors.primaryGold, blur: 11, intensity: 0.95)
-        title.childNode(withName: "textBloom")?.run(UITheme.createGlowPulseAnimation(fromAlpha: 0.45, toAlpha: 1.0))
-    }
+        GameBackdrop.attachAmbient(to: self, look: .forLevel(currentPage * levelsPerPage + 1))
+        NeonFX.attachGrade(to: self, zPosition: 5)
 
-    private func setupPageContainer() {
+        let depths = FilmUI.Letterbox.depths(size: size, safeTop: safeAreaTop, safeBottom: safeAreaBottom)
+        let frame = FilmUI.Letterbox(size: size, top: depths.top, bottom: depths.bottom, closing: animated)
+        frame.zPosition = 40
+        addChild(frame)
+
+        // The campaign's running total and where the player is on the route, printed
+        // over the picture the way the films print their timecode and shot counter.
+        let total = levelManager.totalLevels
+        let current = (1...total).last(where: { levelManager.isLevelUnlocked($0) }) ?? 1
+        frame.addFurniture(left: "\(L10n.Common.score)  \(levelManager.getTotalScore().formatted())",
+                           right: String(format: "%02d / %02d", current, total),
+                           recording: true)
+
+        let scale = FilmUI.uiScale(for: size)
+        layoutSize = CGSize(width: size.width / scale, height: size.height / scale)
+        content = SKNode()
+        content.setScale(scale)
+        content.zPosition = 10
+        addChild(content)
+
+        let picture = CGRect(x: frame.picture.minX / scale, y: frame.picture.minY / scale,
+                             width: frame.picture.width / scale, height: frame.picture.height / scale)
+        let titleBottom = setupTitle(picture: picture)
+        let transportTop = setupBottomControls(picture: picture)
+
         pageContainer = SKNode()
-        pageContainer.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
-        pageContainer.zPosition = 10
-        addChild(pageContainer)
+        gridCentre = CGPoint(x: layoutSize.width / 2, y: ((titleBottom - 14) + (transportTop + 14)) / 2)
+        pageContainer.position = gridCentre
+        content.addChild(pageContainer)
+
+        loadPage(currentPage)
+        updatePaging()
     }
 
-    private func setupNavigationArrows() {
-        let arrowMargin: CGFloat = 30
+    /// The title, its hairline and the campaign's medal tally under it. Returns the
+    /// lowest y the block reaches, for the grid to hang beneath.
+    private func setupTitle(picture: CGRect) -> CGFloat {
+        let x = layoutSize.width / 2
+        let titleY = picture.maxY - 44
 
-        // Left arrow - tip is at x: 0
-        leftArrow = createArrow(pointingLeft: true)
-        if let arrow = leftArrow {
-            arrow.position = CGPoint(x: arrowMargin, y: size.height / 2 + 20)
-            arrow.name = "leftArrow"
-            arrow.zPosition = 10
-            addChild(arrow)
+        let title = FilmUI.title(L10n.LevelSelect.title, size: 34, color: UITheme.Colors.primaryGold,
+                                 glow: StoryPalette.gold, tracking: 7, maxWidth: layoutSize.width - 48)
+        title.position = CGPoint(x: x, y: titleY)
+        content.addChild(title)
+
+        let rule = FilmUI.drawnRule(width: min(layoutSize.width - 80, 240), color: UITheme.Colors.primaryGold,
+                                    alpha: 0.7, delay: 0.2)
+        rule.position = CGPoint(x: x, y: titleY - 26)
+        content.addChild(rule)
+
+        // The campaign-wide medal tally: the one number that says how much of the game
+        // is still left to master after it is beaten. A pip of each medal's colour leads
+        // it, as the key to the pips on the tiles.
+        let held = levelManager.getTotalMedalCount()
+        let possible = GameConfiguration.totalLevels * MedalSet.ordered.count
+        let tally = SKNode()
+        tally.name = "medalTally"
+        tally.position = CGPoint(x: x, y: titleY - 46)
+        content.addChild(tally)
+
+        let label = FilmUI.mono(L10n.LevelSelect.medals(held, of: possible), size: 11,
+                                color: held > 0 ? UITheme.Colors.textBody : UITheme.Colors.textSecondary,
+                                tracking: 2)
+        let pipsWidth: CGFloat = 26
+        label.position = CGPoint(x: (pipsWidth + 8) / 2, y: 0)
+        tally.addChild(label)
+        for (index, medal) in MedalSet.ordered.enumerated() {
+            let pip = MedalBadge.pip(for: medal, earned: true)
+            pip.position = CGPoint(x: label.position.x - label.frame.width / 2 - 8 - CGFloat(2 - index) * 10 - 4, y: 0)
+            tally.addChild(pip)
         }
 
-        // Right arrow - tip is at x: 0
-        rightArrow = createArrow(pointingLeft: false)
-        if let arrow = rightArrow {
-            arrow.position = CGPoint(x: size.width - arrowMargin, y: size.height / 2 + 20)
-            arrow.name = "rightArrow"
-            arrow.zPosition = 10
-            addChild(arrow)
+        return tally.position.y - 8
+    }
+
+    /// The transport bar — chevrons either side of the page, with a scrubber under it —
+    /// and BACK / RESET below. Returns the top of the transport bar.
+    private func setupBottomControls(picture: CGRect) -> CGFloat {
+        let x = layoutSize.width / 2
+        let buttonHeight = UITheme.Dimensions.buttonHeightSecondary
+        let buttonsY = picture.minY + 20 + buttonHeight / 2
+        let half = UITheme.Dimensions.buttonWidthHalf
+        let offset = (half + UITheme.Dimensions.buttonPairGap) / 2
+
+        let backButton = UITheme.createButton(text: L10n.Common.back, color: FilmUI.neutral,
+                                              width: half, name: "backButton")
+        backButton.position = CGPoint(x: x - offset, y: buttonsY)
+        content.addChild(backButton)
+
+        // Destructive, so it is red — and quiet, so it never reads as the way on.
+        let resetButton = UITheme.createButton(text: L10n.LevelSelect.reset,
+                                               color: StoryPalette.red.withAlphaComponent(0.75),
+                                               width: half, name: "resetButton")
+        resetButton.position = CGPoint(x: x + offset, y: buttonsY)
+        content.addChild(resetButton)
+
+        for (index, button) in [backButton, resetButton].enumerated() {
+            button.alpha = 0
+            button.run(.sequence([.wait(forDuration: 0.3 + Double(index) * 0.06), .fadeIn(withDuration: 0.3)]))
         }
 
-        updateArrowsVisibility()
-    }
+        // Transport.
+        let transportY = buttonsY + buttonHeight / 2 + 34
+        let label = FilmUI.mono("", size: 11, color: UITheme.Colors.textBody, tracking: 2)
+        label.position = CGPoint(x: x, y: transportY + 6)
+        content.addChild(label)
+        pageLabel = label
 
-    private func createArrow(pointingLeft: Bool) -> SKShapeNode {
-        let path = CGMutablePath()
-        let size: CGFloat = 15
-
-        if pointingLeft {
-            // Tip pointing left, tail pointing right
-            path.move(to: CGPoint(x: size, y: size))
-            path.addLine(to: CGPoint(x: 0, y: 0))
-            path.addLine(to: CGPoint(x: size, y: -size))
-        } else {
-            // Tip pointing right, tail pointing left
-            path.move(to: CGPoint(x: -size, y: size))
-            path.addLine(to: CGPoint(x: 0, y: 0))
-            path.addLine(to: CGPoint(x: -size, y: -size))
+        pageSegments.removeAll()
+        let segment: CGFloat = 16, gap: CGFloat = 6
+        let scrubWidth = CGFloat(totalPages) * segment + CGFloat(totalPages - 1) * gap
+        for page in 0..<totalPages {
+            let left = x - scrubWidth / 2 + CGFloat(page) * (segment + gap)
+            let tube = FilmUI.tube(CGPoint(x: left, y: transportY - 10), CGPoint(x: left + segment, y: transportY - 10),
+                                   width: 1.4, color: StoryPalette.cyan)
+            content.addChild(tube)
+            pageSegments.append(tube)
         }
 
-        let arrow = SKShapeNode(path: path)
-        arrow.strokeColor = UITheme.Colors.primaryCyanLight
-        arrow.lineWidth = UITheme.Dimensions.lineWidthMedium
-        arrow.lineCap = .round
-        arrow.lineJoin = .round
+        let arrowOffset = min(130, layoutSize.width / 2 - 34)
+        let left = FilmUI.chevron(pointingLeft: true, size: 11, color: StoryPalette.cyan)
+        left.position = CGPoint(x: x - arrowOffset, y: transportY)
+        left.name = "leftArrow"
+        content.addChild(left)
+        leftArrow = left
 
-        return arrow
+        let right = FilmUI.chevron(pointingLeft: false, size: 11, color: StoryPalette.cyan)
+        right.position = CGPoint(x: x + arrowOffset, y: transportY)
+        right.name = "rightArrow"
+        content.addChild(right)
+        rightArrow = right
+
+        return transportY + 18
     }
 
-    private func setupPageIndicator(view: SKView) {
-        pageIndicator = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        pageIndicator.fontSize = UITheme.Typography.sizeTiny
-        pageIndicator.fontColor = UITheme.Colors.textSecondary
-
-        // Position above safe area (home indicator) with minimum margin for all devices
-        let bottomMargin = max(safeAreaBottom + 110, 120)
-        pageIndicator.position = CGPoint(x: size.width / 2, y: bottomMargin)
-        pageIndicator.zPosition = 10
-        addChild(pageIndicator)
-        updatePageIndicator()
+    private func updatePaging() {
+        leftArrow?.alpha = currentPage > 0 ? 1 : 0.2
+        rightArrow?.alpha = currentPage < totalPages - 1 ? 1 : 0.2
+        if let label = pageLabel {
+            FilmUI.set(label, L10n.LevelSelect.page(currentPage + 1, of: totalPages).uppercased(),
+                       font: UITheme.Typography.fontNumeric, size: 11, color: UITheme.Colors.textBody, tracking: 2)
+        }
+        for (page, segment) in pageSegments.enumerated() {
+            segment.alpha = page == currentPage ? 1 : 0.22
+        }
     }
 
-    private func updateArrowsVisibility() {
-        leftArrow?.alpha = currentPage > 0 ? UITheme.Animations.alphaFull : UITheme.Animations.alphaInactive
-        rightArrow?.alpha = currentPage < totalPages - 1 ? UITheme.Animations.alphaFull : UITheme.Animations.alphaInactive
-    }
-
-    private func updatePageIndicator() {
-        pageIndicator.text = L10n.LevelSelect.page(currentPage + 1, of: totalPages)
-    }
+    // MARK: - Page
 
     private func loadPage(_ page: Int) {
-        // Clear existing buttons
         pageContainer.removeAllChildren()
         levelButtons.removeAll()
 
         let startLevel = page * levelsPerPage + 1
         let endLevel = min(startLevel + levelsPerPage - 1, levelManager.totalLevels)
 
-        // Second line of defence for the range `for level in startLevel...endLevel`
-        // below, which traps rather than yielding nothing when the bounds cross. The
-        // page is clamped at both entry points (`init` and `changePage`), so reaching
-        // here means one of them grew a new path.
+        // The world behind the grid flies on to the sector the page opens on.
+        (childNode(withName: GameBackdrop.nodeName) as? GameBackdrop)?.transition(to: .forLevel(startLevel))
+
+        // Second line of defence for the ranges below, which trap rather than yield
+        // nothing when the bounds cross. The page is clamped at both entry points
+        // (`init` and `changePage`), so reaching here means one of them grew a new path.
         guard startLevel <= endLevel else { return }
 
-        let buttonSize = UITheme.Dimensions.levelButtonSize
-        let spacing = UITheme.Dimensions.levelButtonSpacing
-        let columns = 3
-        let rows = 4
+        let perSector = Self.levelsPerSector
+        let stripWidth = min(layoutSize.width - 36, 440)
+        let gap: CGFloat = 10
+        let tileWidth = min(((stripWidth - gap * CGFloat(perSector - 1)) / CGFloat(perSector)).rounded(.down), 84)
+        let tileHeight = (tileWidth * 1.3).rounded()
+        let rowWidth = tileWidth * CGFloat(perSector) + gap * CGFloat(perSector - 1)
 
-        // Calculate grid offset to center it
-        let gridWidth = CGFloat(columns) * buttonSize + CGFloat(columns - 1) * spacing
-        let gridHeight = CGFloat(rows) * buttonSize + CGFloat(rows - 1) * spacing
-        let startX = -gridWidth / 2 + buttonSize / 2
-        let startY = gridHeight / 2 - buttonSize / 2
+        let headerHeight: CGFloat = 14
+        let headerGap: CGFloat = 12
+        let stripHeight = headerHeight + headerGap + tileHeight
+        let sectors = Array(stride(from: startLevel, through: endLevel, by: perSector))
+        let stripGap: CGFloat = 40
+        let blockHeight = CGFloat(sectors.count) * stripHeight + CGFloat(max(0, sectors.count - 1)) * stripGap
 
         var index = 0
-        for level in startLevel...endLevel {
-            let row = index / columns
-            let col = index % columns
+        for (row, firstLevel) in sectors.enumerated() {
+            let top = blockHeight / 2 - CGFloat(row) * (stripHeight + stripGap)
+            let sector = (firstLevel - 1) / perSector + 1
+            let lastLevel = min(firstLevel + perSector - 1, endLevel)
 
-            let x = startX + CGFloat(col) * (buttonSize + spacing)
-            let y = startY - CGFloat(row) * (buttonSize + spacing)
+            let header = sectorHeader(sector: sector, levels: firstLevel...lastLevel, width: rowWidth)
+            header.position = CGPoint(x: 0, y: top - headerHeight / 2)
+            header.alpha = 0
+            header.run(.sequence([.wait(forDuration: Double(row) * 0.12), .fadeIn(withDuration: 0.3)]))
+            pageContainer.addChild(header)
 
-            let button = createLevelButton(level: level, size: buttonSize)
-            button.position = CGPoint(x: x, y: y)
-            button.alpha = 0
-            button.setScale(UITheme.Animations.scaleSmall)
-            pageContainer.addChild(button)
-            levelButtons.append(button)
+            let tileY = top - headerHeight - headerGap - tileHeight / 2
+            for (column, level) in (firstLevel...lastLevel).enumerated() {
+                let tile = createLevelTile(level: level, size: CGSize(width: tileWidth, height: tileHeight))
+                tile.position = CGPoint(x: -rowWidth / 2 + tileWidth / 2 + CGFloat(column) * (tileWidth + gap), y: tileY)
+                tile.alpha = 0
+                tile.setScale(0.92)
+                pageContainer.addChild(tile)
+                levelButtons.append(tile)
 
-            // Staggered entrance animation
-            let delay = Double(index) * 0.05
-            button.run(SKAction.sequence([
-                SKAction.wait(forDuration: delay),
-                SKAction.group([
-                    SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal),
-                    SKAction.scale(to: UITheme.Animations.scaleNormal, duration: UITheme.Animations.durationNormal)
-                ])
-            ]))
-
-            index += 1
+                let arrive = SKAction.scale(to: 1, duration: 0.3)
+                arrive.timingMode = .easeOut
+                tile.run(.sequence([
+                    .wait(forDuration: 0.08 + Double(index) * 0.04),
+                    .group([.fadeIn(withDuration: 0.25), arrive])
+                ]))
+                index += 1
+            }
         }
     }
 
-    private func createLevelButton(level: Int, size: CGFloat) -> SKNode {
+    /// "SECTOR 3 · DIMENSIONAL RIFT", a hairline running on from it, and how much of the
+    /// sector is cleared — the strip's caption, set like the films' HUD tags.
+    private func sectorHeader(sector: Int, levels: ClosedRange<Int>, width: CGFloat) -> SKNode {
+        let node = SKNode()
+        node.name = "sectorHeader_\(sector)"
+        let isOpen = levelManager.isLevelUnlocked(levels.lowerBound)
+        let cleared = levels.filter { levelManager.isLevelCompleted($0) }.count
+
+        let count = FilmUI.mono("\(cleared)/\(levels.count)", size: 10,
+                                color: cleared == levels.count ? StoryPalette.cyan : UITheme.Colors.textSecondary,
+                                tracking: 1)
+        count.horizontalAlignmentMode = .right
+        count.position = CGPoint(x: width / 2, y: 0)
+        node.addChild(count)
+
+        let label = FilmUI.mono(L10n.Sector.label(sector), size: 11, color: StoryPalette.cyan, tracking: 2)
+        label.horizontalAlignmentMode = .left
+        label.position = CGPoint(x: -width / 2, y: 0)
+        node.addChild(label)
+
+        let nameX = label.position.x + label.frame.width + 8
+        let room = width / 2 - count.frame.width - 14 - nameX
+        let name = FilmUI.mono("·  \(L10n.Sector.name(sector))", size: 11,
+                               color: UITheme.Colors.textSecondary, tracking: 1.5, maxWidth: max(40, room))
+        name.horizontalAlignmentMode = .left
+        name.position = CGPoint(x: nameX, y: 0)
+        node.addChild(name)
+
+        let ruleStart = name.position.x + name.frame.width + 8
+        let ruleEnd = width / 2 - count.frame.width - 8
+        if ruleEnd - ruleStart > 12 {
+            let rule = FilmUI.hairline(width: ruleEnd - ruleStart, color: StoryPalette.cyan, alpha: 0.22)
+            rule.position = CGPoint(x: (ruleStart + ruleEnd) / 2, y: 0)
+            node.addChild(rule)
+        }
+
+        node.alpha = isOpen ? 1 : 0.45
+        return node
+    }
+
+    /// One level, as a frame on the strip: its number, the stars and medals it has
+    /// given up, and its state in the colour of its light.
+    ///
+    /// - Cleared levels are cyan, the colour of the way on.
+    /// - The next level to fly is gold, its brackets breathing — the one the player is
+    ///   being asked to pick.
+    /// - Locked levels are an unlit hairline with a padlock; the number stays legible
+    ///   as a teaser of how far the route goes.
+    private func createLevelTile(level: Int, size: CGSize) -> SKNode {
         let container = SKNode()
         container.name = "levelButton_\(level)"
         container.zPosition = 10
 
         let isUnlocked = levelManager.isLevelUnlocked(level)
         let isCompleted = levelManager.isLevelCompleted(level)
+        let tone: UIColor = isCompleted ? StoryPalette.cyan : (isUnlocked ? StoryPalette.gold : FilmUI.neutral)
 
-        // Enhanced button with hexagonal shape
-        let button = createHexagonButton(size: size)
+        // The glass and its tint sit below everything else on the tile. The view sets
+        // `ignoresSiblingOrder`, so siblings sharing a z draw in no defined order, and a
+        // 72%-opaque frame drawn after the number would all but hide it.
+        let frame = SKShapeNode(rectOf: size)
+        frame.fillColor = FilmUI.glass.withAlphaComponent(isUnlocked ? 0.72 : 0.5)
+        frame.strokeColor = tone.withAlphaComponent(isUnlocked ? 0.3 : 0.16)
+        frame.lineWidth = 1
+        frame.zPosition = -2
+        container.addChild(frame)
 
-        if !isUnlocked {
-            // Hollow and cold, so locked levels read as "not yet" rather than as
-            // a broken tile. The number stays legible as a progress teaser.
-            button.fillColor = UITheme.Colors.levelLocked.withAlphaComponent(0.35)
-            button.strokeColor = UITheme.Colors.levelLockedBorder.withAlphaComponent(0.55)
+        if isUnlocked {
+            let wash = SKSpriteNode(color: tone, size: CGSize(width: size.width - 2, height: size.height - 2))
+            wash.alpha = isCompleted ? 0.06 : 0.12
+            wash.zPosition = -1
+            container.addChild(wash)
 
-            let padlock = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-            padlock.text = "🔒"
-            padlock.fontSize = 13
-            padlock.verticalAlignmentMode = .center
-            padlock.position = CGPoint(x: 0, y: -size * 0.34)
-            padlock.alpha = 0.5
-            padlock.zPosition = 3
-            container.addChild(padlock)
-        } else if isCompleted {
-            button.fillColor = UITheme.Colors.levelCompleted
-            button.strokeColor = UITheme.Colors.levelCompletedBorder
-
-            // Add glow for completed levels
-            GlowHelper.addEnhancedGlow(to: button, color: UITheme.Colors.levelCompletedBorder, intensity: 0.4)
-        } else {
-            button.fillColor = UITheme.Colors.levelUnlocked
-            button.strokeColor = UITheme.Colors.levelUnlockedBorder
-
-            // Add glow for available levels
-            GlowHelper.addEnhancedGlow(to: button, color: UITheme.Colors.levelUnlockedBorder, intensity: 0.3)
-        }
-        button.lineWidth = UITheme.Dimensions.lineWidthThick
-        container.addChild(button)
-
-        // Add inner hexagon decoration
-        let innerHex = createHexagonButton(size: size * 0.85)
-        innerHex.fillColor = .clear
-        innerHex.strokeColor = isUnlocked ? UITheme.Colors.highlightWhiteStrong : UIColor.gray.withAlphaComponent(0.1)
-        innerHex.lineWidth = UITheme.Dimensions.lineWidthThin
-        container.addChild(innerHex)
-
-        // Level number with better styling
-        let levelLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        levelLabel.text = "\(level)"
-        levelLabel.fontSize = UITheme.Typography.sizeMedium
-        levelLabel.fontColor = isUnlocked ? UITheme.Colors.textLabel : UITheme.Colors.textLabelInactive
-        levelLabel.horizontalAlignmentMode = .center
-        levelLabel.verticalAlignmentMode = .center
-        levelLabel.position = CGPoint(x: 0, y: 0)
-        container.addChild(levelLabel)
-
-        // Stars for completed levels
-        if isCompleted {
-            let starsEarned = levelManager.getLevelStars(level: level)
-
-            for i in 0..<3 {
-                let star = createEnhancedStar(radius: UITheme.Dimensions.starSmallRadius)
-                star.position = CGPoint(
-                    x: CGFloat(i - 1) * 14,
-                    y: size / 2 + 16
-                )
-
-                // Fill based on stars earned
-                if i < starsEarned {
-                    star.fillColor = UITheme.Colors.primaryGold
-                    star.strokeColor = UIColor(red: 1.0, green: 0.95, blue: 0.5, alpha: 1.0)
-
-                    // Star animation only for earned stars
-                    let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 3.0)
-                    star.run(SKAction.repeatForever(rotate))
-                } else {
-                    // Empty gray star for not earned
-                    star.fillColor = UIColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 0.5)
-                    star.strokeColor = UIColor(red: 0.4, green: 0.4, blue: 0.45, alpha: 0.8)
+            let brackets = FilmUI.addBrackets(to: container, size: size, arm: 9, color: tone,
+                                              width: isCompleted ? 1.2 : 1.5)
+            if !isCompleted {
+                for tube in brackets {
+                    let dim = SKAction.fadeAlpha(to: 0.35, duration: 0.9)
+                    dim.timingMode = .easeInEaseOut
+                    let lift = SKAction.fadeAlpha(to: 1, duration: 0.9)
+                    lift.timingMode = .easeInEaseOut
+                    tube.run(.repeatForever(.sequence([dim, lift])))
                 }
+            }
+        }
 
-                star.lineWidth = UITheme.Dimensions.lineWidthThin
+        let numberColor: UIColor = isCompleted ? UIColor(white: 0.95, alpha: 1)
+            : (isUnlocked ? StoryPalette.mix(StoryPalette.gold, .white, 0.35) : UIColor(white: 0.5, alpha: 0.7))
+        let number = FilmUI.mono(String(format: "%02d", level), size: min(24, size.width * 0.34),
+                                 color: numberColor, tracking: 1)
+        number.position = CGPoint(x: 0, y: isCompleted ? 1 : 4)
+        container.addChild(number)
+
+        if isCompleted {
+            // Stars across the top of the frame, medals along its foot.
+            let stars = levelManager.getLevelStars(level: level)
+            for i in 0..<3 {
+                let star = SKShapeNode(path: FilmUI.starPath(radius: 5))
+                let earned = i < stars
+                star.fillColor = earned ? UITheme.Colors.primaryGold : .clear
+                star.strokeColor = earned ? StoryPalette.sun : UIColor(white: 0.6, alpha: 0.45)
+                star.lineWidth = 1
+                star.position = CGPoint(x: CGFloat(i - 1) * 13, y: size.height / 2 - 13)
                 container.addChild(star)
             }
+
+            let held = levelManager.getLevelMedals(level: level)
+            for (index, medal) in MedalSet.ordered.enumerated() {
+                let pip = MedalBadge.pip(for: medal, earned: held.contains(medal))
+                pip.position = CGPoint(x: CGFloat(index - 1) * 11, y: -size.height / 2 + 12)
+                container.addChild(pip)
+            }
+        } else if isUnlocked {
+            // A play mark where the medals will go.
+            let mark = SKShapeNode(path: {
+                let path = CGMutablePath()
+                path.move(to: CGPoint(x: -3.5, y: 5))
+                path.addLine(to: CGPoint(x: 5, y: 0))
+                path.addLine(to: CGPoint(x: -3.5, y: -5))
+                path.closeSubpath()
+                return path
+            }())
+            mark.fillColor = StoryPalette.gold
+            mark.strokeColor = .clear
+            mark.position = CGPoint(x: 0, y: -size.height / 2 + 13)
+            container.addChild(mark)
+        } else {
+            let lock = FilmUI.padlock(height: 11, color: Self.padlockColor)
+            lock.position = CGPoint(x: 0, y: -size.height / 2 + 13)
+            lock.name = "padlock"
+            container.addChild(lock)
         }
 
         return container
     }
 
-    private func createHexagonButton(size: CGFloat) -> SKShapeNode {
-        let path = CGMutablePath()
-        let radius = size / 2
-        for i in 0..<6 {
-            let angle = CGFloat(i) * .pi / 3
-            let x = radius * cos(angle)
-            let y = radius * sin(angle)
-            if i == 0 {
-                path.move(to: CGPoint(x: x, y: y))
-            } else {
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        path.closeSubpath()
-        return SKShapeNode(path: path)
-    }
-
-    private func createEnhancedStar(radius: CGFloat) -> SKShapeNode {
-        let path = CGMutablePath()
-        let points = 5
-        let innerRadius = radius * 0.4
-
-        for i in 0..<points * 2 {
-            let angle = CGFloat(i) * .pi / CGFloat(points) - .pi / 2
-            let currentRadius = i % 2 == 0 ? radius : innerRadius
-            let x = currentRadius * cos(angle)
-            let y = currentRadius * sin(angle)
-
-            if i == 0 {
-                path.move(to: CGPoint(x: x, y: y))
-            } else {
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        path.closeSubpath()
-
-        return SKShapeNode(path: path)
-    }
-
-    private func setupBackButton(view: SKView) {
-        let buttonWidth: CGFloat = 140
-        let buttonSpacing: CGFloat = 10
-
-        // Position above safe area (home indicator) with minimum margin for all devices
-        let bottomMargin = max(safeAreaBottom + 60, 70)
-
-        // Back button
-        let backButton = UITheme.createButton(
-            text: L10n.Common.back,
-            color: UIColor(red: 0.5, green: 0.5, blue: 0.6, alpha: 1.0),
-            width: buttonWidth,
-            name: "backButton"
-        )
-        backButton.position = CGPoint(
-            x: size.width / 2 - buttonWidth / 2 - buttonSpacing / 2,
-            y: bottomMargin
-        )
-        backButton.alpha = 0
-        backButton.zPosition = 10
-        addChild(backButton)
-
-        // Reset button
-        let resetButton = UITheme.createButton(
-            text: L10n.LevelSelect.reset,
-            color: UIColor(red: 0.3, green: 0.3, blue: 0.35, alpha: 0.5),
-            width: buttonWidth,
-            name: "resetButton"
-        )
-        resetButton.position = CGPoint(
-            x: size.width / 2 + buttonWidth / 2 + buttonSpacing / 2,
-            y: bottomMargin
-        )
-        resetButton.alpha = 0
-        resetButton.zPosition = 10
-        addChild(resetButton)
-
-        // Fade in both buttons
-        backButton.run(SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal))
-        resetButton.run(SKAction.fadeIn(withDuration: UITheme.Animations.durationNormal))
-    }
+    // MARK: - Input
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
-        let location = touch.location(in: self)
-
-        // Store touch start for swipe detection
-        touchStartLocation = location
+        touchStartLocation = touch.location(in: self)
         touchStartTime = touch.timestamp
         hasMoved = false
     }
@@ -452,17 +505,16 @@ class LevelSelectScene: SKScene {
               let startLocation = touchStartLocation else { return }
 
         let currentLocation = touch.location(in: self)
-        let deltaX = currentLocation.x - startLocation.x
-        let deltaY = currentLocation.y - startLocation.y
-
-        // Check if movement is significant (more than 10 points)
-        if abs(deltaX) > 10 || abs(deltaY) > 10 {
+        if abs(currentLocation.x - startLocation.x) > 10 || abs(currentLocation.y - startLocation.y) > 10 {
             hasMoved = true
         }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first,
+        // Once a level or BACK has been chosen the grid is on its way out: no second
+        // level, no paging, no dialog.
+        guard !exit.isTaken,
+              let touch = touches.first,
               let startLocation = touchStartLocation else { return }
 
         let endLocation = touch.location(in: self)
@@ -475,7 +527,7 @@ class LevelSelectScene: SKScene {
         let maxSwipeDuration: TimeInterval = 0.5
         let maxVerticalDeviation: CGFloat = 100
 
-        // Check if this is a horizontal swipe.
+        // A horizontal swipe pages the grid.
         //
         // Suppressed while the reset confirmation is up: it is modal, and a swipe across
         // it used to page the grid behind it just as a tap on the arrow zones did.
@@ -484,7 +536,6 @@ class LevelSelectScene: SKScene {
            abs(deltaY) < maxVerticalDeviation &&
            duration < maxSwipeDuration {
 
-            // Swipe left (move to next page)
             if deltaX < 0 && currentPage < totalPages - 1 {
                 HapticManager.shared.selection()
                 SoundManager.shared.playMenuSelectSound(on: self)
@@ -492,7 +543,6 @@ class LevelSelectScene: SKScene {
                 return
             }
 
-            // Swipe right (move to previous page)
             if deltaX > 0 && currentPage > 0 {
                 HapticManager.shared.selection()
                 SoundManager.shared.playMenuSelectSound(on: self)
@@ -506,95 +556,91 @@ class LevelSelectScene: SKScene {
             handleTap(at: endLocation)
         }
 
-        // Reset tracking
         touchStartLocation = nil
         hasMoved = false
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Reset tracking
         touchStartLocation = nil
         hasMoved = false
     }
 
-    /// Whether the reset confirmation is on screen. While it is, it owns every touch.
+    /// Whether the reset confirmation owns input: every touch, from the moment it opens
+    /// until it has gone and anything it set off has finished.
+    ///
+    /// This used to be "a node named confirmationDialog exists", and dismissing renamed
+    /// the dialog at once so it would stop answering. But it stayed on screen for its
+    /// 0.2s fade, scrim and all, and the grid behind it is hit-tested with `nodes(at:)`,
+    /// which no scrim can block — so the second tap of a double-tap on NO started
+    /// whichever level sat under the button, and a swipe paged the grid behind a dialog
+    /// that still looked modal.
     private var isConfirmingReset: Bool {
-        return childNode(withName: "confirmationDialog") != nil
+        return resetDialog != .closed
     }
 
     private func handleTap(at location: CGPoint) {
         // The confirmation dialog is modal, so it answers first and nothing behind it
-        // can be reached.
-        //
-        // This branch has to come before the arrow hit-testing below, which is circular
-        // and measured in scene space rather than against any node. The arrows sit at
-        // y = height/2 + 20 with a 50pt radius, and the dialog is 320x205 centred — so
-        // the two hot zones overlap the dialog's left and right edges, and a tap on the
-        // panel used to page the grid *behind* the dialog.
+        // can be reached — the arrows' hot zones in particular, which are measured in
+        // scene space rather than against any node.
         if isConfirmingReset {
             handleConfirmationTap(at: location)
             return
         }
 
-        // Check arrow touch areas first (with larger touch radius)
-        let arrowTouchRadius: CGFloat = 50
+        let arrowTouchRadius: CGFloat = 36
+        // The arrows live in the scaled content, so the tap is measured in its points.
+        let point = convert(location, to: content)
 
-        if let leftArrowPos = leftArrow?.position {
-            let distance = hypot(location.x - leftArrowPos.x, location.y - leftArrowPos.y)
-            if distance < arrowTouchRadius && currentPage > 0 {
+        if let arrow = leftArrow, hypot(point.x - arrow.position.x, point.y - arrow.position.y) < arrowTouchRadius {
+            if currentPage > 0 {
                 HapticManager.shared.selection()
                 SoundManager.shared.playMenuSelectSound(on: self)
                 changePage(currentPage - 1)
+            }
+            return
+        }
+
+        if let arrow = rightArrow, hypot(point.x - arrow.position.x, point.y - arrow.position.y) < arrowTouchRadius {
+            if currentPage < totalPages - 1 {
+                HapticManager.shared.selection()
+                SoundManager.shared.playMenuSelectSound(on: self)
+                changePage(currentPage + 1)
+            }
+            return
+        }
+
+        if let button = FilmUI.button(at: location, under: self, names: ["backButton", "resetButton"]) {
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playButtonClickSound(on: self)
+            if button.name == "backButton" {
+                handleBackButton()
+            } else {
+                handleResetButton()
+            }
+            return
+        }
+
+        // A tile: any node under the finger that belongs to one. Asked of every node at
+        // the point, not just the topmost — the frame's viewfinder and the grade sit
+        // above the grid and would otherwise answer for it.
+        for node in nodes(at: location) {
+            if let tile = FilmUI.namedAncestor(of: node, where: { $0.hasPrefix("levelButton_") }),
+               let levelString = tile.name?.split(separator: "_").last,
+               let level = Int(levelString) {
+                handleLevelTap(level: level)
                 return
             }
-        }
-
-        if let rightArrowPos = rightArrow?.position {
-            let distance = hypot(location.x - rightArrowPos.x, location.y - rightArrowPos.y)
-            if distance < arrowTouchRadius {
-                if currentPage < totalPages - 1 {
-                    HapticManager.shared.selection()
-                    SoundManager.shared.playMenuSelectSound(on: self)
-                    changePage(currentPage + 1)
-                    return
-                }
-            }
-        }
-
-        // The hit node itself, or its parent when the tap landed on a button's label.
-        // The confirmYes/confirmNo cases that used to be duplicated here (twice over,
-        // once per level) now live in handleConfirmationTap, which is the only path
-        // reachable while the dialog is up.
-        let touchedNode = atPoint(location)
-        guard let nodeName = touchedNode.name ?? touchedNode.parent?.name else { return }
-
-        if nodeName == "backButton" || nodeName == "backButtonLabel" {
-            HapticManager.shared.lightTap()
-            SoundManager.shared.playButtonClickSound(on: self)
-            handleBackButton()
-            return
-        }
-
-        if nodeName == "resetButton" || nodeName == "resetButtonLabel" {
-            HapticManager.shared.lightTap()
-            SoundManager.shared.playButtonClickSound(on: self)
-            handleResetButton()
-            return
-        }
-
-        if nodeName.hasPrefix("levelButton_"),
-           let levelString = nodeName.split(separator: "_").last,
-           let level = Int(levelString) {
-            handleLevelTap(level: level)
         }
     }
 
     /// Touch handling while the reset confirmation is up: YES, NO, or nothing at all.
+    /// Once either has been chosen, nothing — the dialog is going, and is still modal
+    /// until it has gone.
     private func handleConfirmationTap(at location: CGPoint) {
-        let touched = atPoint(location)
-        let name = touched.name ?? touched.parent?.name
+        guard resetDialog == .open,
+              let dialog = childNode(withName: "confirmationDialog") else { return }
 
-        switch name {
+        switch FilmUI.button(at: location, under: dialog, names: ["confirmYes", "confirmNo"])?.name {
         case "confirmYes":
             HapticManager.shared.lightTap()
             SoundManager.shared.playButtonClickSound(on: self)
@@ -615,246 +661,248 @@ class LevelSelectScene: SKScene {
         guard newPage != currentPage else { return }
 
         let isMovingForward = newPage > currentPage
+        let travel = layoutSize.width * 0.6
 
-        // Slide out current page
-        let slideOut = isMovingForward ?
-            SKAction.moveBy(x: -size.width, y: 0, duration: 0.3) :
-            SKAction.moveBy(x: size.width, y: 0, duration: 0.3)
-        let fadeOut = SKAction.fadeOut(withDuration: 0.3)
+        let slideOut = SKAction.moveBy(x: isMovingForward ? -travel : travel, y: 0, duration: 0.25)
+        slideOut.timingMode = .easeIn
+        let fadeOut = SKAction.fadeOut(withDuration: 0.25)
 
         pageContainer.run(SKAction.group([slideOut, fadeOut])) { [weak self] in
             guard let self = self else { return }
             self.currentPage = newPage
             self.pageContainer.position = CGPoint(
-                x: self.size.width / 2 + (isMovingForward ? self.size.width : -self.size.width),
-                y: self.size.height / 2 + 20
+                x: self.gridCentre.x + (isMovingForward ? travel : -travel),
+                y: self.gridCentre.y
             )
             self.loadPage(newPage)
-            self.updateArrowsVisibility()
-            self.updatePageIndicator()
+            self.updatePaging()
 
-            // Slide in new page with fade in
-            let slideIn = SKAction.moveTo(x: self.size.width / 2, duration: 0.3)
-            let fadeIn = SKAction.fadeIn(withDuration: 0.3)
-            self.pageContainer.run(SKAction.group([slideIn, fadeIn]))
+            let slideIn = SKAction.moveTo(x: self.gridCentre.x, duration: 0.3)
+            slideIn.timingMode = .easeOut
+            self.pageContainer.run(SKAction.group([slideIn, SKAction.fadeIn(withDuration: 0.3)]))
         }
     }
 
     private func handleLevelTap(level: Int) {
+        guard let button = levelButtons.first(where: { $0.name == "levelButton_\(level)" }) else { return }
+
         if levelManager.isLevelUnlocked(level) {
+            exit.take()
             HapticManager.shared.lightTap()
             SoundManager.shared.playButtonClickSound(on: self)
 
-            // Button press animation
-            if let button = levelButtons.first(where: { $0.name == "levelButton_\(level)" }) {
-                let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
-                let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
-                button.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
-                    self?.startLevel(level)
-                }
+            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
+            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
+            button.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
+                self?.startLevel(level)
             }
         } else {
             HapticManager.shared.warning()
             SoundManager.shared.playHitSound(on: self)
-            // Show locked feedback
-            if let button = levelButtons.first(where: { $0.name == "levelButton_\(level)" }) {
-                let shake = SKAction.sequence([
-                    SKAction.rotate(byAngle: -0.1, duration: 0.05),
-                    SKAction.rotate(byAngle: 0.2, duration: 0.1),
-                    SKAction.rotate(byAngle: -0.2, duration: 0.1),
-                    SKAction.rotate(byAngle: 0.1, duration: 0.05)
-                ])
-                button.run(shake)
+
+            // Refused: a shake, and the padlock flares red. Both are keyed and restart
+            // from rest, so a second tap mid-refusal replays the feedback rather than
+            // stacking a second one on top of the first.
+            let shake = SKAction.sequence([
+                SKAction.rotate(byAngle: -0.1, duration: 0.05),
+                SKAction.rotate(byAngle: 0.2, duration: 0.1),
+                SKAction.rotate(byAngle: -0.2, duration: 0.1),
+                SKAction.rotate(byAngle: 0.1, duration: 0.05)
+            ])
+            button.removeAction(forKey: "refuse")
+            button.zRotation = 0
+            button.run(shake, withKey: "refuse")
+            if let lock = button.childNode(withName: "padlock") as? SKShapeNode {
+                lock.removeAction(forKey: "refuse")
+                lock.strokeColor = StoryPalette.red
+                lock.run(.sequence([
+                    .wait(forDuration: 0.35),
+                    .run { [weak lock] in lock?.strokeColor = Self.padlockColor }
+                ]), withKey: "refuse")
             }
         }
     }
 
     private func handleBackButton() {
-        // Button press animation
-        if let backButton = childNode(withName: "backButton") {
-            backButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.goToMenu()
-            })
-        }
+        exit.take()
+        content.childNode(withName: "backButton")?.run(UITheme.createButtonPressAnimation { [weak self] in
+            self?.goToMenu()
+        })
     }
 
     private func handleResetButton() {
-        // Button press animation
-        if let resetButton = childNode(withName: "resetButton") {
-            resetButton.run(UITheme.createButtonPressAnimation { [weak self] in
-                self?.showConfirmationDialog()
-            })
-        }
+        content.childNode(withName: "resetButton")?.run(UITheme.createButtonPressAnimation { [weak self] in
+            self?.showConfirmationDialog()
+        })
     }
 
+    // MARK: - Reset confirmation
+
+    /// A red-alert frame, the boss warning's language: red corners, the question in
+    /// tracked red type, the consequence spelled out under it, and NO on the left where
+    /// the thumb lands first.
+    ///
+    /// Layered explicitly, scrim → glass → everything on it. The view ignores sibling
+    /// order, and the title's bloom hangs a step *below* its lettering, so with the glass
+    /// on the same z as the type the bloom drew underneath the 92%-opaque glass and
+    /// never showed.
     private func showConfirmationDialog() {
-        // Create overlay
-        let overlay = SKShapeNode(rectOf: CGSize(width: size.width, height: size.height))
-        overlay.fillColor = UIColor.black.withAlphaComponent(0.7)
-        overlay.strokeColor = .clear
+        guard !isConfirmingReset, !exit.isTaken else { return }
+        resetDialog = .open
+
+        let red = StoryPalette.red
+        let overlay = SKSpriteNode(color: .black, size: CGSize(width: size.width + 4, height: size.height + 4))
         overlay.position = CGPoint(x: size.width / 2, y: size.height / 2)
         overlay.zPosition = 100
         overlay.name = "confirmationOverlay"
         overlay.alpha = 0
         addChild(overlay)
 
-        // Create dialog box
-        let dialogWidth: CGFloat = 320
-        let dialogHeight: CGFloat = 205
-        let topBottomMargin: CGFloat = 20  // Same margin for top and bottom
-        let dialog = SKShapeNode(
-            rectOf: CGSize(width: dialogWidth, height: dialogHeight),
-            cornerRadius: UITheme.Dimensions.cornerRadiusLarge
-        )
-        dialog.fillColor = UIColor(red: 0.15, green: 0.15, blue: 0.2, alpha: 1.0)
-        dialog.strokeColor = UITheme.Colors.primaryCyan
-        dialog.lineWidth = UITheme.Dimensions.lineWidthThick
+        let scale = FilmUI.uiScale(for: size)
+        let width = min(size.width / scale - 48, 330)
+        // The pair is cut from the dialog's own width, the way the results card and the
+        // pause menu cut theirs from their column. At the fixed half-column width the two
+        // buttons came to 280pt, which overran the 272pt dialog a 320pt screen gets.
+        let inset: CGFloat = 24
+        let pairWidth = min(UITheme.Dimensions.buttonWidthHalf,
+                            (width - inset * 2 - UITheme.Dimensions.buttonPairGap) / 2)
+        let buttonHeight = UITheme.Dimensions.buttonHeightSecondary
+
+        let title = FilmUI.title(L10n.LevelSelect.resetTitle, size: 26, color: StoryPalette.mix(red, .white, 0.25),
+                                 glow: red, tracking: 4, maxWidth: width - 40)
+        let message = FilmUI.label(L10n.LevelSelect.resetMessage, font: UITheme.Typography.fontRegular, size: 17,
+                                   color: UITheme.Colors.textBody, tracking: 0.3, maxWidth: width - 36, minimumSize: 12)
+        let warning = FilmUI.mono(L10n.LevelSelect.resetWarning.uppercased(), size: 11,
+                                  color: red.withAlphaComponent(0.9), tracking: 1.5, maxWidth: width - 36)
+
+        // Top to bottom: gap above, height.
+        let rows: [(node: SKNode, gap: CGFloat, height: CGFloat)] = [
+            (title, 28, title.frame.height),
+            (message, 22, message.frame.height),
+            (warning, 10, warning.frame.height)
+        ]
+        let height = rows.reduce(0) { $0 + $1.gap + $1.height } + 26 + buttonHeight + inset
+
+        // Well clear of the scrim, so the glass can sit a few steps below the type
+        // without dropping under the scrim itself.
+        let dialog = SKNode()
         dialog.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        dialog.zPosition = 101
+        dialog.zPosition = overlay.zPosition + 10
         dialog.name = "confirmationDialog"
-        dialog.setScale(0.8)
         dialog.alpha = 0
+        dialog.setScale(scale * 0.96)
         addChild(dialog)
 
-        // Add glow to dialog
-        GlowHelper.addEnhancedGlow(to: dialog, color: UITheme.Colors.primaryCyan, intensity: 0.5)
+        let glass = SKSpriteNode(color: FilmUI.glass, size: CGSize(width: width, height: height))
+        glass.alpha = 0.92
+        glass.zPosition = -3
+        glass.name = "confirmationGlass"
+        dialog.addChild(glass)
+        let wash = SKSpriteNode(color: red, size: CGSize(width: width, height: height))
+        wash.alpha = 0.05
+        wash.zPosition = -2.5
+        dialog.addChild(wash)
+        let frame = SKShapeNode(rectOf: CGSize(width: width, height: height))
+        frame.fillColor = .clear
+        frame.strokeColor = red.withAlphaComponent(0.22)
+        frame.lineWidth = 1
+        dialog.addChild(frame)
+        let brackets = FilmUI.addBrackets(to: dialog, size: CGSize(width: width, height: height), arm: 18,
+                                          color: red, width: 1.5)
+        for tube in brackets {
+            tube.run(.repeat(.sequence([.fadeAlpha(to: 0.3, duration: 0.12), .fadeAlpha(to: 1, duration: 0.12)]), count: 3))
+        }
 
-        // Title
-        let title = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
-        title.text = L10n.LevelSelect.resetTitle
-        title.fontSize = UITheme.Typography.sizeMedium
-        title.fontColor = UITheme.Colors.dangerRed
-        title.position = CGPoint(x: 0, y: dialogHeight / 2 - topBottomMargin - 14)
-        title.horizontalAlignmentMode = .center
-        title.verticalAlignmentMode = .center
-        dialog.addChild(title)
+        var cursor = height / 2
+        for row in rows {
+            cursor -= row.gap + row.height / 2
+            row.node.position = CGPoint(x: 0, y: cursor)
+            dialog.addChild(row.node)
+            cursor -= row.height / 2
+        }
 
-        // Message
-        let message = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        message.text = L10n.LevelSelect.resetMessage
-        message.fontSize = UITheme.Typography.sizeSmall
-        message.fontColor = UITheme.Colors.textPrimary
-        message.position = CGPoint(x: 0, y: 25)
-        message.horizontalAlignmentMode = .center
-        message.verticalAlignmentMode = .center
-        dialog.addChild(message)
-
-        let message2 = SKLabelNode(fontNamed: UITheme.Typography.fontRegular)
-        message2.text = L10n.LevelSelect.resetWarning
-        message2.fontSize = UITheme.Typography.sizeSmall
-        message2.fontColor = UITheme.Colors.textSecondary
-        message2.position = CGPoint(x: 0, y: 1)
-        message2.horizontalAlignmentMode = .center
-        message2.verticalAlignmentMode = .center
-        dialog.addChild(message2)
-
-        // No button (left side)
-        let buttonWidth: CGFloat = 120
-        let buttonHeight: CGFloat = 40 // Shorter buttons for dialog
-        let buttonYPosition = -dialogHeight / 2 + topBottomMargin + buttonHeight / 2 + 10
-        let noButton = UITheme.createButton(
-            text: L10n.Common.no,
-            color: UIColor(red: 0.4, green: 0.8, blue: 0.4, alpha: 1.0),
-            width: buttonWidth,
-            name: "confirmNo",
-            height: buttonHeight
-        )
-        noButton.position = CGPoint(x: -buttonWidth / 2 - 10, y: buttonYPosition)
+        let buttonY = -height / 2 + inset + buttonHeight / 2
+        let offset = (pairWidth + UITheme.Dimensions.buttonPairGap) / 2
+        let noButton = UITheme.createButton(text: L10n.Common.no, color: StoryPalette.cyan,
+                                            width: pairWidth, name: "confirmNo")
+        noButton.position = CGPoint(x: -offset, y: buttonY)
         dialog.addChild(noButton)
 
-        // Yes button (right side)
-        let yesButton = UITheme.createButton(
-            text: L10n.Common.yes,
-            color: UIColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 1.0),
-            width: buttonWidth,
-            name: "confirmYes",
-            height: buttonHeight
-        )
-        yesButton.position = CGPoint(x: buttonWidth / 2 + 10, y: buttonYPosition)
+        let yesButton = UITheme.createButton(text: L10n.Common.yes, color: red,
+                                             width: pairWidth, name: "confirmYes")
+        yesButton.position = CGPoint(x: offset, y: buttonY)
         dialog.addChild(yesButton)
 
-        // Animate in
-        overlay.run(SKAction.fadeIn(withDuration: 0.2))
-        dialog.run(SKAction.group([
-            SKAction.fadeIn(withDuration: 0.2),
-            SKAction.scale(to: 1.0, duration: 0.2)
-        ]))
+        overlay.run(SKAction.fadeAlpha(to: 0.75, duration: 0.2))
+        let open = SKAction.scale(to: scale, duration: 0.2)
+        open.timingMode = .easeOut
+        dialog.run(SKAction.group([SKAction.fadeIn(withDuration: 0.2), open]))
+        dialog.run(FilmUI.glitchIn(dialog, delay: 0, amount: 4))
     }
 
-    private func dismissConfirmationDialog() {
-        if let overlay = childNode(withName: "confirmationOverlay"),
-           let dialog = childNode(withName: "confirmationDialog") {
-            overlay.run(SKAction.fadeOut(withDuration: 0.2)) {
-                overlay.removeFromParent()
-            }
-            dialog.run(SKAction.group([
-                SKAction.fadeOut(withDuration: 0.2),
-                SKAction.scale(to: 0.8, duration: 0.2)
-            ])) {
-                dialog.removeFromParent()
-            }
+    /// Fades the dialog out and hands input back only once it has gone — after running
+    /// `then`, which is where YES rebuilds the grid, so no tap ever reaches a grid still
+    /// showing the progress that was just cleared.
+    private func dismissConfirmationDialog(then: (() -> Void)? = nil) {
+        guard resetDialog == .open,
+              let overlay = childNode(withName: "confirmationOverlay"),
+              let dialog = childNode(withName: "confirmationDialog") else { return }
+        resetDialog = .closing
+
+        overlay.run(SKAction.fadeOut(withDuration: 0.2))
+        dialog.run(SKAction.group([
+            SKAction.fadeOut(withDuration: 0.2),
+            SKAction.scale(to: dialog.xScale * 0.96, duration: 0.2)
+        ])) { [weak self, weak overlay, weak dialog] in
+            overlay?.removeFromParent()
+            dialog?.removeFromParent()
+            then?()
+            self?.resetDialog = .closed
         }
     }
 
     private func confirmReset() {
         HapticManager.shared.warning()
 
-        // Reset progress
         levelManager.resetProgress()
 
-        // Dismiss dialog
-        if let overlay = childNode(withName: "confirmationOverlay"),
-           let dialog = childNode(withName: "confirmationDialog") {
-            overlay.run(SKAction.fadeOut(withDuration: 0.2)) {
-                overlay.removeFromParent()
-            }
-            dialog.run(SKAction.group([
-                SKAction.fadeOut(withDuration: 0.2),
-                SKAction.scale(to: 0.8, duration: 0.2)
-            ])) {
-                dialog.removeFromParent()
-            }
-        }
-
-        // Reload current page to reflect changes
-        let delay = SKAction.wait(forDuration: 0.3)
-        run(delay) { [weak self] in
+        // Rebuild once the dialog has gone, so the furniture, the tally and every tile
+        // show the cleared progress.
+        dismissConfirmationDialog { [weak self] in
             guard let self = self else { return }
-            self.loadPage(self.currentPage)
+            self.currentPage = 0
+            self.removeAllChildren()
+            self.buildScene(animated: false)
         }
     }
 
-    private func startLevel(_ level: Int) {
-        guard let view = view else { return }
+    #if DEBUG
+    /// Puts the reset confirmation up, for the screenshot harness.
+    func debugShowResetDialog() {
+        showConfirmationDialog()
+    }
+    #endif
 
-        // Show the opening story for level 1, but only the first time — see
-        // LevelManager.hasSeenOpeningStory.
-        if level == 1 && !LevelManager.shared.hasSeenOpeningStory {
-            let storyScene = StoryScene(size: view.bounds.size, type: .opening, targetLevel: level)
-            storyScene.scaleMode = scaleMode
-            let transition = SKTransition.fade(withDuration: 0.5)
-            view.presentScene(storyScene, transition: transition)
-        } else {
-            let gameScene = GameScene(size: view.bounds.size)
-            gameScene.scaleMode = scaleMode
+    private func startLevel(_ level: Int) {
+        exit.present(from: self) { size in
+            // Show the opening story for level 1, but only the first time — see
+            // LevelManager.hasSeenOpeningStory.
+            if level == 1 && !LevelManager.shared.hasSeenOpeningStory {
+                return StoryScene(size: size, type: .opening, targetLevel: level)
+            }
+
+            let gameScene = GameScene(size: size)
             gameScene.currentLevel = level
 
             // Load weapon arsenal from previous level
-            let previousLevel = level - 1
-            let weapons = LevelManager.shared.getLevelWeapons(level: previousLevel)
+            let weapons = LevelManager.shared.getLevelWeapons(level: level - 1)
             gameScene.startingBulletCount = weapons.bulletCount
             gameScene.startingSideMissileCount = weapons.sideMissileCount
-
-            let transition = SKTransition.fade(withDuration: 0.5)
-            view.presentScene(gameScene, transition: transition)
+            return gameScene
         }
     }
 
     private func goToMenu() {
-        guard let view = view else { return }
-        let menuScene = MenuScene(size: view.bounds.size)
-        menuScene.scaleMode = scaleMode
-        let transition = SKTransition.fade(withDuration: 0.5)
-        view.presentScene(menuScene, transition: transition)
+        exit.present(from: self) { MenuScene(size: $0) }
     }
 }

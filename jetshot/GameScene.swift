@@ -43,6 +43,9 @@ nonisolated struct PhysicsCategory {
     static let asteroid: UInt32 = 0b1000000 // 64
     static let coin: UInt32 = 0b10000000   // 128
     static let barrier: UInt32 = 0b100000000 // 256
+    /// The ship's pickup reach — a wide circle around the small core hitbox, so shrinking
+    /// what can hurt the ship did not also shrink what it can collect.
+    static let collector: UInt32 = 0b1000000000 // 512
 }
 
 // Explosion sizes for camera shake intensity
@@ -73,6 +76,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     /// Rounds survived in an endless run. Also the run's headline result, alongside score.
     private(set) var endlessRound: Int = 0
+
+    /// The endless best score as it stood when this run began, so "new record" is
+    /// judged against the record the run set out to beat. The store itself cannot say:
+    /// the run is written to it on every way out — the pause menu, the app leaving the
+    /// foreground — so by game over it may already hold this run's own score.
+    private var endlessBestAtStart = 0
+
+    /// Whether this endless run got as far as live play, and so has a result worth
+    /// recording. A run abandoned on its intro card has not.
+    private var hasEndlessRunStarted = false
 
     /// Set while an endless boss round is being fought, so its defeat resumes the run
     /// rather than ending the level.
@@ -120,6 +133,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     var currentScore: Int {
         return score
     }
+
+    /// Read-only views of the newer systems, for `jetshotTests` — the same reason as
+    /// `currentScore`: each is the observable outcome of a rule that otherwise only
+    /// surfaces as animation.
+    var currentLives: Int { lives }
+    var isOverdriveActive: Bool { overdrive.isActive }
+    var overdriveCharge: Double { overdrive.charge }
+    var liveShardCount: Int { shards?.liveCount ?? 0 }
 
     // Coin tracking
     private var coinsCollected: Int = 0
@@ -183,7 +204,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var lastCleanupTime: TimeInterval = 0  // For bullet cleanup optimization
     private let shootInterval: TimeInterval = GameConfiguration.defaultShootInterval
     private var currentShootInterval: TimeInterval {
-        return player?.hasRapidFire == true ? GameConfiguration.rapidFireInterval : shootInterval
+        let base = player?.hasRapidFire == true ? GameConfiguration.rapidFireInterval : shootInterval
+        let perked = base * PerkRules.fireIntervalScale(stacks: stacks(.fireRate))
+        return overdrive.isActive ? perked * OverdriveRules.fireIntervalScale : perked
     }
 
     /// Weapon overheat rule and its HEAT gauge. See `WeaponHeatSystem` for why this is a
@@ -200,6 +223,78 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// mechanic; the collaborator arrangement and the `lazy` are the same trade
     /// `weaponHeat` above makes, for the same reasons.
     private lazy var combo = ComboSystem(scene: self)
+
+    /// The Overdrive meter and its gauge. See `OverdriveSystem` and `OverdriveRules`.
+    private let overdrive = OverdriveSystem()
+
+    /// Energy shards in flight. Built in `didMove(to:)`, once `gameContentNode` exists.
+    private var shards: ShardSystem?
+
+    /// The level an enemy spawned now should be as tough as. The campaign level, or for
+    /// an endless run the level its current depth borrows hazards from. Read by `Enemy`'s
+    /// initialiser.
+    var enemyHealthLevel: Int {
+        if isEndless {
+            return EndlessRules.hazardLevel(forRound: max(1, endlessRound))
+        }
+        return currentLevel
+    }
+
+    // MARK: Time scale
+    //
+    // Hit-stop and slow-motion beats (see `HitStop`). The scale is applied to the
+    // gameplay clock, the action speed of `gameContentNode` and the physics world
+    // together, so everything that moves slows as one. It is restored from `update(_:)`
+    // against `realPlayTime` — never from an action, which would keep running behind the
+    // pause menu and could restore physics while the game is meant to be frozen.
+
+    private var timeScale: CGFloat = 1.0
+    private var timeScaleEndsAt: TimeInterval = 0
+    /// Unscaled play time: advances like `gameTime` but ignores the time scale.
+    private var realPlayTime: TimeInterval = 0
+
+    // MARK: Medals
+    //
+    // What the level's medals are judged on. See `MedalRules`.
+
+    /// Hits that reached the damage path, including ones a full Overdrive absorbed.
+    private var hitsTaken = 0
+    /// Enemies that appeared this level, counted once each (`Enemy.isTallied`).
+    private var enemiesSeen = 0
+    /// Enemies the player destroyed, by any weapon.
+    private var enemiesDestroyed = 0
+    /// Set once the chain medal's target has been announced, so it is said only once.
+    private var chainMedalAnnounced = false
+
+    /// The medals the level stands to award if it ended now. Read-only, for
+    /// `jetshotTests` and for the level-complete hand-off.
+    var medalsEarnedSoFar: MedalSet {
+        return MedalRules.earned(
+            level: currentLevel,
+            hitsTaken: hitsTaken,
+            bestChain: combo.bestChain,
+            enemiesDestroyed: enemiesDestroyed,
+            enemiesSeen: enemiesSeen
+        )
+    }
+
+    // MARK: Endless perks
+
+    /// Perks the endless run has taken, and how many times each.
+    private(set) var perkStacks: [EndlessPerk: Int] = [:]
+
+    private func stacks(_ perk: EndlessPerk) -> Int {
+        return perkStacks[perk] ?? 0
+    }
+
+    // MARK: Graze
+
+    private var grazeCount: Int = 0
+    private var lastGrazeCue: TimeInterval = -1
+
+    /// When the last non-lethal hit buzzed the phone. A dense stream lands far more hits
+    /// than a haptic engine can usefully separate.
+    private var lastHitHaptic: TimeInterval = -1
 
     // PowerUp timers and states
     private var scoreMultiplier: Int = 1
@@ -258,11 +353,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     /// Register enemy in cache for optimized updates
     func registerEnemy(_ enemy: Enemy) {
+        tally(enemy)
         activeEnemies[ObjectIdentifier(enemy)] = enemy
         // Also cache vortex enemies for gravitational pull optimization
         if enemy.enemyType == .vortex {
             activeVortexEnemies[ObjectIdentifier(enemy)] = enemy
         }
+    }
+
+    /// Counts an enemy towards the hunter medal, once, however many times it passes
+    /// through registration — `rebuildEntityCaches()` re-registers every live enemy.
+    private func tally(_ enemy: Enemy) {
+        guard !enemy.isTallied else { return }
+        enemy.isTallied = true
+        enemiesSeen += 1
     }
 
     /// Unregister enemy from cache
@@ -294,7 +398,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func setGameplayPaused(_ paused: Bool) {
         gameContentNode?.isPaused = paused
         powerUpTimers.isPaused = paused
-        physicsWorld.speed = paused ? 0 : 1.0
+        physicsWorld.speed = paused ? 0 : timeScale
     }
 
     private var isGameplayPaused: Bool {
@@ -361,16 +465,44 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     // Touch tracking
+    //
+    // Steering is relative: the ship moves by however far the finger moves, from
+    // wherever the finger first landed. It used to be absolute — a touch teleported the
+    // ship to a point 50 pt above the finger, so the first thing every touch did was
+    // yank the ship across the screen, often straight into fire, and the thumb had to
+    // sit exactly under the ship to fly it. Relative drag is what touch shmups converge
+    // on, and it lets the thumb rest wherever is comfortable.
     private var isTouching = false
     private var touchLocation: CGPoint = .zero
-    private let shootDistanceThreshold: CGFloat = GameConfiguration.shootDistanceThreshold
+    /// The touch that is flying the ship. A second finger is not steering; it is a
+    /// trigger (see `touchesBegan`).
+    private var steeringTouch: UITouch?
+    private var lastSteerLocation: CGPoint = .zero
+    /// For the one-handed Overdrive trigger, a quick double tap.
+    private var lastTapBegan: TimeInterval = -10
+    private var lastTapEnded: TimeInterval = -10
+    private var currentTapBegan: TimeInterval = 0
 
     // Pause system
     var gameContentNode: SKNode! // Node that gets paused (public for managers)
     private var uiNode: SKNode! // UI node that never gets paused
     private var pauseButton: SKShapeNode!
     private var pauseOverlay: SKNode?
+    /// The live pause menu's column — tag, title, rule and buttons — in scene
+    /// coordinates. A tap outside it resumes. See `handlePauseMenuTap(at:)`.
+    private var pauseMenuFrame: CGRect = .null
+    /// Set the moment a pause-menu button is pressed; cleared when that menu goes away,
+    /// or for SETTINGS once its modal panel has taken over.
+    ///
+    /// Every button runs its action from the press animation's completion, 0.17 s
+    /// later. Without the latch a second tap inside that window ran a second action:
+    /// RESUME twice resumed and then paused again, and RETRY, LEVELS or MENU presented
+    /// two scenes. It also holds off the tap-outside resume for the same window.
+    private var isPauseMenuActionPending = false
     private var isInitialized = false
+
+    /// The 3D world behind the playfield. See `GameBackdrop`.
+    private var backdrop: GameBackdrop?
 
     // Level intro
     private var isGameStarted: Bool = false
@@ -430,8 +562,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             object: nil
         )
 
-        // Dark background for better glow contrast
-        backgroundColor = UIColor(red: 0.03, green: 0.03, blue: 0.12, alpha: 1.0)
+        // The films' near-black: the world behind is drawn in light, and light needs
+        // a dark to read against.
+        backgroundColor = UIColor(red: 0.004, green: 0.006, blue: 0.02, alpha: 1.0)
 
         // Setup camera for shake effects.
         //
@@ -449,6 +582,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         cameraNode.position = CGPoint(x: size.width / 2, y: size.height / 2)
         gameContentNode.addChild(cameraNode)
         camera = cameraNode
+
+        // A second finger is the Overdrive trigger, so the view has to report it.
+        view.isMultipleTouchEnabled = true
+
+        let shardSystem = ShardSystem(parent: gameContentNode)
+        shardSystem.onCollect = { [weak self] position in
+            self?.collectShard(at: position)
+        }
+        shards = shardSystem
 
         // Setup critical components first - add to game content node
         setupPlayer(view: view)
@@ -471,21 +613,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // `safeAreaInsets` is still zero back in didMove(to:).
             self.setupUI(view: view)
 
-            // Add starfield (particle effect) - to game content node
-            StarfieldHelper.addDepthLayers(to: self, parentNode: self.gameContentNode)
-            self.gameContentNode.addChild(
-                StarfieldHelper.createStarfield(for: self, parentNode: self.gameContentNode)
-            )
-
-            // Add shooting stars and meteors for visual variety - to game content node
-            self.gameContentNode.addChild(StarfieldHelper.createShootingStars(for: self))
-            self.gameContentNode.addChild(StarfieldHelper.createMeteors(for: self))
-
-            // Add parallax background (50% chance) - to game content node
-            ParallaxBackgroundHelper.addParallaxBackground(to: self, parentNode: self.gameContentNode, levelNumber: self.currentLevel)
-
-            // Add planets to background - to game content node
-            PlanetHelper.startPlanetGeneration(in: self, parentNode: self.gameContentNode)
+            // The world behind the fight: the sector of the opening film's route this
+            // level flies through. Under `gameContentNode` like everything else on the
+            // gameplay clock, and driven from `update(_:)`.
+            let backdrop = GameBackdrop(size: self.size, level: self.currentLevel, endless: self.isEndless)
+            backdrop.zPosition = -20
+            self.gameContentNode.addChild(backdrop)
+            self.backdrop = backdrop
 
             // Setup managers sequentially with small delays
             self.setupEnemyManager()
@@ -548,27 +682,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // was the one element in here that kept its spawn-time placement.
         bossManager?.getBoss()?.layoutHealthBar(in: self)
 
-        // Update starfield, shooting stars and meteors for the new size.
-        //
-        // Looked up inside `gameContentNode`, which is where didMove(to:) parents them.
-        // These three used to be `childNode(withName:)` on the *scene*, and a name with
-        // no `//` prefix only matches immediate children — so all three lookups always
-        // returned nil and the whole resize path was dead. Every emitter kept the old
-        // screen's width and spawn line after a rotation or an iPad Split View resize.
-        if let background = gameContentNode {
-            if let starfield = background.childNode(withName: "starfield") as? SKEmitterNode {
-                StarfieldHelper.updateStarfield(starfield, for: self)
-            }
-            if let shootingStars = background.childNode(withName: "shootingStars") as? SKEmitterNode {
-                StarfieldHelper.updateShootingStars(shootingStars, for: self)
-            }
-            if let meteors = background.childNode(withName: "meteors") as? SKEmitterNode {
-                StarfieldHelper.updateMeteors(meteors, for: self)
-            }
-            // The slower depth layers carry the same width and spawn line. Rebuilt
-            // rather than tweaked: addDepthLayers replaces them by name.
-            StarfieldHelper.addDepthLayers(to: self, parentNode: background)
-        }
+        // The world's camera frames itself from the viewport, so a new size is all it
+        // needs to keep the horizon where it was.
+        backdrop?.resize(to: size)
 
         // Update pause overlay if it exists (when view resizes)
         if let overlay = pauseOverlay {
@@ -641,8 +757,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         activeCoins.removeAll()
         activeVortexEnemies.removeAll()
 
+        shards?.removeAll()
+        shards = nil
+        overdrive.cancel()
+        overdrive.removeHUD()
+        steeringTouch = nil
+
         // Clear player reference
         player = nil
+        backdrop = nil
 
         // Reset game state
         bossSpawned = false
@@ -660,6 +783,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if !isGameplayPaused && isGameStarted {
             togglePause()
         }
+
+        // A backgrounded app may never come back: the system can end it, or the player
+        // can swipe it away from the paused menu. An endless run's result is otherwise
+        // only written at game over, so bank it here too.
+        recordEndlessRun()
     }
 
     @objc private func appDidBecomeActive() {
@@ -677,7 +805,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // leaving a full-screen scrim and a PAUSED panel sitting on top of live
             // gameplay — with dead buttons, because every handler in touchesBegan is
             // gated on gameContentNode.isPaused.
-            if isGameStarted && pauseOverlay == nil {
+            if isGameStarted && pauseOverlay == nil && perkPicker == nil {
                 showPauseOverlay()
             }
         } else if isGameStarted {
@@ -692,8 +820,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     @objc private func handleMemoryWarning() {
         // Clear texture caches to free up memory
-        ParallaxBackgroundHelper.clearTextureCache()
         ParticleTexture.clearCache()
+        ProjectileFX.clearCaches()
+        ShardSystem.clearCache()
         NeonFX.clearCaches()
         SurfaceFX.clearCaches()
         UITheme.clearCaches()
@@ -736,9 +865,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        // Planet generation needs no explicit stop: the repeating action is keyed on
-        // gameContentNode, so it dies with the scene. The old
-        // PlanetHelper.stopPlanetGeneration() call was an empty no-op anyway.
     }
 
     // MARK: - Setup Methods
@@ -760,6 +886,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // Round one only. Every later round is appended by `updateEndlessRun` as the
             // queue drains, which is what makes the mode endless.
             endlessRound = 1
+            endlessBestAtStart = LevelManager.shared.getEndlessRecords().bestScore
             enemyManager = EnemyManager(scene: self, waves: EndlessDirector.waves(forRound: 1))
             return
         }
@@ -855,7 +982,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         scoreHUD = hud
 
         scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontNumeric)
-        scoreLabel.fontSize = UITheme.Typography.sizeRegular
+        scoreLabel.fontSize = 24
         scoreLabel.fontColor = UITheme.Colors.primaryCyanLight
         scoreLabel.verticalAlignmentMode = .center
         scoreLabel.horizontalAlignmentMode = .center
@@ -888,6 +1015,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             on: uiNode,
             at: CGPoint(x: size.width - 62, y: size.height - topMargin - Self.chainMeterDropBelowHUD)
         )
+
+        // Overdrive gauge, bottom left: under the off-hand thumb of a right-handed
+        // player, and clear of the heat gauge in the middle. It doubles as a button.
+        overdrive.installHUD(
+            on: uiNode,
+            at: Self.overdriveGaugePosition(safeAreaBottom: GameConfiguration.safeAreaBottom(in: view)),
+            caption: L10n.HUD.overdrive
+        )
+    }
+
+    /// Centre of the Overdrive gauge. A function of the inset alone so the layout test
+    /// can check it clears the home indicator without building a scene.
+    static func overdriveGaugePosition(safeAreaBottom: CGFloat) -> CGPoint {
+        return CGPoint(x: 42, y: max(safeAreaBottom, 10) + 36)
     }
 
     private func updateLivesDisplay(topMargin: CGFloat) {
@@ -954,16 +1095,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         path.closeSubpath()
 
+        // The ship as the HUD draws it: dark glass in the hull's ice-blue edge, the
+        // same light as the wireframe flying below.
         let ship = SKShapeNode(path: path)
-        ship.fillColor = UIColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 1.0)
-        ship.strokeColor = UIColor(red: 0.4, green: 0.9, blue: 1.0, alpha: 1.0)
-        ship.lineWidth = 1.5
+        ship.fillColor = UIColor(red: 0.02, green: 0.08, blue: 0.14, alpha: 0.9)
+        ship.strokeColor = UIColor(red: 0.55, green: 0.93, blue: 1.0, alpha: 1.0)
+        ship.lineWidth = 1.3
 
-        // Add cockpit detail
-        let cockpit = SKShapeNode(circleOfRadius: 2 * scale)
-        cockpit.fillColor = UIColor(red: 0.3, green: 0.8, blue: 1.0, alpha: 0.9)
-        cockpit.strokeColor = .clear
-        cockpit.position = CGPoint(x: 0, y: 8 * scale)
+        let cockpit = LightSprite.star(size: 9 * scale, color: .white)
+        cockpit.position = CGPoint(x: 0, y: 6 * scale)
         ship.addChild(cockpit)
 
         return ship
@@ -993,21 +1133,55 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         introNode.speed = 1.0 // Always animate at normal speed even when scene is paused
         introNode.name = "levelIntro"
 
-        // Semi-transparent background
-        let background = SKSpriteNode(color: UIColor(white: 0, alpha: 0.65), size: size)
-        background.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        introNode.addChild(background)
+        // Level 1 holds fractionally longer than the rest: long enough to read the words
+        // "LEVEL 1", not long enough to be a wait.
+        // `currentLevel` is left at its default of 1 in endless, so the mode has to be
+        // excluded explicitly or an endless run would inherit level 1's longer hold.
+        let hold: TimeInterval = (currentLevel == 1 && !isEndless) ? 1.15 : 0.75
+        let appearAt: TimeInterval = 0.15
+        let appearFor: TimeInterval = 0.35
+        let leaveFor: TimeInterval = 0.25
 
-        // Level number label
-        let levelLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        levelLabel.text = isEndless ? L10n.HUD.endless : L10n.HUD.level(currentLevel)
-        levelLabel.fontSize = 44
-        levelLabel.fontColor = .white
-        levelLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
+        // A title card the way the opening film sets its own: the picture letterboxed,
+        // the world still flying behind it, the sector typed out above a tracked gold
+        // title that draws a hairline under itself. No full-screen scrim — the world
+        // is the point — only a soft pool of shade behind the type.
+        let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+        let barDepth = max(size.height * 0.11, 70)
+        let bars = Cinematic.letterbox(size: size, depth: barDepth, hold: appearAt + appearFor + hold - 0.2)
+        introNode.addChild(bars)
+
+        let frameRect = CGRect(x: 0, y: barDepth, width: size.width, height: size.height - barDepth * 2)
+        let corners = Cinematic.viewfinder(in: frameRect, color: StoryPalette.cyan)
+        corners.alpha = 0
+        corners.run(.sequence([.wait(forDuration: 0.3), .fadeAlpha(to: 0.4, duration: 0.3)]))
+        introNode.addChild(corners)
+
+        let shade = Cinematic.shade(size: CGSize(width: size.width * 1.4, height: 360), alpha: 0)
+        shade.position = centre
+        shade.run(.fadeAlpha(to: 0.7, duration: 0.3))
+        introNode.addChild(shade)
+
+        let sector = isEndless ? 1 : (currentLevel - 1) / 5 + 1
+        let tag = Cinematic.typewriter("\(L10n.Sector.label(sector))  ·  \(L10n.Sector.name(sector))",
+                                       fontSize: 12, color: StoryPalette.cyan, tracking: 2.5,
+                                       delay: 0.15, duration: 0.55, maxWidth: size.width - 40)
+        tag.position = CGPoint(x: centre.x, y: centre.y + 54)
+        introNode.addChild(tag)
+
+        // Level number label: the film's title treatment.
+        let levelLabel = Cinematic.title(isEndless ? L10n.HUD.endless : L10n.HUD.level(currentLevel),
+                                         fontSize: 46, color: UITheme.Colors.primaryGold, glow: StoryPalette.gold,
+                                         tracking: 9, maxWidth: size.width - 48, minimumSize: 26)
+        levelLabel.position = CGPoint(x: centre.x, y: centre.y + 14)
         levelLabel.alpha = 0
-        UITheme.fitLabel(levelLabel, toWidth: size.width - 48, minimumFontSize: 26)
-        levelLabel.setScale(0.5)
+        levelLabel.setScale(1.12)
         introNode.addChild(levelLabel)
+
+        let rule = Cinematic.rule(width: min(size.width - 80, 240), color: UITheme.Colors.primaryGold,
+                                  delay: appearAt + 0.2)
+        rule.position = CGPoint(x: centre.x, y: centre.y - 16)
+        introNode.addChild(rule)
 
         // The score to beat, whenever there is one. A target on the card gives a replay a
         // point beyond "clear it again", and it is the cheapest hook available: the
@@ -1018,34 +1192,57 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             : LevelManager.shared.getLevelScore(level: currentLevel)
 
         if let best = target, best > 0 {
-            let bestLabel = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            let bestLabel = SKLabelNode(fontNamed: UITheme.Typography.fontNumeric)
             bestLabel.text = L10n.Common.best(best)
-            bestLabel.fontSize = 20
+            bestLabel.fontSize = 15
             bestLabel.fontColor = UITheme.Colors.primaryGoldLight
-            bestLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 26)
+            bestLabel.position = CGPoint(x: centre.x, y: centre.y - 44)
             bestLabel.alpha = 0
             introNode.addChild(bestLabel)
             bestLabel.run(.sequence([
-                .wait(forDuration: 0.2),
+                .wait(forDuration: appearAt + 0.3),
                 .fadeIn(withDuration: 0.25)
             ]))
         }
 
+        // The level's medals, as goals: the three things this level can still be asked
+        // for, lit where an earlier run already earned them.
+        if !isEndless {
+            let held = LevelManager.shared.getLevelMedals(level: currentLevel)
+            let row = SKNode()
+            row.position = CGPoint(x: centre.x, y: centre.y - (target != nil ? 92 : 62))
+            row.alpha = 0
+            introNode.addChild(row)
+
+            for (index, medal) in MedalSet.ordered.enumerated() {
+                let x = CGFloat(index - 1) * 96
+                let badge = MedalBadge.badge(for: medal, earned: held.contains(medal), radius: 13,
+                                             level: currentLevel, glow: false)
+                badge.position = CGPoint(x: x, y: 0)
+                row.addChild(badge)
+
+                let label = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+                label.text = MedalBadge.label(for: medal, level: currentLevel)
+                label.fontSize = 10
+                label.fontColor = held.contains(medal) ? MedalBadge.color(for: medal) : UIColor(white: 0.8, alpha: 1)
+                label.verticalAlignmentMode = .center
+                label.position = CGPoint(x: x, y: -24)
+                UITheme.fitLabel(label, toWidth: 90, minimumFontSize: 8)
+                row.addChild(label)
+            }
+            row.run(.sequence([.wait(forDuration: appearAt + 0.4), .fadeIn(withDuration: 0.25)]))
+        }
+
         addChild(introNode)
 
-        // Level 1 holds fractionally longer than the rest: long enough to read the words
-        // "LEVEL 1", not long enough to be a wait.
-        // `currentLevel` is left at its default of 1 in endless, so the mode has to be
-        // excluded explicitly or an endless run would inherit level 1's longer hold.
-        let hold: TimeInterval = (currentLevel == 1 && !isEndless) ? 1.2 : 0.7
-
         let appear = SKAction.group([
-            SKAction.fadeIn(withDuration: 0.3),
-            SKAction.scale(to: 1.0, duration: 0.3)
+            SKAction.fadeIn(withDuration: appearFor),
+            SKAction.scale(to: 1.0, duration: appearFor)
         ])
+        appear.timingMode = .easeOut
         let disappear = SKAction.group([
-            SKAction.fadeOut(withDuration: 0.25),
-            SKAction.scale(to: 1.2, duration: 0.25)
+            SKAction.fadeOut(withDuration: leaveFor),
+            SKAction.scale(to: 1.08, duration: leaveFor)
         ])
         let startEntry = SKAction.run { [weak self] in
             guard let self = self else { return }
@@ -1058,26 +1255,32 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // parent's removal first, the child's remaining actions — `startEntry` among
         // them — would be dropped, `startGame()` would never be reached, and the level
         // would sit on a paused playfield forever. One timeline cannot race itself.
+        //
+        // The bars are still opening when it ends, so the teardown waits them out —
+        // still on this one timeline, after `startEntry` has already fired.
         let teardown = SKAction.run { [weak introNode] in
             introNode?.removeFromParent()
         }
 
         levelLabel.run(.sequence([
+            .wait(forDuration: appearAt),
             appear,
             .wait(forDuration: hold),
             disappear,
             startEntry,
+            .wait(forDuration: 0.4),
             teardown
         ]))
 
-        // The scrim lifts alongside the title rather than after it, so the playfield is
-        // already clear while the ship flies in — the entry animation reads as the start
-        // of the level instead of as one more thing to sit through. Fade only; the
-        // removal above is what actually takes it off the scene.
-        introNode.run(.sequence([
-            .wait(forDuration: 0.3 + hold),
-            .fadeOut(withDuration: 0.25)
-        ]))
+        // The type lifts alongside the title rather than after it, so the playfield is
+        // already clear while the ship flies in. Everything but the bars fades; the
+        // bars open on their own timeline above.
+        for child in introNode.children where child !== levelLabel && child !== bars {
+            child.run(.sequence([
+                .wait(forDuration: appearAt + appearFor + hold),
+                .fadeOut(withDuration: leaveFor)
+            ]))
+        }
     }
 
     /// Level-one coaching, delivered over live gameplay.
@@ -1131,6 +1334,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func startGame() {
         isGameStarted = true
+        hasEndlessRunStarted = isEndless
         setGameplayPaused(false)
 
         // Never hand control back with a pause menu still on screen. Nothing should be
@@ -1153,14 +1357,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func setupPauseButton(topMargin: CGFloat) {
-        // Create enhanced pause button with outlined style
+        // A small lit frame in the same instrument language as the Overdrive gauge
+        // across the screen: dark glass, a hairline, light on the corners and in the
+        // glyph. It used to be a rounded, glowing tile — the one chunky shape left in a
+        // HUD drawn otherwise in lines of light.
         let buttonSize: CGFloat = 44
-        let pauseButton = SKShapeNode(rectOf: CGSize(width: buttonSize, height: buttonSize), cornerRadius: 10)
-        // Subtle background tint with border color
-        let pauseColor = UIColor(red: 0.3, green: 0.6, blue: 0.8, alpha: 1.0)
-        pauseButton.fillColor = pauseColor.withAlphaComponent(0.06)
-        pauseButton.strokeColor = pauseColor
-        pauseButton.lineWidth = 3
+        let accent = StoryPalette.cyan
+        let pauseButton = SKShapeNode(rectOf: CGSize(width: buttonSize, height: buttonSize))
+        pauseButton.fillColor = FilmUI.glass.withAlphaComponent(0.55)
+        pauseButton.strokeColor = accent.withAlphaComponent(0.22)
+        pauseButton.lineWidth = 1
         pauseButton.name = "pauseButton"
 
         // Position at the same height as hearts and score
@@ -1169,30 +1375,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         pauseButton.zPosition = 100
         uiNode.addChild(pauseButton)
 
-        // Add enhanced pause icon (two vertical bars with rounded ends)
-        let barWidth: CGFloat = 6
-        let barHeight: CGFloat = 18
-        let barSpacing: CGFloat = 7
-
-        let leftBar = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 3)
-        leftBar.fillColor = UIColor(red: 0.3, green: 0.6, blue: 0.8, alpha: 1.0)
-        leftBar.strokeColor = .clear
-        leftBar.position = CGPoint(x: -barSpacing / 2, y: 0)
-        pauseButton.addChild(leftBar)
-
-        let rightBar = SKShapeNode(rectOf: CGSize(width: barWidth, height: barHeight), cornerRadius: 3)
-        rightBar.fillColor = UIColor(red: 0.3, green: 0.6, blue: 0.8, alpha: 1.0)
-        rightBar.strokeColor = .clear
-        rightBar.position = CGPoint(x: barSpacing / 2, y: 0)
-        pauseButton.addChild(rightBar)
-
-        // Add subtle glow
-        GlowHelper.addEnhancedGlow(to: pauseButton, color: UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0), intensity: 0.5)
+        FilmUI.addBrackets(to: pauseButton, size: CGSize(width: buttonSize, height: buttonSize),
+                           arm: 8, color: accent, width: 1.3)
+        for x in [-4.5, 4.5] as [CGFloat] {
+            pauseButton.addChild(FilmUI.tube(CGPoint(x: x, y: -8), CGPoint(x: x, y: 8),
+                                             width: 2.4, color: StoryPalette.ice))
+        }
 
         self.pauseButton = pauseButton
     }
 
     private static let pauseOverlayName = "pauseOverlay"
+    /// What a dismissed overlay is renamed to while it fades out. Not nil: the sweep in
+    /// `showPauseOverlay()` has to be able to find it.
+    private static let fadingPauseOverlayName = "pauseOverlayFading"
+
+    /// The pause menu's buttons, in the order a tap is tested against them.
+    private static let pauseMenuButtonNames = [
+        "resumeButton", "pauseRetryButton", "pauseSettingsButton", "pauseLevelsButton", "pauseMenuButton"
+    ]
 
     private func showPauseOverlay() {
         guard pauseOverlay == nil else { return }
@@ -1201,183 +1402,142 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // `hidePauseOverlay()` clears `pauseOverlay` up front so the game can be
         // re-paused immediately, but leaves the node in the tree for 0.4s to fade.
         // Tapping RESUME and then the pause button straight away therefore stacked a
-        // fresh panel underneath a fading scrim.
-        uiNode?.childNode(withName: Self.pauseOverlayName)?.removeFromParent()
+        // fresh menu over a fading one — two dim layers. The outgoing overlay is found by
+        // the name `hidePauseOverlay()` gives it; this used to look for the live name,
+        // which the dismissal had already cleared, so the sweep never found anything.
+        while let fading = uiNode?.childNode(withName: Self.fadingPauseOverlayName) {
+            fading.removeFromParent()
+        }
+        isPauseMenuActionPending = false
 
         let overlay = SKNode()
         overlay.name = Self.pauseOverlayName
         overlay.zPosition = 10000
 
-        // Semi-transparent background
-        let background = SKSpriteNode(color: UIColor(white: 0, alpha: 0), size: size)
+        // The picture dims behind the frame. Nothing here is hit-tested by node: a tap
+        // anywhere off the menu column resumes — on the dimmed picture, on the letterbox
+        // bars, on the corners — see `handlePauseMenuTap(at:)`.
+        let background = SKSpriteNode(color: .black, size: size)
         background.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        background.alpha = 0
         background.name = "pauseOverlayBackground"
         overlay.addChild(background)
+        background.run(SKAction.fadeAlpha(to: 0.55, duration: 0.25))
 
-        // Fade in background
-        background.run(SKAction.fadeAlpha(to: 0.7, duration: 0.3))
+        // A freeze-frame: the letterbox closes over the stopped picture, the way the
+        // films frame a held shot, with the run's score printed above it.
+        let depths = FilmUI.Letterbox.depthsOverGameplay(size: size, view: view)
+        let frame = FilmUI.Letterbox(size: size, top: depths.top, bottom: depths.bottom)
+        frame.zPosition = 1
+        overlay.addChild(frame)
+        frame.addFurniture(left: "\(L10n.Common.score)  \(score.formatted())", right: nil, recording: true)
 
-        // Pause panel - height accommodates retry and settings buttons
-        let panelWidth: CGFloat = min(size.width - 60, 300)
-        let panelHeight: CGFloat = 410
-        let panel = SKShapeNode(rectOf: CGSize(width: panelWidth, height: panelHeight), cornerRadius: 25)
-        panel.fillColor = UIColor(red: 0.1, green: 0.15, blue: 0.25, alpha: 0.95)
-        panel.strokeColor = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0) // Brighter cyan border
-        panel.lineWidth = 4
-        panel.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        panel.alpha = 0
-        panel.setScale(0.8)
+        let column = SKNode()
+        column.position = CGPoint(x: size.width / 2, y: frame.picture.midY)
+        column.setScale(FilmUI.uiScale(for: size))
+        column.zPosition = 2
+        overlay.addChild(column)
 
-        // Add outer glow effect for pause panel
-        let glowPanel = SKShapeNode(rectOf: CGSize(width: panelWidth, height: panelHeight), cornerRadius: 25)
-        glowPanel.fillColor = .clear
-        glowPanel.strokeColor = UIColor(red: 0.4, green: 0.8, blue: 1.0, alpha: 0.5)
-        glowPanel.lineWidth = 8
-        glowPanel.position = CGPoint(x: size.width / 2, y: size.height / 2)
-        glowPanel.setScale(0.82)
-        glowPanel.alpha = 0
-        overlay.addChild(glowPanel)
+        let shade = Cinematic.shade(size: CGSize(width: size.width * 1.5, height: 560), alpha: 0.75)
+        shade.zPosition = -1
+        column.addChild(shade)
 
-        overlay.addChild(panel)
+        let width = min(UITheme.Dimensions.buttonWidthXLarge, size.width / column.xScale - 64)
+        let pairWidth = (width - UITheme.Dimensions.buttonPairGap) / 2
+        let primaryHeight = UITheme.Dimensions.buttonHeight
+        let secondaryHeight = UITheme.Dimensions.buttonHeightSecondary
 
-        // Animate panel entrance - same as GameOverScene
-        let panelAnimation = SKAction.sequence([
-            SKAction.wait(forDuration: 0.2),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: 0.4),
-                SKAction.scale(to: 1.0, duration: 0.4)
-            ])
-        ])
-        panel.run(panelAnimation)
-        glowPanel.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.2),
-            SKAction.group([
-                SKAction.fadeIn(withDuration: 0.4),
-                SKAction.scale(to: 1.02, duration: 0.4)
-            ]),
-            SKAction.repeatForever(SKAction.sequence([
-                SKAction.fadeAlpha(to: 0.3, duration: 1.0),
-                SKAction.fadeAlpha(to: 0.6, duration: 1.0)
-            ]))
-        ]))
+        // Where the run is, typed out above the title the way the level card tags it.
+        let sector = (currentLevel - 1) / 5 + 1
+        let where_ = isEndless
+            ? "\(L10n.HUD.endless)  ·  \(L10n.HUD.round(max(1, endlessRound)))"
+            : "\(L10n.HUD.level(currentLevel))  ·  \(L10n.Sector.name(sector))"
+        let tag = Cinematic.typewriter(where_, fontSize: 12, color: StoryPalette.cyan, tracking: 2.5,
+                                       delay: 0.1, duration: 0.5, maxWidth: size.width - 48)
 
-        // "PAUSED" title - simple and clean
-        let title = SKLabelNode(fontNamed: "Arial-BoldMT")
-        title.text = L10n.Pause.title
-        title.fontSize = 36
-        title.fontColor = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1.0)
-        title.position = CGPoint(x: 0, y: panelHeight / 2 - 50)
-        title.horizontalAlignmentMode = .center
-        title.verticalAlignmentMode = .center
-        panel.addChild(title)
+        let title = FilmUI.title(L10n.Pause.title, size: 46, color: UITheme.Colors.primaryCyanLight,
+                                 glow: StoryPalette.cyan, tracking: 14, maxWidth: size.width - 48,
+                                 bloom: 1.0)
+        let rule = FilmUI.drawnRule(width: min(width, 220), color: StoryPalette.cyan, alpha: 0.6, delay: 0.15)
 
-        // Level info
-        let levelInfo = SKLabelNode(fontNamed: "Arial")
-        levelInfo.text = L10n.Pause.level(currentLevel)
-        levelInfo.fontSize = 22
-        levelInfo.fontColor = UIColor(red: 0.8, green: 0.9, blue: 1.0, alpha: 1.0)
-        levelInfo.position = CGPoint(x: 0, y: panelHeight / 2 - 90)
-        levelInfo.horizontalAlignmentMode = .center
-        levelInfo.verticalAlignmentMode = .center
-        panel.addChild(levelInfo)
-
-        // Resume button
-        let resumeButton = createPauseMenuButton(
-            text: L10n.Pause.resume,
-            color: UIColor(red: 0.3, green: 0.7, blue: 0.3, alpha: 1.0),
-            width: 220,
-            name: "resumeButton"
-        )
-        resumeButton.position = CGPoint(x: 0, y: 54)
-        panel.addChild(resumeButton)
-
-        // Retry button
-        let retryButton = createPauseMenuButton(
-            text: L10n.Common.retry,
-            color: UIColor(red: 0.9, green: 0.5, blue: 0.2, alpha: 1.0),
-            width: 220,
-            name: "pauseRetryButton"
-        )
-        retryButton.position = CGPoint(x: 0, y: -12)
-        panel.addChild(retryButton)
-
+        let resumeButton = UITheme.createButton(text: L10n.Pause.resume, color: StoryPalette.cyan,
+                                                width: width, name: "resumeButton", primary: true)
+        let retryButton = UITheme.createButton(text: L10n.Common.retry, color: StoryPalette.gold,
+                                               width: width, name: "pauseRetryButton")
         // Settings, reachable mid-level: muting only from the main menu would mean
         // abandoning a run to turn the music down.
-        let settingsButton = createPauseMenuButton(
-            text: L10n.Pause.settings,
-            color: UIColor(red: 0.35, green: 0.6, blue: 0.75, alpha: 1.0),
-            width: 220,
-            name: "pauseSettingsButton"
-        )
-        settingsButton.position = CGPoint(x: 0, y: -78)
-        panel.addChild(settingsButton)
+        let settingsButton = UITheme.createButton(text: L10n.Pause.settings, color: FilmUI.neutral,
+                                                  width: width, name: "pauseSettingsButton")
+        let levelsButton = UITheme.createButton(text: L10n.Common.levels, color: FilmUI.neutral,
+                                                width: pairWidth, name: "pauseLevelsButton")
+        let menuButton = UITheme.createButton(text: L10n.Common.menu, color: FilmUI.neutral,
+                                              width: pairWidth, name: "pauseMenuButton")
 
-        // Secondary buttons container
-        let secondaryButtonY: CGFloat = -144
+        // Top to bottom: the gap above each row, and its height.
+        let rows: [(node: SKNode, gap: CGFloat, height: CGFloat)] = [
+            (tag, 0, 14),
+            (title, 14, title.frame.height),
+            (rule, 14, 1),
+            (resumeButton, 34, primaryHeight),
+            (retryButton, 12, secondaryHeight),
+            (settingsButton, 12, secondaryHeight),
+            (levelsButton, 12, secondaryHeight)
+        ]
+        let total = rows.reduce(0) { $0 + $1.gap + $1.height }
+        var cursor = total / 2
+        for row in rows {
+            cursor -= row.gap + row.height / 2
+            row.node.position.y = cursor
+            cursor -= row.height / 2
+        }
+        levelsButton.position.x = -(pairWidth + UITheme.Dimensions.buttonPairGap) / 2
+        menuButton.position = CGPoint(x: (pairWidth + UITheme.Dimensions.buttonPairGap) / 2,
+                                      y: levelsButton.position.y)
 
-        let levelsButton = createPauseMenuButton(
-            text: L10n.Common.levels,
-            color: UIColor(red: 0.3, green: 0.5, blue: 0.9, alpha: 1.0),
-            width: 105,
-            name: "pauseLevelsButton"
-        )
-        levelsButton.position = CGPoint(x: -57, y: secondaryButtonY)
-        panel.addChild(levelsButton)
+        for node in [tag, title, rule, resumeButton, retryButton, settingsButton, levelsButton, menuButton] {
+            column.addChild(node)
+        }
 
-        let menuButton = createPauseMenuButton(
-            text: L10n.Common.menu,
-            color: UIColor(red: 0.4, green: 0.4, blue: 0.5, alpha: 1.0),
-            width: 105,
-            name: "pauseMenuButton"
-        )
-        menuButton.position = CGPoint(x: 57, y: secondaryButtonY)
-        panel.addChild(menuButton)
+        // The menu's own footprint, measured before anything is animated: the column's
+        // full width by the stack's height, with a margin so a tap that only just misses
+        // a button does not throw the player back into the fight. The shade hung off the
+        // column is deliberately not part of it — it reaches far past the menu, and the
+        // picture it darkens is what "tap outside to resume" is about.
+        let menuWidth = max(width, tag.frame.width, title.frame.width)
+        let menuRect = CGRect(x: -menuWidth / 2, y: -total / 2, width: menuWidth, height: total)
+            .insetBy(dx: -16, dy: -16)
+        let scale = column.xScale
+        pauseMenuFrame = CGRect(x: column.position.x + menuRect.minX * scale,
+                                y: column.position.y + menuRect.minY * scale,
+                                width: menuRect.width * scale, height: menuRect.height * scale)
+
+        // The title settles in; the buttons follow it down.
+        title.alpha = 0
+        title.setScale(1.08)
+        let settle = SKAction.scale(to: 1, duration: 0.5)
+        settle.timingMode = .easeOut
+        title.run(.group([.fadeIn(withDuration: 0.25), settle]))
+        for (index, button) in [resumeButton, retryButton, settingsButton, levelsButton, menuButton].enumerated() {
+            button.alpha = 0
+            button.run(.sequence([.wait(forDuration: 0.12 + Double(min(index, 3)) * 0.05),
+                                  .fadeIn(withDuration: 0.2)]))
+        }
 
         pauseOverlay = overlay
         uiNode.addChild(overlay)
     }
 
-    private func createPauseMenuButton(text: String, color: UIColor, width: CGFloat, name: String) -> SKShapeNode {
-        let button = SKShapeNode(rectOf: CGSize(width: width, height: 50), cornerRadius: 12)
-        // Subtle background tint with border color
-        button.fillColor = color.withAlphaComponent(0.15)
-        button.strokeColor = color
-        button.lineWidth = 3
-        button.name = name
-
-        // Add shadow effect with lower opacity for outlined style
-        let shadow = SKShapeNode(rectOf: CGSize(width: width, height: 50), cornerRadius: 12)
-        shadow.fillColor = .clear
-        shadow.strokeColor = .black
-        shadow.alpha = 0.2
-        shadow.lineWidth = 3
-        shadow.position = CGPoint(x: 0, y: -2)
-        shadow.zPosition = -1
-        button.addChild(shadow)
-
-        let label = SKLabelNode(fontNamed: "Arial-BoldMT")
-        label.text = text
-        label.fontSize = 20
-        label.fontColor = color
-        label.horizontalAlignmentMode = .center
-        label.verticalAlignmentMode = .center
-        label.name = name // Set name on label too for easier touch detection
-        label.zPosition = 2
-        UITheme.fitLabel(label, toWidth: width - 20)
-        button.addChild(label)
-
-        return button
-    }
-
     private func hidePauseOverlay() {
         guard let overlay = pauseOverlay else { return }
         pauseOverlay = nil
+        pauseMenuFrame = .null
+        isPauseMenuActionPending = false
 
-        // Strip the names off the outgoing overlay before it fades. Touch dispatch in
-        // this scene is name-based (`nodes(at:)` + name matching), so a scrim and six
-        // buttons that are still in the tree but no longer the live overlay must stop
-        // answering to those names.
-        overlay.name = nil
+        // Strip the names off the outgoing overlay before it fades: buttons that are
+        // still in the tree but no longer the live overlay must stop answering to those
+        // names. The overlay itself is renamed rather than cleared, so a quick re-pause
+        // can find it and sweep it away (see `showPauseOverlay()`).
+        overlay.name = Self.fadingPauseOverlayName
         Self.clearNames(underDescendantsOf: overlay)
 
         // Animate panel exit - just fade out, no scaling to avoid position change
@@ -1404,10 +1564,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
-    /// The live pause menu's button with this name, or nil if the menu is not up.
-    private func pauseMenuButton(named name: String) -> SKShapeNode? {
+    /// The live pause menu's button under `location`, or nil.
+    ///
+    /// Measured against each button's own outline rather than asked of `nodes(at:)`:
+    /// the overlay is layered — letterbox, viewfinder corners, the column's shade — and
+    /// what `nodes(at:)` puts first depends on that draw order, not on what the player
+    /// meant to press. A button still fading in is not yet a button.
+    private func pauseMenuButton(at location: CGPoint) -> SKShapeNode? {
         guard let overlay = pauseOverlay else { return nil }
-        return Self.descendant(of: overlay, named: name)
+        for name in Self.pauseMenuButtonNames {
+            guard let button: SKShapeNode = Self.descendant(of: overlay, named: name),
+                  button.alpha > 0.05,
+                  let bounds = button.path?.boundingBoxOfPath else { continue }
+            if bounds.insetBy(dx: -4, dy: -4).contains(convert(location, to: button)) {
+                return button
+            }
+        }
+        return nil
     }
 
     /// First descendant of `node` — depth-first, `node` itself excluded — named `name`
@@ -1416,14 +1589,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// Hand-rolled for the same reason `clearNames(underDescendantsOf:)` is: neither
     /// spelling of `childNode(withName:)` scopes a search to a subtree. A bare name
     /// matches *only immediate children*, and the pause buttons are grandchildren of the
-    /// overlay (overlay → panel → button), so `overlay.childNode(withName: "resumeButton")`
+    /// overlay (overlay → column → button), so `overlay.childNode(withName: "resumeButton")`
     /// returns nil. Prefixing `//` finds them, but by searching from the root of the whole
     /// tree — it only happened to be right because these names are unique to the live
     /// overlay and `hidePauseOverlay()` strips them off dismissed ones. That is a lot of
     /// weight for an accident to carry, so search the subtree properly instead.
     ///
-    /// The type filter is load-bearing, not decoration: `createPauseMenuButton` puts the
-    /// same name on the button *and* on its label, and the callers all want the shape.
+    /// The type filter keeps the lookup to the button itself: the callers all want the
+    /// shape they can run the press animation on.
     private static func descendant<T: SKNode>(of node: SKNode, named name: String) -> T? {
         for child in node.children {
             if child.name == name, let match = child as? T { return match }
@@ -1432,59 +1605,63 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return nil
     }
 
-    private func handleResumeButton() {
-        // Button press animation
-        if let resumeButton = pauseMenuButton(named: "resumeButton") {
-            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
-            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
-            resumeButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
-                self?.togglePause()
+    /// Every tap while the pause menu is up: a button runs its action, anywhere off the
+    /// menu column resumes, and a tap on the column between buttons does nothing.
+    ///
+    /// The HUD's pause button is not special here. While paused it sits under the top
+    /// letterbox bar, and a tap on the bar is a tap outside the menu like any other.
+    private func handlePauseMenuTap(at location: CGPoint) {
+        // One action per menu: the press animation runs it 0.17 s after the tap, and a
+        // second tap in that window must not queue another. See
+        // `isPauseMenuActionPending`.
+        guard !isPauseMenuActionPending else { return }
+
+        if let button = pauseMenuButton(at: location), let name = button.name {
+            isPauseMenuActionPending = true
+            HapticManager.shared.lightTap()
+            if name == "resumeButton" {
+                SoundManager.shared.playResumeSound(on: self)
+            } else {
+                SoundManager.shared.playButtonClickSound(on: self)
             }
+            button.run(UITheme.createButtonPressAnimation { [weak self] in
+                self?.runPauseMenuAction(named: name)
+            })
+            return
+        }
+
+        guard !pauseMenuFrame.contains(location) else { return }
+        HapticManager.shared.lightTap()
+        SoundManager.shared.playResumeSound(on: self)
+        resumeFromPauseMenu()
+    }
+
+    private func runPauseMenuAction(named name: String) {
+        switch name {
+        case "resumeButton":
+            resumeFromPauseMenu()
+        case "pauseRetryButton":
+            restartGame()
+        case "pauseLevelsButton":
+            goToLevelSelect()
+        case "pauseMenuButton":
+            goToMenu()
+        case "pauseSettingsButton":
+            showSettingsOverlay()
+            // The panel is modal and takes every tap while it is up, so the menu can
+            // answer again as soon as it is there — which is when the panel closes.
+            isPauseMenuActionPending = false
+        default:
+            isPauseMenuActionPending = false
         }
     }
 
-    private func handlePauseRetryButton() {
-        // Button press animation
-        if let retryButton = pauseMenuButton(named: "pauseRetryButton") {
-            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
-            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
-            retryButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
-                self?.restartGame()
-            }
-        }
-    }
-
-    private func handlePauseLevelsButton() {
-        // Button press animation
-        if let levelsButton = pauseMenuButton(named: "pauseLevelsButton") {
-            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
-            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
-            levelsButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
-                self?.goToLevelSelect()
-            }
-        }
-    }
-
-    private func handlePauseMenuButton() {
-        // Button press animation
-        if let menuButton = pauseMenuButton(named: "pauseMenuButton") {
-            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
-            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
-            menuButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
-                self?.goToMenu()
-            }
-        }
-    }
-
-    private func handlePauseSettingsButton() {
-        // Button press animation
-        if let settingsButton = pauseMenuButton(named: "pauseSettingsButton") {
-            let scaleDown = SKAction.scale(to: 0.9, duration: 0.1)
-            let scaleUp = SKAction.scale(to: 1.0, duration: 0.1)
-            settingsButton.run(SKAction.sequence([scaleDown, scaleUp])) { [weak self] in
-                self?.showSettingsOverlay()
-            }
-        }
+    /// Resumes from the pause menu, and only from it: a stale press or tap that lands
+    /// after the game is already running must not pause it again, which is what a bare
+    /// `togglePause()` would do.
+    private func resumeFromPauseMenu() {
+        guard isGameplayPaused, pauseOverlay != nil else { return }
+        togglePause()
     }
 
     /// Presents the settings panel over the pause menu.
@@ -1499,6 +1676,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func goToMenu() {
         guard let view = view else { return }
+        recordEndlessRun()
         let menuScene = MenuScene(size: view.bounds.size)
         menuScene.scaleMode = scaleMode
         let transition = SKTransition.fade(withDuration: 0.5)
@@ -1507,6 +1685,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func restartGame() {
         guard let view = view else { return }
+        // An endless run abandoned for a fresh one still counts towards the records.
+        recordEndlessRun()
         let gameScene = GameScene(size: view.bounds.size)
         gameScene.scaleMode = scaleMode
         gameScene.currentLevel = currentLevel
@@ -1542,105 +1722,111 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         guard let touch = touches.first else { return }
         let location = touch.location(in: self)
 
-        // Check if pause button was tapped (only when game has started)
-        let nodesAtPoint = nodes(at: location)
-
         // The settings panel is modal, so it takes every tap while it is up — before
         // the pause-menu handlers below, and before any gameplay touch.
         if let settings = uiNode?.childNode(withName: SettingsOverlay.nodeName) as? SettingsOverlay {
-            let topName = nodesAtPoint.first(where: { $0.name != nil })?.name
-            settings.handleTap(named: topName)
+            settings.handleTap(at: location)
             return
         }
 
-        // First check for interactive elements (buttons)
-        for node in nodesAtPoint {
-            if isGameStarted && (node.name == "pauseButton" || node.parent?.name == "pauseButton") {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playPauseSound(on: self)
-                togglePause()
-                return
-            }
-
-            // Check pause overlay buttons
-            if gameContentNode.isPaused {
-                if node.name == "resumeButton" || node.parent?.name == "resumeButton" {
-                    HapticManager.shared.lightTap()
-                    SoundManager.shared.playResumeSound(on: self)
-                    handleResumeButton()
-                    return
-                }
-                if node.name == "pauseRetryButton" || node.parent?.name == "pauseRetryButton" {
-                    HapticManager.shared.lightTap()
-                    SoundManager.shared.playButtonClickSound(on: self)
-                    handlePauseRetryButton()
-                    return
-                }
-                if node.name == "pauseLevelsButton" || node.parent?.name == "pauseLevelsButton" {
-                    HapticManager.shared.lightTap()
-                    SoundManager.shared.playButtonClickSound(on: self)
-                    handlePauseLevelsButton()
-                    return
-                }
-                if node.name == "pauseMenuButton" || node.parent?.name == "pauseMenuButton" {
-                    HapticManager.shared.lightTap()
-                    SoundManager.shared.playButtonClickSound(on: self)
-                    handlePauseMenuButton()
-                    return
-                }
-                if node.name == "pauseSettingsButton" || node.parent?.name == "pauseSettingsButton" {
-                    HapticManager.shared.lightTap()
-                    SoundManager.shared.playButtonClickSound(on: self)
-                    handlePauseSettingsButton()
-                    return
-                }
-            }
+        // So is the endless perk picker — including over the pause button, which would
+        // otherwise resume the frozen run out from under it.
+        if let picker = perkPicker {
+            picker.handleTap(at: location)
+            return
         }
 
-        // If paused and no button was clicked, check if background overlay was tapped (close menu)
-        // Only close if we clicked directly on background, not on panel or its children
+        // Paused: the pause menu, if it is up, takes the tap — the HUD's pause button
+        // included, which is covered by the menu's letterbox. With no menu up (the level
+        // intro) nothing in the game answers.
         if gameContentNode.isPaused {
-            let topNode = nodesAtPoint.first
-            if topNode?.name == "pauseOverlayBackground" {
-                HapticManager.shared.lightTap()
-                SoundManager.shared.playResumeSound(on: self)
-                togglePause()
-                return
+            if pauseOverlay != nil {
+                handlePauseMenuTap(at: location)
             }
+            return
         }
 
-        // Don't handle game touches when paused or game hasn't started
-        if gameContentNode.isPaused || !isGameStarted { return }
+        if !isGameStarted { return }
 
-        isTouching = true
-        touchLocation = location
+        if nodes(at: location).contains(where: { $0.name == "pauseButton" || $0.parent?.name == "pauseButton" }) {
+            HapticManager.shared.lightTap()
+            SoundManager.shared.playPauseSound(on: self)
+            togglePause()
+            return
+        }
 
-        spawnTouchRipple(at: location)
+        for touch in touches {
+            let location = touch.location(in: self)
 
-        // Move player to touch location with animation
-        player.moveTo(x: location.x, y: location.y, sceneWidth: size.width, sceneHeight: size.height, safeAreaBottom: safeAreaBottom)
+            // The Overdrive gauge is a button while the meter is full. A touch that
+            // lands on it then fires the overdrive and does not steer; on an empty
+            // meter it is just more screen, so a thumb resting there still flies.
+            if overdrive.isReady, nodes(at: location).contains(where: OverdriveSystem.isButton) {
+                activateOverdrive()
+                continue
+            }
+
+            guard steeringTouch == nil else {
+                // A second finger while the first flies: the two-handed trigger.
+                if overdrive.isReady { activateOverdrive() }
+                continue
+            }
+
+            // One-handed trigger: a quick double tap. Both taps must be short, so a
+            // player who lifts and re-plants a thumb mid-fight does not fire it by
+            // accident — that is a long hold followed by a touch, not two taps.
+            let now = CACurrentMediaTime()
+            let isDoubleTap = now - lastTapEnded < 0.28 && lastTapEnded - lastTapBegan < 0.22
+            currentTapBegan = now
+            if isDoubleTap && overdrive.isReady {
+                activateOverdrive()
+            }
+
+            steeringTouch = touch
+            lastSteerLocation = location
+            isTouching = true
+            touchLocation = location
+            spawnTouchRipple(at: location)
+        }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         // Don't handle game touches when paused or game hasn't started
         if gameContentNode.isPaused || !isGameStarted { return }
 
-        guard let touch = touches.first else { return }
-        let location = touch.location(in: self)
+        // Only the steering finger flies the ship. Testing membership rather than
+        // taking `touches.first` matters once a second finger is down: a moved event
+        // for that finger alone must not be read as a drag.
+        guard let steering = steeringTouch, touches.contains(steering) else { return }
+        let location = steering.location(in: self)
 
+        let sensitivity = GameConfiguration.dragSensitivity
+        let delta = CGVector(
+            dx: (location.x - lastSteerLocation.x) * sensitivity,
+            dy: (location.y - lastSteerLocation.y) * sensitivity
+        )
+        lastSteerLocation = location
         isTouching = true
         touchLocation = location
 
-        spawnTouchRipple(at: location)
-
-        // Move player instantly to follow touch smoothly
-        player.moveToInstant(x: location.x, y: location.y, sceneWidth: size.width, sceneHeight: size.height, safeAreaBottom: safeAreaBottom)
+        player.steer(by: delta, sceneWidth: size.width, sceneHeight: size.height, safeAreaBottom: safeAreaBottom)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Don't handle game touches when paused or game hasn't started
-        if gameContentNode.isPaused || !isGameStarted { return }
+        releaseSteering(ifAmong: touches)
+    }
+
+    /// Ends the steering touch if it is among `touches`.
+    ///
+    /// Deliberately not gated on the pause the way the other handlers are: a finger
+    /// lifted while the pause menu is up still lifted, and leaving the steering touch
+    /// recorded would resume the game with the guns firing and nobody touching.
+    private func releaseSteering(ifAmong touches: Set<UITouch>) {
+        guard let steering = steeringTouch, touches.contains(steering) else { return }
+        steeringTouch = nil
         isTouching = false
+        lastTapBegan = currentTapBegan
+        lastTapEnded = CACurrentMediaTime()
     }
 
     // Negative sentinel so the very first tap of a level still gets a ripple:
@@ -1669,9 +1855,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Don't handle game touches when paused or game hasn't started
-        if gameContentNode.isPaused || !isGameStarted { return }
-        isTouching = false
+        releaseSteering(ifAmong: touches)
     }
 
     private func shoot() {
@@ -1693,15 +1877,26 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // update(_:) is true, so `WeaponHeatSystem.update` skips cooling. Any heat carried
         // in resumes cooling the moment the trigger is released.
         if player.hasLightningWeapon {
-            shootLightning()
+            // Lightning keeps the cadence it was balanced at. It strikes the whole
+            // screen and fifteen boss hits per trigger-pull, so tying it to the new
+            // bolt cadence would have more than doubled what it does.
+            if gameTime - lastLightningTime >= 0.3 {
+                lastLightningTime = gameTime
+                shootLightning()
+            }
             return
         }
 
         // Add heat from shooting. The shot that tips the gauge over still fires — see
-        // `WeaponHeatSystem.registerShot(currentTime:)`.
-        weaponHeat.registerShot(currentTime: gameTime)
+        // `WeaponHeatSystem.registerShot(currentTime:)`. An overdrive does not heat the
+        // guns: it is a few seconds of everything, and rationing it would undo the point.
+        let isOverdrive = overdrive.isActive
+        if !isOverdrive {
+            weaponHeat.registerShot(currentTime: gameTime,
+                                    scale: CGFloat(PerkRules.heatScale(stacks: stacks(.coolant))))
+        }
 
-        let bullets = player.shoot()
+        let rounds = player.shoot(overdrive: isOverdrive)
 
         // Play shoot sound
         SoundManager.shared.playShootSound(on: self)
@@ -1709,10 +1904,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Muzzle flash and a short recoil dip: firing should be felt, not just
         // observed. Both are extremely short so rapid fire doesn't turn strobey.
         let muzzle = NeonFX.flashPoint(
-            at: CGPoint(x: player.position.x, y: player.position.y + 20),
-            radius: 13,
-            color: UIColor(red: 0.7, green: 1.0, blue: 0.95, alpha: 1.0),
-            duration: 0.1,
+            at: CGPoint(x: player.position.x, y: player.position.y + 22),
+            radius: isOverdrive ? 13 : 11,
+            color: isOverdrive ? ProjectileFX.overdriveBolt : UIColor(red: 0.7, green: 1.0, blue: 0.95, alpha: 1.0),
+            duration: 0.07,
             growTo: 1.5
         )
         muzzle.zPosition = 12
@@ -1720,43 +1915,61 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         player.applyRecoil()
 
-        for bullet in bullets {
-            gameContentNode.addChild(bullet)
+        // Rounds fly at a fixed speed along their own heading. 1150 pt/s, up from about
+        // 580: a fast round reads as a shot, a slow one as a thing drifting upwards.
+        let speed = GameConfiguration.playerBulletSpeed
+        for round in rounds {
+            gameContentNode.addChild(round)
 
-            // Check if bullet has angle (bullets 5-8)
-            if let angle = bullet.userData?["angle"] as? CGFloat {
-                // Calculate movement with angle
-                let angleRad = angle * .pi / 180
-                let distance: CGFloat = 2000
-                let dx = distance * sin(angleRad)
-                let dy = distance * cos(angleRad)
-
-                let moveAction = SKAction.moveBy(x: dx, y: dy, duration: 1.5)
-                let removeAction = SKAction.removeFromParent()
-                bullet.run(SKAction.sequence([moveAction, removeAction]))
+            // `zRotation` is the heading, clockwise-negative like everything else in
+            // SpriteKit; a straight round has none.
+            let heading = round.zRotation
+            let travel: CGFloat
+            let dx: CGFloat
+            let dy: CGFloat
+            if heading == 0 {
+                travel = size.height + 40 - round.position.y
+                dx = 0
+                dy = travel
             } else {
-                // Move bullet straight upwards (bullets 1-4)
-                let moveAction = SKAction.moveTo(y: size.height + 20, duration: 1.5)
-                let removeAction = SKAction.removeFromParent()
-                bullet.run(SKAction.sequence([moveAction, removeAction]))
+                travel = 1600
+                dx = -sin(heading) * travel
+                dy = cos(heading) * travel
             }
+            round.run(.sequence([
+                .moveBy(x: dx, y: dy, duration: TimeInterval(max(travel, 1) / speed)),
+                .removeFromParent()
+            ]))
         }
 
-        // Shoot missiles if available
-        if player.sideMissileCount > 0 {
+        // Wing launchers fire on every third volley. They used to fire on every one,
+        // which at the current cadence would be fifteen missiles a second; a missile is
+        // worth three bolts instead.
+        volleyCount += 1
+        if player.sideMissileCount > 0 && volleyCount % 3 == 0 {
             SoundManager.shared.playMissileSound(on: self)
             for i in 0..<player.sideMissileCount {
                 let side = i == 0 ? -1 : 1
                 let missile = player.shootMissile(side: side)
                 gameContentNode.addChild(missile)
 
-                // Move missile upwards
-                let moveAction = SKAction.moveTo(y: size.height + 20, duration: 1.2)
-                let removeAction = SKAction.removeFromParent()
-                missile.run(SKAction.sequence([moveAction, removeAction]))
+                let travel = size.height + 40 - missile.position.y
+                let move = SKAction.moveBy(x: 0, y: travel, duration: TimeInterval(travel / 900))
+                move.timingMode = .easeIn
+                missile.run(SKAction.sequence([move, .removeFromParent()]))
             }
         }
     }
+
+    /// Volleys fired this level, for the wing launchers' cadence.
+    private var volleyCount = 0
+
+    /// Read-only, for `jetshotTests`: rounds leave the screen in well under a second
+    /// now, so counting them in flight no longer measures the fire rate.
+    var volleysFired: Int { volleyCount }
+
+    /// When lightning last struck, on the gameplay clock.
+    private var lastLightningTime: TimeInterval = -1
 
     private func shootLightning() {
         // Play lightning sound
@@ -1770,49 +1983,44 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         )
         effectsParent.addChild(lightning)
 
-        // Damage all enemies on screen
-        gameContentNode.enumerateChildNodes(withName: "enemy") { [weak self] node, _ in
-            guard let self = self else { return }
-            if let enemy = node as? Enemy {
-                // Instantly destroy enemy
-                enemy.health = 0
-
-                // Explosion effect
-                self.createExplosion(at: enemy.position, size: .small)
-
-                // Add score
-                self.addScore(enemy.enemyType.points)
-
-                // Mark enemy as destroyed
-                enemy.markAsDestroyed()
-                enemy.removeFromParent()
-            }
+        // Destroy every enemy on screen. Collected first: removing nodes from inside
+        // the enumeration that is walking them is asking for trouble.
+        var struck: [Enemy] = []
+        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
+            if let enemy = node as? Enemy { struck.append(enemy) }
+        }
+        for enemy in struck {
+            enemy.health = 0
+            createExplosion(at: enemy.position, size: .small)
+            rewardKill(of: enemy, at: enemy.position, label: false)
+            enemy.markAsDestroyed()
+            enemy.removeFromParent()
         }
 
         // Damage boss if present
         if bossManager.isBossActive() {
-            // Deal significant damage to boss (15 hits worth)
-            for _ in 0..<15 {
-                // Check if boss is still alive before each hit
-                guard bossManager.isBossActive() else { break }
+            // Fifteen authored hits' worth, scaled like the boss's health so lightning
+            // keeps the share of a fight it was balanced to take.
+            let result = bossManager.bossTakeDamage(amount: CombatRules.bossHealth(authored: 15))
+            if result.defeated {
+                // Boss defeated
+                self.addScore(result.points)
 
-                let result = bossManager.bossTakeDamage()
-                if result.defeated {
-                    // Boss defeated
-                    self.addScore(result.points)
-
-                    // Same audio cue as a bullet kill — this path was silent.
-                    SoundManager.shared.playBossDefeatSound(on: self)
-
-                    // Wait for the boss defeat animation, on the gameplay clock so a
-                    // pause actually holds it.
-                    let wait = SKAction.wait(forDuration: 2.2)
-                    let afterDefeat = SKAction.run { [weak self] in
-                        self?.handleBossDefeatAftermath()
-                    }
-                    runOnGameplayClock(SKAction.sequence([wait, afterDefeat]), withKey: "bossDefeatTransition")
-                    break
+                // Same audio cue as a bullet kill — this path was silent.
+                SoundManager.shared.playBossDefeatSound(on: self)
+                if let position = bossManager.getBossPosition() {
+                    celebrateBossDefeat(at: position)
                 }
+
+                // Wait for the boss defeat animation, on the gameplay clock so a
+                // pause actually holds it.
+                let wait = SKAction.wait(forDuration: 2.2)
+                let afterDefeat = SKAction.run { [weak self] in
+                    self?.handleBossDefeatAftermath()
+                }
+                runOnGameplayClock(SKAction.sequence([wait, afterDefeat]), withKey: "bossDefeatTransition")
+            } else if result.phaseChanged, let position = bossManager.getBossPosition() {
+                breakBossPhase(at: position)
             }
 
             // Create hit effect at boss position if available
@@ -1852,9 +2060,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
            secondBody.categoryBitMask == PhysicsCategory.enemy {
             // Check if it's a boss or regular enemy
             if let boss = secondBody.node as? Boss {
-                bulletDidCollideWithBoss(bullet: firstBody.node as? SKShapeNode, boss: boss)
+                bulletDidCollideWithBoss(bullet: firstBody.node, boss: boss)
+            } else if let part = secondBody.node as? BossPart {
+                bulletDidCollideWithBoss(bullet: firstBody.node, boss: part.boss, part: part)
             } else {
-                bulletDidCollideWithEnemy(bullet: firstBody.node as? SKShapeNode,
+                bulletDidCollideWithEnemy(bullet: firstBody.node,
                                          enemy: secondBody.node as? Enemy)
             }
         }
@@ -1862,13 +2072,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Player hit enemy
         if firstBody.categoryBitMask == PhysicsCategory.player &&
            secondBody.categoryBitMask == PhysicsCategory.enemy {
-            playerDidCollideWithEnemy(enemy: secondBody.node as? Enemy)
+            if secondBody.node is Boss || secondBody.node is BossPart {
+                playerDidCollideWithBoss()
+            } else {
+                playerDidCollideWithEnemy(enemy: secondBody.node as? Enemy)
+            }
         }
 
         // Player hit enemy bullet
         if firstBody.categoryBitMask == PhysicsCategory.player &&
            secondBody.categoryBitMask == PhysicsCategory.enemyBullet {
-            playerDidCollideWithEnemyBullet(bullet: secondBody.node as? SKShapeNode)
+            playerDidCollideWithEnemyBullet(bullet: secondBody.node, at: contact.contactPoint)
         }
 
         // Player hit obstacle
@@ -1902,27 +2116,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 obstacle = grandparentObstacle
             }
 
-            bulletDidCollideWithObstacle(bullet: firstBody.node as? SKShapeNode,
+            bulletDidCollideWithObstacle(bullet: firstBody.node,
                                         obstacle: obstacle,
                                         hitNode: hitNode)
         }
 
-        // Player hit powerup
-        if firstBody.categoryBitMask == PhysicsCategory.player &&
-           secondBody.categoryBitMask == PhysicsCategory.powerUp {
-            playerDidCollideWithPowerUp(powerUp: secondBody.node as? PowerUp)
+        // Pickups meet the ship's collector, not its core (see `PhysicsCategory.collector`).
+        // `collector` outranks both, so the pickup is always `firstBody`.
+        if firstBody.categoryBitMask == PhysicsCategory.powerUp &&
+           secondBody.categoryBitMask == PhysicsCategory.collector {
+            playerDidCollideWithPowerUp(powerUp: firstBody.node as? PowerUp)
         }
 
-        // Player hit coin
-        if firstBody.categoryBitMask == PhysicsCategory.player &&
-           secondBody.categoryBitMask == PhysicsCategory.coin {
-            playerDidCollideWithCoin(coin: secondBody.node as? Coin)
+        if firstBody.categoryBitMask == PhysicsCategory.coin &&
+           secondBody.categoryBitMask == PhysicsCategory.collector {
+            playerDidCollideWithCoin(coin: firstBody.node as? Coin)
         }
 
         // Bullet hit asteroid
         if firstBody.categoryBitMask == PhysicsCategory.bullet &&
            secondBody.categoryBitMask == PhysicsCategory.asteroid {
-            bulletDidCollideWithAsteroid(bullet: firstBody.node as? SKShapeNode,
+            bulletDidCollideWithAsteroid(bullet: firstBody.node,
                                         asteroid: secondBody.node as? Asteroid)
         }
 
@@ -1949,11 +2163,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Barrier hit enemy bullet
         if firstBody.categoryBitMask == PhysicsCategory.enemyBullet &&
            secondBody.categoryBitMask == PhysicsCategory.barrier {
-            barrierDidCollideWithEnemyBullet(bullet: firstBody.node as? SKShapeNode)
+            barrierDidCollideWithEnemyBullet(bullet: firstBody.node, at: contact.contactPoint)
         }
     }
 
-    private func bulletDidCollideWithEnemy(bullet: SKShapeNode?, enemy: Enemy?) {
+    private func bulletDidCollideWithEnemy(bullet: SKNode?, enemy: Enemy?) {
         guard let bullet = bullet, let enemy = enemy else { return }
 
         // VORTEX: Absorbs bullets (30% chance to absorb, otherwise damages vortex)
@@ -1967,14 +2181,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // If not absorbed, bullet damages vortex normally (continue below)
         }
 
-        // MIRROR: Reflects bullets back at player (50% chance)
-        if enemy.enemyType == .mirror {
-            if Double.random(in: 0...1) < 0.5 {
-                // Reflect bullet back
-                reflectBullet(bullet, from: enemy)
-                return
-            }
-            // If not reflected, bullet damages mirror normally (continue below)
+        // MIRROR: Reflects bullets back at player.
+        //
+        // One in four, and at most one every 0.3 s per mirror. The old one-in-two was
+        // tuned for a gun that fired three rounds a second; against today's stream it
+        // would return a hose of fire at the ship, which is a punishment for shooting
+        // rather than a reason to aim around the mirror.
+        if enemy.enemyType == .mirror, enemy.canReflect(at: gameTime), Double.random(in: 0...1) < 0.25 {
+            enemy.noteReflection(at: gameTime)
+            reflectBullet(bullet, from: enemy)
+            return
         }
 
         // SHIELD: Check if bullet hits the shield
@@ -1989,22 +2205,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // If not hitting shield, bullet damages enemy normally (continue below)
         }
 
+        let impactPoint = bullet.position
+        let damage = Self.damage(of: bullet)
         bullet.removeFromParent()
 
         // Decrease enemy health
-        enemy.health -= 1
+        enemy.health -= damage
 
         // Check if enemy is destroyed
         if enemy.health <= 0 {
             // Special handling for mine - explode with shrapnel when shot
             if enemy.enemyType == .mine {
-                // Add score
-                let points = enemy.enemyType.points
-                let awarded = addScore(points)
-
-                // Show floating score
-                let scoreText = "+\(awarded)"
-                showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0))
+                rewardKill(of: enemy, at: enemy.position)
 
                 // Mine explodes prematurely when shot (armed or not)
                 // explodeMine will handle marking as destroyed and removal
@@ -2025,17 +2237,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 return
             } else if enemy.enemyType == .splitter {
                 // SPLITTER: Splits into 2 smaller enemies when destroyed
-                // Explosion effect
-                createExplosion(at: enemy.position)
+                createExplosion(at: enemy.position, tint: enemy.enemyType.strokeColor)
+                shatter(enemy)
                 HapticManager.shared.mediumTap()
-
-                // Add score based on enemy type
-                let points = enemy.enemyType.points
-                let awarded = addScore(points)
-
-                // Show floating score
-                let scoreText = "+\(awarded)"
-                showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0))
+                rewardKill(of: enemy, at: enemy.position)
 
                 // Play splitter split sound
                 SoundManager.shared.playSplitterSplitSound(on: self)
@@ -2049,34 +2254,73 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 return
             } else {
                 // Normal enemy destruction
-                // Explosion effect
-                createExplosion(at: enemy.position, size: .normal)
+                createExplosion(at: enemy.position,
+                                size: enemy.enemyType.maxHealth >= CombatRules.heavyKillHealth ? .large : .normal,
+                                tint: enemy.enemyType.strokeColor)
+                shatter(enemy)
                 HapticManager.shared.mediumTap()
-
-                // Add score based on enemy type
-                let points = enemy.enemyType.points
-                let awarded = addScore(points)
-
-                // Show floating score
-                let scoreText = "+\(awarded)"
-                showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0))
+                rewardKill(of: enemy, at: enemy.position)
 
                 // Mark enemy as destroyed to prevent completion callback
                 enemy.markAsDestroyed()
                 enemy.removeFromParent()
             }
         } else {
-            // Enemy took damage but is still alive (Tank)
-            // Small hit effect without destroying
-            createHitEffect(at: enemy.position)
-            HapticManager.shared.lightTap()
-
+            // Took the round and lived: flash white, spark where it landed.
+            effectsParent.addChild(ProjectileFX.impact(at: impactPoint, color: enemy.enemyType.strokeColor))
             enemy.flashDamage()
+            hitHaptic()
         }
     }
 
-    private func bulletDidCollideWithBoss(bullet: SKShapeNode?, boss: Boss?) {
+    /// Hit points a player round takes off its target.
+    private static func damage(of round: SKNode) -> Int {
+        if let round = round as? PlayerRound { return round.damage }
+        return CombatRules.boltDamage
+    }
+
+    /// A light buzz for a non-lethal hit, at most every 70 ms. A dense stream lands far
+    /// more hits than a haptic engine can separate, and an unthrottled one just hums.
+    private func hitHaptic() {
+        guard realPlayTime - lastHitHaptic > 0.07 else { return }
+        lastHitHaptic = realPlayTime
+        HapticManager.shared.lightTap()
+    }
+
+    /// Everything a kill pays, whichever weapon made it: score and its floating label,
+    /// the shard burst, and — for the heavy enemies — a hit-stop and a local bullet
+    /// cancel.
+    ///
+    /// Every kill path used to assemble its own subset of this (the bullet path printed a
+    /// label, lightning and the nuke did not, the barrier used its own colour), which is
+    /// how they drift apart. Removal stays with the caller, because the mine and the
+    /// splitter each retire their enemy in their own way.
+    private func rewardKill(of enemy: Enemy, at position: CGPoint, label: Bool = true) {
+        tally(enemy)
+        enemiesDestroyed += 1
+        let awarded = addScore(enemy.enemyType.points)
+        if label {
+            showFloatingText("+\(awarded)", at: position, color: UIColor(red: 1.0, green: 0.9, blue: 0.3, alpha: 1.0),
+                             fontSize: enemy.enemyType.maxHealth >= CombatRules.heavyKillHealth ? 22 : 17)
+        }
+
+        let count = CombatRules.shardCount(forPoints: enemy.enemyType.points)
+        shards?.spawn(at: position, count: count)
+
+        // Judged on the type's base toughness, not the level-scaled figure, so which
+        // kills count as heavy does not drift as the game goes on.
+        if enemy.enemyType.maxHealth >= CombatRules.heavyKillHealth {
+            hitStop(HitStop.heavyKill)
+            cancelHostileFire(around: position, radius: CombatRules.heavyKillCancelRadius)
+        }
+    }
+
+    private func bulletDidCollideWithBoss(bullet: SKNode?, boss: Boss?, part: BossPart? = nil) {
         guard let bullet = bullet, let boss = boss else { return }
+
+        // A round can touch a part and the core in the same physics step, and both
+        // contacts are delivered. Only the first may land.
+        guard bullet.parent != nil else { return }
 
         // Check if boss is still alive before processing damage
         guard bossManager.isBossActive() else {
@@ -2084,10 +2328,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
+        let impactPoint = bullet.position
+        let damage = Self.damage(of: bullet)
         bullet.removeFromParent()
 
         // Boss takes damage
-        let result = bossManager.bossTakeDamage()
+        let result = bossManager.bossTakeDamage(amount: damage, part: part)
+        if result.partBonus > 0, let part = part {
+            // Shooting a gun off the boss pays, and says so where it happened.
+            let point = part.convert(CGPoint.zero, to: gameContentNode)
+            let awarded = addScore(result.partBonus)
+            showFloatingText("+\(awarded)", at: point, color: boss.telegraphColor, fontSize: 22)
+            shards?.spawn(at: point, count: CombatRules.bossPhaseShards / 2, speed: 100...240)
+            shakeCamera(intensity: 7, duration: 0.25)
+        }
 
         if result.defeated {
             // Boss defeated - add points
@@ -2104,6 +2358,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             // Play boss defeat sound
             SoundManager.shared.playBossDefeatSound(on: self)
+            celebrateBossDefeat(at: boss.position)
 
             // Wait for the boss defeat animation to complete, on the gameplay clock so
             // a pause actually holds it.
@@ -2115,9 +2370,58 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             runOnGameplayClock(SKAction.sequence([wait, afterDefeat]), withKey: "bossDefeatToExit")
         } else {
             // Boss took damage but still alive
-            createHitEffect(at: boss.position)
+            effectsParent.addChild(ProjectileFX.impact(at: impactPoint, color: boss.telegraphColor,
+                                                       scale: part == nil ? 1.2 : 1.0))
             SoundManager.shared.playBossHitSound(on: self)
-            HapticManager.shared.mediumTap()
+            hitHaptic()
+
+            if result.phaseChanged {
+                breakBossPhase(at: boss.position)
+            }
+        }
+    }
+
+    /// A boss crossing into its next act: the fight stops for a beat, every round in the
+    /// air dissolves into shards, and the armour sheds a shower of them.
+    ///
+    /// The cancel is the reward for getting there, and it is what makes the transition
+    /// legible — the screen clears, then the harder pattern starts on a clean slate.
+    private func breakBossPhase(at position: CGPoint) {
+        hitStop(HitStop.bossPhase)
+        cancelHostileFire(around: nil)
+        shards?.spawn(at: position, count: CombatRules.bossPhaseShards, speed: 140...320)
+        shakeCamera(intensity: 12, duration: 0.4)
+        HapticManager.shared.heavyTap()
+    }
+
+    /// The boss going down: a long slow-motion beat, the screen cleared, and a fountain
+    /// of shards to fly through while it burns.
+    private func celebrateBossDefeat(at position: CGPoint) {
+        hitStop(HitStop.bossDefeat)
+        backdrop?.setAlert(false)
+        backdrop?.pulse()
+        cancelHostileFire(around: nil)
+        shards?.spawn(at: position, count: CombatRules.bossDefeatShards, speed: 160...380)
+
+        // The moment the film builds to: a white-out at the core, a lens streak across
+        // the whole screen, and rings of light racing out through the world.
+        let burst = ExplosionFX.burst(size: .huge, particleMultiplier: particleMultiplier, tint: StoryPalette.gold)
+        burst.position = position
+        effectsParent.addChild(burst)
+        let streak = LightSprite.flare(length: size.width * 2.2, thickness: 14, color: StoryPalette.sun)
+        streak.position = position
+        streak.zPosition = 520
+        streak.xScale = 0.1
+        effectsParent.addChild(streak)
+        streak.run(.sequence([.scaleX(to: 1, duration: 0.12), .group([.fadeOut(withDuration: 0.9), .scaleY(to: 0.3, duration: 0.9)]),
+                              .removeFromParent()]))
+        for (i, color) in [StoryPalette.sun, StoryPalette.gold, StoryPalette.ember].enumerated() {
+            let ring = LightRing.wave(from: 20, to: max(size.width, size.height) * (0.7 + CGFloat(i) * 0.2),
+                                      width: 2.6 - CGFloat(i) * 0.5, color: color,
+                                      duration: 0.9 + Double(i) * 0.25, squash: i == 1 ? 0.42 : 1, segments: 40)
+            ring.position = position
+            ring.zPosition = 510
+            effectsParent.addChild(ring)
         }
     }
 
@@ -2187,26 +2491,79 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         handlePlayerDamage()
     }
 
-    private func playerDidCollideWithEnemyBullet(bullet: SKShapeNode?) {
+    /// The ship flying into a boss's hull — the mantis diving onto it, or a ship that
+    /// strayed too close to a big one. The boss is not hurt by it. A ship that stays in
+    /// contact is hit again once its blink runs out; see `applySustainedContactDamage()`.
+    private func playerDidCollideWithBoss() {
+        guard bossManager.isBossActive() else { return }
+        if isInvulnerable || player.hasShield {
+            if player.hasShield {
+                SoundManager.shared.playShieldHitSound(on: self)
+                HapticManager.shared.mediumTap()
+            }
+            return
+        }
+        createExplosion(at: player.position, size: .small)
+        handlePlayerDamage()
+    }
+
+    /// - Parameter point: where the contact happened, in scene coordinates. A round's
+    ///   own position is the right place for its burst; a beam's is its emitter, up at
+    ///   the boss, so a beam's burst goes where it met the ship instead.
+    private func playerDidCollideWithEnemyBullet(bullet: SKNode?, at point: CGPoint) {
         guard let bullet = bullet else { return }
+
+        // A beam is not used up by what it hits; it keeps burning for its full length.
+        let isBeam = bullet.name == Self.beamName
+        let burstAt = isBeam ? point : bullet.position
 
         // Skip if player is invulnerable or has shield
         if isInvulnerable || player.hasShield {
             if player.hasShield {
                 // Shield absorbs the hit - just create visual feedback
-                createExplosion(at: bullet.position, size: .small)
+                createExplosion(at: burstAt, size: .small)
                 SoundManager.shared.playShieldHitSound(on: self)
                 HapticManager.shared.lightTap()
             }
-            bullet.removeFromParent()
+            if !isBeam { bullet.removeFromParent() }
             return
         }
 
         // Small explosion effect
-        createExplosion(at: bullet.position, size: .small)
-        bullet.removeFromParent()
+        createExplosion(at: burstAt, size: .small)
+        if !isBeam { bullet.removeFromParent() }
 
         handlePlayerDamage()
+    }
+
+    /// The name `BossManager` gives a beam's hit volume.
+    private static let beamName = "bosslaser"
+
+    /// Damage from what the ship can stay inside: a boss's beam and a boss's hull.
+    ///
+    /// Physics reports a contact once, as it begins. A ship that entered a beam while
+    /// invulnerable or shielded — or that stayed in it through the blink after the hit
+    /// it took on the way in — was never touched again for as long as the beam burned,
+    /// and the same went for a ship parked inside a boss. Rounds do not need this: the
+    /// contact that begins spends them.
+    ///
+    /// Called every frame from `update(_:)`. Cheap: it reads the core's own contact
+    /// list, which is empty almost all of the time, and only while the ship can be hurt.
+    private func applySustainedContactDamage() {
+        guard !isInvulnerable, !player.hasShield,
+              let core = player.physicsBody else { return }
+
+        for body in core.allContactedBodies() {
+            guard let node = body.node else { continue }
+            if body.categoryBitMask == PhysicsCategory.enemyBullet && node.name == Self.beamName {
+                playerDidCollideWithEnemyBullet(bullet: node, at: player.position)
+                return
+            }
+            if body.categoryBitMask == PhysicsCategory.enemy && (node is Boss || node is BossPart) {
+                playerDidCollideWithBoss()
+                return
+            }
+        }
     }
 
     private func cancelRemovedPowerUpTimers() {
@@ -2247,7 +2604,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     // Central helper method for handling player damage
     private func handlePlayerDamage() {
+        // Counted before the insurance below: the no-hit medal is about not being
+        // touched, and an absorbed hit was still a hit.
+        hitsTaken += 1
+
+        // A full Overdrive meter is insurance: the hit that would have landed fires it
+        // instead, and the overdrive's opening burst clears the screen and grants the
+        // grace period. The charge is the price. See `OverdriveRules`.
+        if overdrive.isReady {
+            activateOverdrive(reflexive: true)
+            return
+        }
+
         SoundManager.shared.playHitSound(on: self)
+        hitStop(HitStop.playerHit)
+        backdrop?.glitch()
+        // A red bleach on the hit: the one event the player must never miss.
+        NeonFX.screenFlash(in: self, color: UIColor(red: 1.0, green: 0.15, blue: 0.2, alpha: 1.0), alpha: 0.22, duration: 0.3)
 
         // Taking a hit costs the chain as well as the life or the power-up stack. That
         // second cost is what makes a good run worth protecting on levels where lives
@@ -2300,23 +2673,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Create explosion effect
         createExplosion(at: enemy.position, size: .normal)
-        SoundManager.shared.playExplosionSound(on: self)
         HapticManager.shared.mediumTap()
-
-        // Add score for destroying enemy with barrier
-        let awarded = addScore(enemy.enemyType.points)
-
-        // Show floating score
-        let scoreText = "+\(awarded)"
-        showFloatingText(scoreText, at: enemy.position, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), fontSize: 16)
+        rewardKill(of: enemy, at: enemy.position)
 
         // Mark enemy as destroyed and remove
         enemy.markAsDestroyed()
         enemy.removeFromParent()
     }
 
-    private func barrierDidCollideWithEnemyBullet(bullet: SKShapeNode?) {
+    private func barrierDidCollideWithEnemyBullet(bullet: SKNode?, at point: CGPoint) {
         guard let bullet = bullet else { return }
+
+        // The barrier stops rounds; a beam is not a round. Treating it as one deleted the
+        // whole beam — boss to screen edge — the moment a segment grazed it. It sparks
+        // where they cross and burns on. No sound or haptic: four segments sweep through
+        // a beam several times a second.
+        if bullet.name == Self.beamName {
+            createSmallHitEffect(at: point)
+            return
+        }
 
         // Create small hit effect
         createSmallHitEffect(at: bullet.position)
@@ -2328,7 +2703,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     // New method specifically for bullet hitting destructible block
-    private func bulletDidCollideWithObstacle(bullet: SKShapeNode?, obstacle: Obstacle?, hitNode: SKNode?) {
+    private func bulletDidCollideWithObstacle(bullet: SKNode?, obstacle: Obstacle?, hitNode: SKNode?) {
         guard let bullet = bullet else { return }
 
         // Check if this is a destructible wall
@@ -2530,7 +2905,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         coin.collect(scorePosition: scoreHUD?.position ?? CGPoint(x: size.width / 2, y: size.height - currentTopMargin))
     }
 
-    private func bulletDidCollideWithAsteroid(bullet: SKShapeNode?, asteroid: Asteroid?) {
+    private func bulletDidCollideWithAsteroid(bullet: SKNode?, asteroid: Asteroid?) {
         guard let bullet = bullet, let asteroid = asteroid else { return }
 
         bullet.removeFromParent()
@@ -2602,7 +2977,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.shieldDuration
         // Show timer
-        showPowerUpTimer(name: "shield", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), icon: "SHIELD")
+        showPowerUpTimer(name: "shield", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0), icon: L10n.PowerUp.shield)
 
         schedulePowerUpExpiry(after: duration, key: "shieldDeactivation") { [weak self] in
             self?.deactivateShield()
@@ -2627,7 +3002,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.lightningDuration
         // Show timer
-        showPowerUpTimer(name: "lightning", duration: duration, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), icon: "LIGHTNING")
+        showPowerUpTimer(name: "lightning", duration: duration, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), icon: L10n.PowerUp.lightning)
 
         schedulePowerUpExpiry(after: duration, key: "lightningDeactivation") { [weak self] in
             guard let player = self?.player, player.hasLightningWeapon else { return }
@@ -2640,7 +3015,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.rapidFireDuration
         // Show timer
-        showPowerUpTimer(name: "rapidFire", duration: duration, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), icon: "RAPID FIRE")
+        showPowerUpTimer(name: "rapidFire", duration: duration, color: UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0), icon: L10n.PowerUp.rapidFire)
 
         schedulePowerUpExpiry(after: duration, key: "rapidFireDeactivation") { [weak self] in
             self?.player?.hasRapidFire = false
@@ -2652,7 +3027,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.magnetDuration
         // Show timer
-        showPowerUpTimer(name: "magnet", duration: duration, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), icon: "MAGNET")
+        showPowerUpTimer(name: "magnet", duration: duration, color: UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0), icon: L10n.PowerUp.magnet)
 
         schedulePowerUpExpiry(after: duration, key: "magnetDeactivation") { [weak self] in
             self?.player?.hasMagnet = false
@@ -2664,7 +3039,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.slowMotionDuration
         // Show timer
-        showPowerUpTimer(name: "slowMotion", duration: duration, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), icon: "SLOW MO")
+        showPowerUpTimer(name: "slowMotion", duration: duration, color: UIColor(red: 0.5, green: 0.8, blue: 1.0, alpha: 1.0), icon: L10n.PowerUp.slowMotionShort)
 
         schedulePowerUpExpiry(after: duration, key: "slowMotionDeactivation") { [weak self] in
             guard let self = self else { return }
@@ -2756,25 +3131,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func createHomingMissile(target: Enemy) {
-        let missile = SKShapeNode(rectOf: CGSize(width: 8, height: 20), cornerRadius: 4)
-        missile.fillColor = UIColor(red: 1.0, green: 0.2, blue: 0.5, alpha: 1.0)
-        missile.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.7, alpha: 1.0)
-        missile.lineWidth = 2
+        // Amber, the player's missile colour; pink is reserved for hostile fire. Built
+        // by `ProjectileFX`, which also gives it its physics and its damage.
+        let missile = ProjectileFX.missile(homing: true)
         missile.position = player.position
-        missile.name = "homingMissile"
-        missile.zPosition = 10
         gameContentNode.addChild(missile)
-
-        // Add glow
-        GlowHelper.addEnhancedGlow(to: missile, color: UIColor(red: 1.0, green: 0.3, blue: 0.6, alpha: 1.0), intensity: 1.2)
-
-        // Physics body - uses bullet category to trigger standard collision handling
-        // This allows homing missiles to interact with enemies using existing bullet/enemy collision logic
-        missile.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 8, height: 20))
-        missile.physicsBody?.isDynamic = true
-        missile.physicsBody?.categoryBitMask = PhysicsCategory.bullet
-        missile.physicsBody?.contactTestBitMask = PhysicsCategory.enemy
-        missile.physicsBody?.collisionBitMask = PhysicsCategory.none
 
         // Homing behavior
         let homingAction = SKAction.customAction(withDuration: 5.0) { [weak self, weak target, weak missile] node, elapsedTime in
@@ -2803,27 +3164,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func createHomingMissileForBoss(boss: Boss) {
 
-        let missile = SKShapeNode(rectOf: CGSize(width: 8, height: 20), cornerRadius: 4)
-        missile.fillColor = UIColor(red: 1.0, green: 0.2, blue: 0.5, alpha: 1.0)
-        missile.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.7, alpha: 1.0)
-        missile.lineWidth = 2
+        // Amber, the player's missile colour; pink is reserved for hostile fire. Built
+        // by `ProjectileFX`, which also gives it its physics and its damage.
+        let missile = ProjectileFX.missile(homing: true)
         missile.position = player.position
-        missile.name = "homingMissile"
-        missile.zPosition = 10
         gameContentNode.addChild(missile)
-
-        // Add glow
-        GlowHelper.addEnhancedGlow(to: missile, color: UIColor(red: 1.0, green: 0.3, blue: 0.6, alpha: 1.0), intensity: 1.2)
-
-        // Physics body - uses bullet category to work with boss collision detection
-        // Boss nodes check for bullet contacts, so homing missiles need bullet category
-
-        // Physics body - use bullet category so it triggers boss collision
-        missile.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 8, height: 20))
-        missile.physicsBody?.isDynamic = true
-        missile.physicsBody?.categoryBitMask = PhysicsCategory.bullet
-        missile.physicsBody?.contactTestBitMask = PhysicsCategory.enemy
-        missile.physicsBody?.collisionBitMask = PhysicsCategory.none
 
         // Homing behavior targeting boss
         let homingAction = SKAction.customAction(withDuration: 5.0) { [weak self, weak boss, weak missile] node, elapsedTime in
@@ -2858,24 +3203,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func createSeekingMissile() {
         // Missile that seeks any nearby enemy
-        let missile = SKShapeNode(rectOf: CGSize(width: 8, height: 20), cornerRadius: 4)
-        missile.fillColor = UIColor(red: 1.0, green: 0.2, blue: 0.5, alpha: 1.0)
-        missile.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.7, alpha: 1.0)
-        missile.lineWidth = 2
+        // Amber, the player's missile colour; pink is reserved for hostile fire. Built
+        // by `ProjectileFX`, which also gives it its physics and its damage.
+        let missile = ProjectileFX.missile(homing: true)
         missile.position = player.position
-        missile.name = "homingMissile"
-        missile.zPosition = 10
         gameContentNode.addChild(missile)
-
-        // Add glow
-        GlowHelper.addEnhancedGlow(to: missile, color: UIColor(red: 1.0, green: 0.3, blue: 0.6, alpha: 1.0), intensity: 1.2)
-
-        // Physics body
-        missile.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 8, height: 20))
-        missile.physicsBody?.isDynamic = true
-        missile.physicsBody?.categoryBitMask = PhysicsCategory.bullet
-        missile.physicsBody?.contactTestBitMask = PhysicsCategory.enemy
-        missile.physicsBody?.collisionBitMask = PhysicsCategory.none
 
         // Seeking behavior - finds closest enemy each frame
         let seekingAction = SKAction.customAction(withDuration: 5.0) { [weak self, weak missile] node, elapsedTime in
@@ -2939,7 +3271,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.scoreMultiplierDuration
         // Show timer
-        showPowerUpTimer(name: "scoreMultiplier", duration: duration, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), icon: "SCORE x2")
+        showPowerUpTimer(name: "scoreMultiplier", duration: duration, color: UIColor(red: 1.0, green: 0.9, blue: 0.0, alpha: 1.0), icon: L10n.PowerUp.scoreDouble)
 
         schedulePowerUpExpiry(after: duration, key: "scoreMultiplierDeactivation") { [weak self] in
             self?.scoreMultiplier = 1
@@ -2952,7 +3284,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let duration = GameConfiguration.barrierDuration
         // Show timer
-        showPowerUpTimer(name: "barrier", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), icon: "BARRIER")
+        showPowerUpTimer(name: "barrier", duration: duration, color: UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 1.0), icon: L10n.PowerUp.barrier)
 
         // Give the segments their physics bodies. `player.hasBarrier = true` above runs
         // updateBarrierVisuals() synchronously through its didSet, so the segments
@@ -2977,6 +3309,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func activateNuke() {
+        backdrop?.pulse()
         // Destroy all enemies except bosses
         var enemiesToDestroy: [Enemy] = []
         gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
@@ -2991,8 +3324,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let destroyAction = SKAction.sequence([
                 SKAction.wait(forDuration: delay),
                 SKAction.run { [weak self] in
-                    self?.createExplosion(at: enemy.position, size: .normal)
-                    self?.addScore(enemy.enemyType.points)
+                    // Skipped if something else got to it during the stagger.
+                    guard enemy.parent != nil else { return }
+                    self?.createExplosion(at: enemy.position, size: .normal, tint: enemy.enemyType.strokeColor)
+                    self?.shatter(enemy)
+                    self?.rewardKill(of: enemy, at: enemy.position, label: false)
                     enemy.markAsDestroyed()
                     enemy.removeFromParent()
                 }
@@ -3021,6 +3357,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             ])
             runOnGameplayClock(destroyAction)
         }
+
+        // A nuke clears the air as well as the ships.
+        cancelHostileFire(around: nil)
 
         // Visual effect - big flash
         let flash = SKShapeNode(rect: CGRect(x: 0, y: 0, width: size.width, height: size.height))
@@ -3056,6 +3395,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // flips to x3 while a "+20" from that same explosion floats past it.
         if chainsCombo {
             combo.registerKill(currentTime: gameTime)
+            checkChainMedal()
         }
 
         let awarded = points * scoreMultiplier * combo.multiplier
@@ -3260,7 +3600,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // alongside the move action, so the pull is now actually felt.
         gameContentNode.enumerateChildNodes(withName: "bullet") { [weak self] node, _ in
             guard let self = self else { return }
-            guard let bullet = node as? SKShapeNode else { return }
+            let bullet = node
 
             // Check each vortex
             for vortex in vortexEnemies {
@@ -3430,12 +3770,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Play game over sound
         SoundManager.shared.playGameOverSound(on: self)
 
-        // An endless run has no completion screen to persist it, so this is the only
-        // place its result is ever recorded.
-        var isEndlessRecord = false
-        if isEndless {
-            isEndlessRecord = LevelManager.shared.recordEndlessRun(score: score, round: endlessRound)
-        }
+        // An endless run has no completion screen to persist it; game over is where it
+        // ends in the ordinary way. See `recordEndlessRun()` for the others.
+        let isEndlessRecord = recordEndlessRun()
 
         let gameOverScene = GameOverScene(
             size: size,
@@ -3446,6 +3783,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             isEndlessRecord: isEndlessRecord
         )
         stopGameplayAndTransition(to: gameOverScene, transitionDuration: 1.0)
+    }
+
+    /// Banks an endless run's score and depth in the records, and reports whether the
+    /// score beat the record the run started against.
+    ///
+    /// Called on every way a run can end: game over, the pause menu's RETRY, LEVELS and
+    /// MENU, and the app leaving the foreground — which is the last chance before the
+    /// system or the player ends the process. Calling it more than once per run is safe:
+    /// `LevelManager.recordEndlessRun` keeps the best of each field and counts nothing,
+    /// so a repeat write of the same or a lower result changes nothing.
+    @discardableResult
+    private func recordEndlessRun() -> Bool {
+        guard isEndless, hasEndlessRunStarted, endlessRound > 0 else { return false }
+        LevelManager.shared.recordEndlessRun(score: score, round: endlessRound)
+        return score > endlessBestAtStart
     }
 
     private func createHitEffect(at position: CGPoint) {
@@ -3542,12 +3894,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         camera.run(shakeSequence, withKey: "cameraShake")
     }
 
-    func createExplosionForFrozenEnemy(at position: CGPoint) {
-        // Use standard explosion effect for frozen enemies
-        createExplosion(at: position, size: .normal)
+    /// A frozen enemy's detonation at the end of a freeze bomb: the blast and the same
+    /// payout as any other kill. The caller retires the enemy.
+    func detonateFrozenEnemy(_ enemy: Enemy) {
+        createExplosion(at: enemy.position, size: .normal, tint: enemy.enemyType.strokeColor)
+        shatter(enemy)
+        rewardKill(of: enemy, at: enemy.position, label: false)
     }
 
-    private func createExplosion(at position: CGPoint, size: ExplosionSize = .normal) {
+    /// The dead hull coming apart in lines of light. See `ExplosionFX.shatter`.
+    private func shatter(_ enemy: Enemy) {
+        guard let path = enemy.path else { return }
+        effectsParent.addChild(ExplosionFX.shatter(path: path, color: enemy.enemyType.strokeColor,
+                                                   at: enemy.position, rotation: enemy.zRotation, scale: enemy.xScale))
+    }
+
+    private func createExplosion(at position: CGPoint, size: ExplosionSize = .normal, tint: UIColor? = nil) {
         // Play explosion sound
         SoundManager.shared.playExplosionSound(on: self)
 
@@ -3557,7 +3919,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // The burst itself. Parented to `effectsParent`, not the scene, so it freezes
         // with the gameplay clock — see `effectsParent`.
-        let burst = ExplosionFX.burst(size: size, particleMultiplier: particleMultiplier)
+        let burst = ExplosionFX.burst(size: size, particleMultiplier: particleMultiplier, tint: tint)
         burst.position = position
         effectsParent.addChild(burst)
 
@@ -3580,16 +3942,56 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
-        // Don't update game logic when paused or game hasn't started yet
-        if gameContentNode.isPaused || !isGameStarted { return }
+        // The world keeps flying under the level-intro card, which runs with gameplay
+        // paused, but stops dead for the pause menu and the perk picker.
+        if let backdrop = backdrop, !(isGameStarted && gameContentNode.isPaused) {
+            let step = min(max(rawDelta, 0), GameConfiguration.maxFrameDelta) * TimeInterval(timeScale)
+            if let player = player { backdrop.follow(x: player.position.x / max(1, size.width)) }
+            if !isEndless, let enemyManager = enemyManager, enemyManager.totalEnemiesToSpawn > 0 {
+                backdrop.setProgress(CGFloat(enemyManager.totalEnemiesSpawned) / CGFloat(enemyManager.totalEnemiesToSpawn))
+            }
+            backdrop.update(dt: step)
+        }
+
+        // Nothing advances while paused.
+        if gameContentNode.isPaused { return }
 
         // Clamped delta drives both per-frame motion and the game clock, so a
         // dropped frame or a resumed pause can never translate into a huge step.
-        deltaTime = min(max(rawDelta, 0), GameConfiguration.maxFrameDelta)
+        let realDelta = min(max(rawDelta, 0), GameConfiguration.maxFrameDelta)
+        realPlayTime += realDelta
+
+        // Hit-stop / slow motion. Ended here, on the unscaled clock, rather than by an
+        // action — see the note on `timeScale`. Ahead of the `isGameStarted` gate on
+        // purpose: the hit that ends a run starts a beat and then ends the game in the
+        // same breath, and a beat that could only be lifted while the game is running
+        // would leave the death sequence playing at a tenth of its speed.
+        if timeScale < 1, realPlayTime >= timeScaleEndsAt {
+            timeScale = 1
+            applyTimeScale()
+        }
+
+        // Don't update game logic before the level has started or after it has ended.
+        if !isGameStarted { return }
+
+        deltaTime = realDelta * TimeInterval(timeScale)
         gameTime += deltaTime
 
+        // Overdrive countdown, and the shards it and every kill throw out.
+        if overdrive.update(currentTime: gameTime) {
+            endOverdrive()
+        }
+        shards?.update(
+            deltaTime: deltaTime,
+            target: player.position,
+            attractAll: player.hasMagnet || overdrive.isActive
+        )
+        updateGraze()
+        applySustainedContactDamage()
+
         // Magnet effect - attract coins (limited to 30 FPS for performance)
-        if player.hasMagnet && gameTime - lastMagnetUpdateTime >= GameConfiguration.magnetUpdateInterval {
+        let magnetOn = player.hasMagnet || stacks(.magnet) > 0
+        if magnetOn && gameTime - lastMagnetUpdateTime >= GameConfiguration.magnetUpdateInterval {
             lastMagnetUpdateTime = gameTime
             attractCoins()
         }
@@ -3598,6 +4000,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         applyVortexGravitationalPull()
 
         // Expire a lapsed kill chain. On the gameplay clock, so a pause never eats one.
+        // An overdrive holds the chain: it is the moment the player cashes in, and
+        // losing the multiplier to a gap between waves in the middle of it would turn
+        // the reward into a trap.
+        if overdrive.isActive {
+            combo.hold(currentTime: gameTime)
+        }
         combo.update(currentTime: gameTime)
 
         // Fly the ship for the App Store preview recordings. Placed here, ahead of the
@@ -3612,16 +4020,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // `isFiring` has to mirror the firing condition below rather than just
         // `isTouching`: heat used to freeze while the player held a drag outside firing
         // range — not shooting, but not cooling either.
-        let isFiring = isTouching && abs(player.position.x - touchLocation.x) <= shootDistanceThreshold
+        //
+        // With relative steering a held finger *is* the trigger, wherever it rests: the
+        // old "within 50 pt of the ship" gate only made sense while the finger had to
+        // sit under the ship to fly it.
+        let isFiring = isTouching
         weaponHeat.update(deltaTime: deltaTime, currentTime: gameTime, isFiring: isFiring)
 
-        // Shoot only when touching and player is near touch location
         if isTouching && gameTime - lastShootTime > currentShootInterval {
-            let distance = abs(player.position.x - touchLocation.x)
-            if distance <= shootDistanceThreshold {
-                shoot()
-                lastShootTime = gameTime
-            }
+            shoot()
+            lastShootTime = gameTime
         }
 
         // Update enemy spawning (with slow motion modifier)
@@ -3770,6 +4178,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// run's depth corresponds to. Both have to be topped up, or the playfield would
     /// quietly empty of everything except ships a few rounds in.
     private func beginEndlessRound() {
+        if stacks(.roundShield) > 0 {
+            activateShield()
+        }
+
         enemyManager.appendWaves(
             EndlessDirector.waves(forRound: endlessRound),
             currentTime: gameTime
@@ -3780,6 +4192,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         asteroidManager?.appendWaves(hazards.asteroids, currentTime: gameTime)
 
         announceEndlessRound()
+        backdrop?.transition(to: .forEndlessRound(endlessRound))
     }
 
     /// The round banner. Endless has no level-complete screen, so this is the only place
@@ -3805,9 +4218,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ]))
     }
 
-    /// A boss round. Reuses the campaign's boss entirely — including the phase escalation
-    /// and the per-milestone attack signatures — touring up through the authored
-    /// milestones as the run gets deeper. See `EndlessRules.bossLevel(forRound:)`.
+    /// A boss round. Reuses a campaign level's boss entirely — its archetype, its tier
+    /// and its phase escalation — touring up the roster as the run gets deeper. See
+    /// `EndlessRules.bossLevel(forRound:)` and `BossConfig.roster`.
     private func spawnEndlessBoss() {
         isEndlessBossFight = true
 
@@ -3817,7 +4230,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         let bossLevel = EndlessRules.bossLevel(forRound: endlessRound)
 
-        showBossWarning { [weak self] in
+        showBossWarning(name: BossConfig.config(for: bossLevel).displayName) { [weak self] in
             guard let self = self else { return }
             SoundManager.shared.playBossAppearSound(on: self)
             self.bossManager.spawnBoss(level: bossLevel) {
@@ -3832,7 +4245,81 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         bossManager.cleanup()
         coinManager.setBossFight(false)
 
-        beginEndlessRound()
+        // Every boss pays out a choice before the next round begins.
+        offerPerks { [weak self] in
+            self?.beginEndlessRound()
+        }
+    }
+
+    // MARK: - Endless Perks
+
+    /// The picker, while it is up.
+    private var perkPicker: PerkPickOverlay? {
+        return uiNode?.childNode(withName: PerkPickOverlay.nodeName) as? PerkPickOverlay
+    }
+
+    /// Whether the run is stopped on the perk picker. Read-only, for `jetshotTests`.
+    var isPerkPickerUp: Bool { perkPicker != nil }
+
+    /// Freezes the run behind the "choose an upgrade" screen, applies the pick, and
+    /// carries on with `resume`. With nothing left to offer it goes straight on.
+    private func offerPerks(then resume: @escaping () -> Void) {
+        let arsenalAtMax = player.bulletCount >= GameConfiguration.maxBulletCount
+            && player.sideMissileCount >= GameConfiguration.maxSideMissileCount
+        let eligible = PerkRules.eligible(
+            stacks: perkStacks,
+            livesAtMax: lives >= GameConfiguration.maxLives,
+            arsenalAtMax: arsenalAtMax
+        )
+        var generator = SystemRandomNumberGenerator()
+        let choices = PerkRules.offer(from: eligible, using: &generator)
+        guard !choices.isEmpty, let uiNode = uiNode, perkPicker == nil else {
+            resume()
+            return
+        }
+
+        // The finger that was flying the ship is not flying it into the picker.
+        steeringTouch = nil
+        isTouching = false
+        setGameplayPaused(true)
+
+        let picker = PerkPickOverlay(
+            sceneSize: size,
+            perks: choices,
+            stacks: perkStacks,
+            round: endlessRound,
+            frameDepths: FilmUI.Letterbox.depthsOverGameplay(size: size, view: view)
+        ) { [weak self] perk in
+            guard let self = self else { return }
+            self.applyPerk(perk)
+            self.setGameplayPaused(false)
+            resume()
+        }
+        uiNode.addChild(picker)
+    }
+
+    private func applyPerk(_ perk: EndlessPerk) {
+        perkStacks[perk, default: 0] += 1
+
+        switch perk {
+        case .chainKeeper:
+            combo.windowBonus = PerkRules.chainWindowBonus(stacks: stacks(.chainKeeper))
+        case .armor:
+            lives = min(GameConfiguration.maxLives, lives + 1)
+            SoundManager.shared.playExtraLifeSound(on: self)
+        case .arsenal:
+            player.bulletCount += 1
+            player.sideMissileCount += 1
+        default:
+            // The rest are read where they apply: the fire interval, the heat per shot,
+            // the Overdrive's charge and length, the graze ring, the magnet and the
+            // start of every round.
+            break
+        }
+
+        showFloatingText(L10n.Perk.name(perk),
+                         at: CGPoint(x: player.position.x, y: player.position.y + 50),
+                         color: PerkPickOverlay.accent(for: perk), fontSize: 18)
     }
 
     private func spawnBoss() {
@@ -3854,7 +4341,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         powerUpTimers.hideAll()
 
         // Show warning before boss appears
-        showBossWarning { [weak self] in
+        showBossWarning(name: BossConfig.config(for: currentLevel).displayName) { [weak self] in
             guard let self = self else { return }
             // Play boss appear sound
             SoundManager.shared.playBossAppearSound(on: self)
@@ -3865,37 +4352,78 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
-    private func showBossWarning(completion: @escaping () -> Void) {
+    private func showBossWarning(name: String, completion: @escaping () -> Void) {
         // Play warning sound
         SoundManager.shared.playWarningSound(on: self)
+        backdrop?.setAlert(true)
 
         let warningNode = SKNode()
         warningNode.zPosition = 1500
         warningNode.name = "bossWarning"
 
-        // Red pulsing background overlay
-        let overlay = SKSpriteNode(color: UIColor(red: 0.8, green: 0.0, blue: 0.0, alpha: 0.3), size: size)
-        overlay.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        // The picture goes to red alert the way the film's frame would: letterbox bars
+        // close, the edges burn red, a scan line runs down the screen, lock-on brackets
+        // close on where the boss will come in, and the warning types itself out.
+        let red = UIColor(red: 1.0, green: 0.2, blue: 0.16, alpha: 1.0)
+        let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+        let barDepth = max(size.height * 0.09, 60)
+        warningNode.addChild(Cinematic.letterbox(size: size, depth: barDepth, hold: 1.4))
+
+        // Red vignette, pulsing.
+        let overlay = NeonFX.gradeOverlay(size: size)
+        overlay.color = red
+        overlay.colorBlendFactor = 1
+        overlay.blendMode = .add
         overlay.alpha = 0
+        overlay.zPosition = -1
         warningNode.addChild(overlay)
 
+        let frameRect = CGRect(x: 0, y: barDepth, width: size.width, height: size.height - barDepth * 2)
+        let corners = Cinematic.viewfinder(in: frameRect, color: red, arm: 20)
+        corners.run(.repeat(.sequence([.fadeAlpha(to: 0.9, duration: 0.15), .fadeAlpha(to: 0.3, duration: 0.15)]), count: 6))
+        warningNode.addChild(corners)
+
+        // A line of light sweeping the screen top to bottom.
+        let scan = LightSprite.tube(from: CGPoint(x: -size.width / 2, y: 0), to: CGPoint(x: size.width / 2, y: 0),
+                                    width: 2.2, color: red)
+        scan.position = CGPoint(x: centre.x, y: size.height - barDepth)
+        let sweep = SKAction.moveTo(y: barDepth, duration: 1.1)
+        sweep.timingMode = .easeInEaseOut
+        scan.run(.sequence([sweep, .fadeOut(withDuration: 0.2)]))
+        warningNode.addChild(scan)
+
+        // Brackets locking on to the boss's entry point.
+        let lock = Cinematic.lockOn(at: CGPoint(x: centre.x, y: size.height * 0.74), from: size.width * 0.42,
+                                    to: 54, color: red, duration: 1.0)
+        lock.alpha = 0
+        lock.run(.sequence([.fadeIn(withDuration: 0.2), .wait(forDuration: 1.4),
+                            .repeat(.sequence([.fadeAlpha(to: 0.2, duration: 0.08), .fadeAlpha(to: 1, duration: 0.08)]), count: 2),
+                            .fadeOut(withDuration: 0.2)]))
+        warningNode.addChild(lock)
+
+        let shade = Cinematic.shade(size: CGSize(width: size.width * 1.4, height: 240), alpha: 0.6)
+        shade.position = centre
+        warningNode.addChild(shade)
+
         // WARNING text
-        let warningLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        warningLabel.text = L10n.HUD.warning
-        warningLabel.fontSize = 40
-        warningLabel.fontColor = UIColor(red: 1.0, green: 0.2, blue: 0.0, alpha: 1.0)
-        warningLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 40)
+        let warningLabel = Cinematic.title(L10n.HUD.warning, fontSize: 40, color: red, glow: red,
+                                           tracking: 8, maxWidth: size.width - 40)
+        warningLabel.position = CGPoint(x: centre.x, y: centre.y + 30)
         warningLabel.alpha = 0
         warningNode.addChild(warningLabel)
 
-        // Danger approaching text
-        let approachingLabel = SKLabelNode(fontNamed: "Arial-BoldMT")
-        approachingLabel.text = L10n.HUD.extremeDanger
-        approachingLabel.fontSize = 28
-        approachingLabel.fontColor = .white
-        approachingLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 20)
-        approachingLabel.alpha = 0
+        // Danger approaching text, typed.
+        let approachingLabel = Cinematic.typewriter(L10n.HUD.extremeDanger, fontSize: 16, color: .white,
+                                                    tracking: 4, delay: 0.3, duration: 0.5,
+                                                    maxWidth: size.width - 40)
+        approachingLabel.position = CGPoint(x: centre.x, y: centre.y - 18)
         warningNode.addChild(approachingLabel)
+
+        // Which machine it is, typed out once the danger line has finished.
+        let nameLabel = Cinematic.typewriter(name, fontSize: 22, color: red, tracking: 7, delay: 0.85,
+                                             duration: 0.45, maxWidth: size.width - 40)
+        nameLabel.position = CGPoint(x: centre.x, y: centre.y - 54)
+        warningNode.addChild(nameLabel)
 
         // Warning and its dismissal timer both live on gameContentNode so a pause
         // freezes them together; on the scene the countdown kept running and the boss
@@ -3907,29 +4435,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Pulsing animation for overlay
         let pulse = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.5, duration: 0.3),
-            SKAction.fadeAlpha(to: 0.2, duration: 0.3)
+            SKAction.fadeAlpha(to: 0.85, duration: 0.3),
+            SKAction.fadeAlpha(to: 0.35, duration: 0.3)
         ])
-        let repeatPulse = SKAction.repeat(pulse, count: 4)
-        overlay.run(SKAction.sequence([SKAction.fadeIn(withDuration: 0.2), repeatPulse]))
+        overlay.run(SKAction.sequence([SKAction.fadeAlpha(to: 0.6, duration: 0.2), .repeat(pulse, count: 3),
+                                       .fadeOut(withDuration: 0.3)]))
 
-        // Warning text animation
-        let scaleUp = SKAction.scale(to: 1.1, duration: 0.2)
-        let scaleDown = SKAction.scale(to: 1.0, duration: 0.2)
-        let shake = SKAction.sequence([scaleUp, scaleDown])
-        let repeatShake = SKAction.repeat(shake, count: 4)
-
-        let fadeIn = SKAction.fadeIn(withDuration: 0.3)
-        let wait = SKAction.wait(forDuration: 2.0)
-        let fadeOut = SKAction.fadeOut(withDuration: 0.4)
-
-        warningLabel.run(SKAction.sequence([fadeIn, repeatShake, fadeOut]))
-        approachingLabel.run(SKAction.sequence([
-            SKAction.wait(forDuration: 0.2),
-            fadeIn,
-            wait,
-            fadeOut
+        // The title glitches in: a hard jitter while it lands, as the film's picture does
+        // when reality resists.
+        let jitter = SKAction.sequence((0..<6).map { i in
+            SKAction.moveTo(x: centre.x + (i % 2 == 0 ? 1 : -1) * CGFloat(6 - i), duration: 0.04)
+        })
+        warningLabel.run(SKAction.sequence([
+            .group([.fadeIn(withDuration: 0.15), jitter]),
+            .moveTo(x: centre.x, duration: 0),
+            .wait(forDuration: 1.25),
+            .fadeOut(withDuration: 0.35)
         ]))
+        approachingLabel.run(.sequence([.wait(forDuration: 1.75), .fadeOut(withDuration: 0.35)]))
+        shade.run(.sequence([.wait(forDuration: 1.75), .fadeOut(withDuration: 0.35)]))
 
         // Remove warning and spawn boss
         let cleanup = SKAction.run {
@@ -3937,8 +4461,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             completion()
         }
 
+        // 2.2 s, from 2.8: long enough to read and brace, short enough not to be the
+        // slowest moment of the level.
         effectsParent.run(SKAction.sequence([
-            SKAction.wait(forDuration: 2.8),
+            SKAction.wait(forDuration: 2.2),
             cleanup
         ]))
     }
@@ -3960,6 +4486,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Disable player controls during exit
         isGameStarted = false
         isPlayerExiting = true
+        steeringTouch = nil
+        isTouching = false
+        if overdrive.isActive {
+            overdrive.cancel()
+            endOverdrive()
+        }
 
         // Play player exit sound
         SoundManager.shared.playPlayerExitSound(on: self)
@@ -3987,17 +4519,309 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             totalCoins: totalCoins,
             bulletCount: player.bulletCount,
             sideMissileCount: player.sideMissileCount,
-            bestChain: combo.bestChain
+            bestChain: combo.bestChain,
+            grazes: grazeCount,
+            medals: medalsEarnedSoFar
         )
         stopGameplayAndTransition(to: levelCompleteScene, transitionDuration: 1.0)
     }
 
     private func goToLevelSelect() {
         guard let view = view else { return }
+        recordEndlessRun()
         let levelSelectScene = LevelSelectScene(size: view.bounds.size, startLevel: currentLevel)
         levelSelectScene.scaleMode = scaleMode
         let transition = SKTransition.fade(withDuration: 0.5)
         view.presentScene(levelSelectScene, transition: transition)
+    }
+
+    // MARK: - Medals
+
+    /// Announces the chain medal the moment the chain reaches its target, rather than
+    /// leaving it for the results screen: it is the one medal won mid-flight, and saying
+    /// so is what tells the player the medals exist. Only when it is news — a medal this
+    /// level already holds is not worth stopping the fight for.
+    private func checkChainMedal() {
+        guard !isEndless, !chainMedalAnnounced else { return }
+        guard combo.chain >= MedalRules.chainTarget(forLevel: currentLevel) else { return }
+        chainMedalAnnounced = true
+
+        guard !LevelManager.shared.getLevelMedals(level: currentLevel).contains(.chain) else { return }
+        HapticManager.shared.success()
+        showBanner(L10n.Medal.earned, color: MedalBadge.color(for: .chain),
+                   detail: MedalBadge.label(for: .chain, level: currentLevel))
+    }
+
+    // MARK: - Overdrive
+
+    /// Spends a full meter.
+    ///
+    /// - Parameter reflexive: true when a hit fired it (see `handlePlayerDamage`), which
+    ///   only changes the label — the effect is the same, because the point of the
+    ///   insurance is that it is the real thing.
+    private func activateOverdrive(reflexive: Bool = false) {
+        let duration = OverdriveRules.duration + PerkRules.overdriveBonus(stacks: stacks(.longOverdrive))
+        guard isGameStarted, overdrive.activate(currentTime: gameTime, duration: duration) else { return }
+
+        // The burst: every hostile round on screen dissolves into a shard.
+        cancelHostileFire(around: nil)
+
+        // Clean guns and a grace period, so the burst cannot be undone by a round
+        // spawned on this very frame.
+        weaponHeat.reset()
+        grantGrace(OverdriveRules.activationGrace)
+
+        hitStop(HitStop.overdrive)
+        shakeCamera(intensity: 9, duration: 0.3)
+        HapticManager.shared.heavyTap()
+        SoundManager.shared.playLightningSound(on: self)
+        SoundManager.shared.playPowerUpSound(on: self)
+
+        effectsParent.addChild(NeonFX.shockwave(
+            at: player.position, startRadius: 20, endRadius: max(size.width, size.height) * 0.75,
+            color: OverdriveSystem.activeColor, lineWidth: 6, duration: 0.55
+        ))
+        effectsParent.addChild(NeonFX.shockwave(
+            at: player.position, startRadius: 10, endRadius: size.width * 0.45,
+            color: .white, lineWidth: 3, duration: 0.35
+        ))
+        NeonFX.screenFlash(in: self, color: OverdriveSystem.activeColor, alpha: 0.22, duration: 0.25)
+
+        showBanner(reflexive ? L10n.HUD.overdriveSaved : L10n.HUD.overdrive,
+                   color: OverdriveSystem.activeColor)
+        player.setOverdriveAura(true)
+        setSkyRush(true)
+    }
+
+    private func endOverdrive() {
+        player.setOverdriveAura(false)
+        setSkyRush(false)
+    }
+
+    private func setSkyRush(_ rushing: Bool) {
+        backdrop?.setRush(rushing)
+    }
+
+    /// Invulnerability without the hit: the same flag and blink the damage path uses,
+    /// for the overdrive's grace period.
+    private func grantGrace(_ duration: TimeInterval) {
+        isInvulnerable = true
+        let blink = SKAction.sequence([
+            SKAction.fadeAlpha(to: 0.55, duration: 0.08),
+            SKAction.fadeAlpha(to: 1.0, duration: 0.08)
+        ])
+        let clearFlag = SKAction.run { [weak self] in
+            self?.isInvulnerable = false
+        }
+        player.run(SKAction.sequence([
+            .repeat(blink, count: max(1, Int(duration / 0.16))),
+            .fadeAlpha(to: 1.0, duration: 0),
+            clearFlag
+        ]), withKey: "invulnerability")
+    }
+
+    /// Dissolves hostile rounds into shards: every round on screen, or only those within
+    /// `radius` of `centre`.
+    ///
+    /// A screen-wide cancel — the Overdrive burst, a boss changing phase or dying —
+    /// takes the boss's beams with it. They are named apart from rounds (see
+    /// `beamName`), so the sweep below never saw them, and the Overdrive that promises
+    /// a clear screen left a beam burning through it. A local cancel leaves them be: a
+    /// beam is not "near" a kill in any useful sense.
+    private func cancelHostileFire(around centre: CGPoint?, radius: CGFloat = 0) {
+        if centre == nil {
+            var beams: [SKNode] = []
+            gameContentNode.enumerateChildNodes(withName: Self.beamName) { node, _ in beams.append(node) }
+            for beam in beams {
+                // Disarmed at once and faded rather than cut. The name goes too, so every
+                // node still called a beam is a live one. A beam owns its whole timeline
+                // — `BossManager` keeps no reference to it — so ending its actions here
+                // leaves nothing behind on the manager's side.
+                beam.name = nil
+                beam.physicsBody = nil
+                beam.removeAllActions()
+                beam.run(.sequence([.fadeOut(withDuration: 0.12), .removeFromParent()]))
+            }
+        }
+
+        var cancelled: [SKNode] = []
+        gameContentNode.enumerateChildNodes(withName: "enemyBullet") { node, _ in
+            if let centre = centre {
+                let dx = node.position.x - centre.x
+                let dy = node.position.y - centre.y
+                guard dx * dx + dy * dy <= radius * radius else { return }
+            }
+            cancelled.append(node)
+        }
+        guard !cancelled.isEmpty else { return }
+
+        for node in cancelled {
+            let position = node.position
+            node.removeFromParent()
+            // Only rounds still on the playfield become shards; one already off the
+            // bottom edge would only ever be collected by the magnet.
+            guard position.y > -10, position.y < size.height + 10 else { continue }
+            effectsParent.addChild(ProjectileFX.cancelPop(at: position))
+            shards?.spawn(at: position, count: 1, speed: 20...60)
+        }
+    }
+
+    /// Collecting one shard: score, Overdrive charge and a tick of light on the ship.
+    private func collectShard(at position: CGPoint) {
+        guard isGameStarted || isPlayerExiting else { return }
+
+        let multiplier = overdrive.isActive ? OverdriveRules.shardScoreMultiplier : 1
+        addScore(CombatRules.shardScore * multiplier, chainsCombo: false)
+
+        if overdrive.add(OverdriveRules.chargePerShard * PerkRules.chargeScale(stacks: stacks(.capacitor))) {
+            announceOverdriveReady()
+        }
+
+        SoundManager.shared.playCoinSound(on: self)
+
+        let flash = NeonFX.flashPoint(at: player.position, radius: 10, color: ShardSystem.color,
+                                      duration: 0.12, growTo: 1.8)
+        flash.zPosition = 14
+        effectsParent.addChild(flash)
+    }
+
+    /// The meter just filled. The first time in a level the banner also says how to use
+    /// it; after that a short cue is enough.
+    private func announceOverdriveReady() {
+        HapticManager.shared.success()
+        SoundManager.shared.playScoreMultiplierSound(on: self)
+        showBanner(L10n.HUD.overdriveReady, color: OverdriveSystem.chargingColor,
+                   detail: L10n.HUD.overdriveHint)
+    }
+
+    /// A short centred banner over the playfield.
+    private func showBanner(_ text: String, color: UIColor, detail: String? = nil) {
+        effectsParent.childNode(withName: "centreBanner")?.removeFromParent()
+
+        let banner = SKNode()
+        banner.name = "centreBanner"
+        banner.position = CGPoint(x: size.width / 2, y: size.height * 0.56)
+        banner.zPosition = 700
+        banner.alpha = 0
+        effectsParent.addChild(banner)
+
+        let label = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        label.text = text
+        label.fontSize = 28
+        label.fontColor = color
+        label.verticalAlignmentMode = .center
+        label.horizontalAlignmentMode = .center
+        UITheme.fitLabel(label, toWidth: size.width - 40, minimumFontSize: 16)
+        banner.addChild(label)
+        NeonFX.addTextBloom(to: label, color: color)
+
+        if let detail = detail {
+            let small = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+            small.text = detail
+            small.fontSize = 13
+            small.fontColor = UIColor(white: 1.0, alpha: 0.85)
+            small.verticalAlignmentMode = .center
+            small.horizontalAlignmentMode = .center
+            small.position = CGPoint(x: 0, y: -28)
+            UITheme.fitLabel(small, toWidth: size.width - 40, minimumFontSize: 9)
+            banner.addChild(small)
+        }
+
+        banner.setScale(1.25)
+        banner.run(.sequence([
+            .group([.fadeIn(withDuration: 0.12), .scale(to: 1.0, duration: 0.18)]),
+            .wait(forDuration: detail == nil ? 0.8 : 1.6),
+            .fadeOut(withDuration: 0.35),
+            .removeFromParent()
+        ]))
+    }
+
+    // MARK: - Graze
+
+    /// Pays out for hostile rounds passing close by the core without touching it, and
+    /// lights the hitbox marker while any are near.
+    ///
+    /// Each round grazes once. The flag is the sprite's own `userData`, set only on a
+    /// graze, so the common case — a round nowhere near the ship — allocates nothing.
+    private func updateGraze() {
+        guard let player = player else { return }
+        let core = CGPoint(x: player.position.x + Player.hitboxCenter.x,
+                           y: player.position.y + Player.hitboxCenter.y)
+        let canGraze = !isInvulnerable && !player.hasShield
+        var danger = false
+        var grazed: [SKNode] = []
+        let ring = GrazeRules.radius * CGFloat(PerkRules.grazeRadiusScale(stacks: stacks(.daredevil)))
+        let reach = ring + 12
+
+        gameContentNode.enumerateChildNodes(withName: "enemyBullet") { node, _ in
+            let dx = node.position.x - core.x
+            let dy = node.position.y - core.y
+            // Cheap reject before the square root.
+            guard abs(dx) < 70, abs(dy) < 70 else { return }
+            danger = true
+            guard canGraze, abs(dx) < reach, abs(dy) < reach else { return }
+            if node.userData?["grazed"] != nil { return }
+
+            // One nominal radius for every kind of round: the graze ring is generous
+            // enough that a point either way is not something a player can feel.
+            let distance = (dx * dx + dy * dy).squareRoot()
+            if GrazeRules.isGraze(distance: distance, bulletRadius: 5, hitboxRadius: Player.hitboxRadius, ring: ring) {
+                grazed.append(node)
+            }
+        }
+
+        player.setDangerProximity(danger)
+
+        for node in grazed {
+            if node.userData == nil { node.userData = NSMutableDictionary() }
+            node.userData?["grazed"] = true
+            graze(node, from: core)
+        }
+    }
+
+    private func graze(_ bullet: SKNode, from core: CGPoint) {
+        grazeCount += 1
+        addScore(GrazeRules.score * PerkRules.grazeScoreScale(stacks: stacks(.daredevil)), chainsCombo: false)
+        weaponHeat.cool(by: GrazeRules.heatRelief)
+        if overdrive.add(OverdriveRules.chargePerGraze * PerkRules.chargeScale(stacks: stacks(.capacitor))) {
+            announceOverdriveReady()
+        }
+
+        // A white scrape on the side of the ship the round passed.
+        let angle = atan2(bullet.position.y - core.y, bullet.position.x - core.x)
+        let point = CGPoint(x: core.x + cos(angle) * 12, y: core.y + sin(angle) * 12)
+        let spark = NeonFX.sparks(at: point, count: 3, color: .white, speed: 30,
+                                  spreadAngle: .pi * 0.6, baseAngle: angle, length: 6, lifetime: 0.16)
+        spark.zPosition = 15
+        effectsParent.addChild(spark)
+
+        if realPlayTime - lastGrazeCue > 0.09 {
+            lastGrazeCue = realPlayTime
+            HapticManager.shared.selection()
+        }
+    }
+
+    // MARK: - Time scale
+
+    /// Runs a hit-stop or slow-motion beat.
+    ///
+    /// A beat already in progress is replaced only by one that outlasts it. The short
+    /// beats are the frequent ones, so letting a short one take over would either cut a
+    /// long beat short (a heavy kill ending a boss's death slow-motion) or — had the end
+    /// time been kept — stretch a near-freeze across the whole of the long one.
+    private func hitStop(_ beat: HitStop.Beat) {
+        let endsAt = realPlayTime + beat.duration
+        if timeScale < 1, endsAt <= timeScaleEndsAt { return }
+        timeScale = beat.timeScale
+        timeScaleEndsAt = endsAt
+        applyTimeScale()
+    }
+
+    private func applyTimeScale() {
+        gameContentNode?.speed = timeScale
+        if !isGameplayPaused {
+            physicsWorld.speed = timeScale
+        }
     }
 
     // MARK: - Special Enemy Abilities
@@ -4034,7 +4858,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         SoundManager.shared.playAbsorbSound(on: self)
     }
 
-    private func reflectBullet(_ bullet: SKShapeNode, from mirror: Enemy) {
+    private func reflectBullet(_ bullet: SKNode, from mirror: Enemy) {
         // Cancel the outbound flight first.
         //
         // Player bullets are driven by an SKAction (`moveTo(y: size.height + 20)` in
@@ -4051,12 +4875,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // and gets treated as a player bullet by the off-screen cleanup — which only
         // checks the top edge, never the bottom, so a bullet heading down at the
         // player would never be collected.
-        bullet.name = "enemyBullet"
-        bullet.physicsBody?.categoryBitMask = PhysicsCategory.enemyBullet
-        bullet.physicsBody?.contactTestBitMask = PhysicsCategory.player
-        bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-        bullet.physicsBody?.linearDamping = 0
-        bullet.fillColor = .red
+        //
+        // `convertToHostile` also swaps the art: a reflected round has to read as
+        // hostile the instant it turns, so it becomes a pink needle like a sniper's.
+        ProjectileFX.convertToHostile(bullet)
 
         // Aim back at the player rather than just negating the outbound vector: the
         // bullet had no meaningful velocity to negate (see above), and a mirror that
@@ -4094,7 +4916,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         SoundManager.shared.playReflectSound(on: self)
     }
 
-    private func isHittingShield(bullet: SKShapeNode, enemy: Enemy) -> Bool {
+    private func isHittingShield(bullet: SKNode, enemy: Enemy) -> Bool {
         // The shield sweeps around the enemy, so what matters is where it is pointing
         // at the moment of impact.
         guard let shieldNode = enemy.childNode(withName: "shield") else { return false }
@@ -4113,7 +4935,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         for i in 0..<2 {
             let fragment = Enemy(sceneSize: size, scene: self, type: .basic)
             fragment.position = position
-            fragment.setScale(0.6) // Smaller than original
+            fragment.restingScale = 0.6 // Smaller than original; the hit squash returns here
+            fragment.setScale(0.6)
+            // Fragments are debris, not fighters: one round each, whatever the level.
+            fragment.maxHealth = 1
+            fragment.health = 1
 
             // Must live in gameContentNode, not on the scene: fragments parented to
             // the scene root kept flying and shooting through a pause, were invisible
@@ -4252,6 +5078,41 @@ extension GameScene {
         }
     }
 
+    /// Puts the perk picker up, as an endless boss's defeat would, for the screenshot
+    /// harness and `jetshotTests`. The pick resumes the run with a fresh round.
+    func debugOfferPerks() {
+        offerPerks { [weak self] in
+            self?.beginEndlessRound()
+        }
+    }
+
+    /// Pauses the run with the pause menu up, and the settings panel over it if asked,
+    /// for the screenshot harness.
+    func debugOpenPauseMenu(withSettings: Bool) {
+        if !isGameplayPaused { togglePause() }
+        if withSettings {
+            run(.sequence([.wait(forDuration: 0.6), .run { [weak self] in self?.showSettingsOverlay() }]))
+        }
+    }
+
+    /// The perk picker's card centres in scene space, so a test can tap one for real.
+    func debugPerkCardCentre(_ index: Int) -> CGPoint? {
+        return perkPicker?.cardCentre(index)
+    }
+
+    /// Tops the Overdrive meter up, for the screenshot harness.
+    func debugFillOverdrive() {
+        if overdrive.add(1.0) {
+            announceOverdriveReady()
+        }
+    }
+
+    /// Fires the Overdrive as if the player had, filling it first if need be.
+    func debugTriggerOverdrive() {
+        debugFillOverdrive()
+        activateOverdrive()
+    }
+
     func debugActivatePowerUp(_ type: PowerUpType) {
         switch type {
         case .shield: activateShield()
@@ -4314,14 +5175,11 @@ extension GameScene {
             self.debugWhen({ [weak self] in self?.bossManager.isBossActive() == true }) {
                 [weak self] in
                 guard let self = self else { return }
-                let level = self.isEndless
-                    ? EndlessRules.bossLevel(forRound: self.endlessRound)
-                    : self.currentLevel
-                let maxHealth = BossConfig.config(for: level).maxHealth
+                guard let boss = self.bossManager.getBoss() else { return }
+                let maxHealth = boss.maxHealthPoints
                 let target = max(1, Int(CGFloat(maxHealth) * healthFraction))
-                for _ in 0..<(maxHealth - target) {
-                    guard self.bossManager.isBossActive() else { break }
-                    _ = self.bossManager.bossTakeDamage()
+                if maxHealth > target {
+                    _ = self.bossManager.bossTakeDamage(amount: maxHealth - target)
                 }
             }
         }

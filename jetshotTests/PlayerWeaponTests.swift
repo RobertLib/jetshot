@@ -41,7 +41,7 @@ final class PlayerWeaponTests: XCTestCase {
             let bullets = makePlayer(bullets: count).shoot()
             XCTAssertEqual(bullets.count, count, "bulletCount \(count) fired \(bullets.count) bullets")
             XCTAssertTrue(
-                bullets.allSatisfy { $0.userData?["angle"] == nil },
+                bullets.allSatisfy { $0.zRotation == 0 },
                 "bulletCount \(count) should be straight fire only"
             )
         }
@@ -54,13 +54,14 @@ final class PlayerWeaponTests: XCTestCase {
             let bullets = makePlayer(bullets: count).shoot()
             XCTAssertEqual(bullets.count, count, "bulletCount \(count) fired \(bullets.count) bullets")
 
-            let angled = bullets.filter { $0.userData?["angle"] != nil }
+            // A round's heading is its `zRotation`; `GameScene.shoot()` flies it along that.
+            let angled = bullets.filter { $0.zRotation != 0 }
             XCTAssertEqual(angled.count, count - 4, "bulletCount \(count) produced \(angled.count) angled shots")
 
-            for bullet in angled {
-                let angle = bullet.userData?["angle"] as? CGFloat
-                XCTAssertNotNil(angle, "an angled bullet carries no angle, so it would fly straight")
-                XCTAssertNotEqual(angle, 0, "an angled bullet with a zero angle is just a straight one")
+            // Mirrored pairs: every lean to one side has its twin on the other.
+            let headings = angled.map { $0.zRotation }
+            for heading in headings where headings.count.isMultiple(of: 2) {
+                XCTAssertTrue(headings.contains(-heading), "the spread is lopsided: \(headings)")
             }
         }
     }

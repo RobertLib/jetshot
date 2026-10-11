@@ -16,19 +16,21 @@ class LightningHelper {
         // Generate lightning path
         let points = generateLightningPoints(from: startPoint, to: endPoint, segments: segments, displacement: displacement)
 
-        // Create main lightning bolt
-        let mainBolt = createBoltShape(points: points, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), width: 4)
+        // The bolt the way the films draw their arcs: a violet line of light with a
+        // white-hot core down the middle of it.
+        let mainBolt = createBoltShape(points: points, color: UIColor(red: 0.72, green: 0.48, blue: 1.0, alpha: 1.0), width: 3.4)
         container.addChild(mainBolt)
 
-        // Create bright core
-        let coreBolt = createBoltShape(points: points, color: UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.9), width: 2)
+        let coreBolt = createBoltShape(points: points, color: .white, width: 1.3)
         coreBolt.zPosition = 1
         container.addChild(coreBolt)
 
-        // Create outer glow
-        let glowBolt = createBoltShape(points: points, color: UIColor(red: 0.6, green: 0.3, blue: 1.0, alpha: 0.3), width: 8)
-        glowBolt.zPosition = -1
-        container.addChild(glowBolt)
+        // Light where it strikes.
+        if let end = points.last {
+            let strike = LightSprite.star(size: 46, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0))
+            strike.position = end
+            container.addChild(strike)
+        }
 
         // Add random branches for more realistic lightning
         let branchCount = Int.random(in: 1...3)
@@ -48,13 +50,6 @@ class LightningHelper {
             SKAction.fadeAlpha(to: 1.0, duration: 0.05)
         ])
         wrapper.run(SKAction.repeat(flicker, count: 2))
-
-        // Add glow effect
-        GlowHelper.addEnhancedGlow(
-            to: wrapper,
-            color: UIColor(red: 0.7, green: 0.4, blue: 1.0, alpha: 1.0),
-            intensity: 1.5
-        )
 
         return wrapper
     }
@@ -99,28 +94,14 @@ class LightningHelper {
         return points
     }
 
-    /// Creates a shape node from points
-    private static func createBoltShape(points: [CGPoint], color: UIColor, width: CGFloat) -> SKShapeNode {
-        guard points.count >= 2 else {
-            return SKShapeNode()
-        }
-
-        let path = CGMutablePath()
-        path.move(to: points[0])
-
+    /// A jagged line of light through `points`, one light-tube sprite per segment.
+    private static func createBoltShape(points: [CGPoint], color: UIColor, width: CGFloat) -> SKNode {
+        let node = SKNode()
+        guard points.count >= 2 else { return node }
         for i in 1..<points.count {
-            path.addLine(to: points[i])
+            node.addChild(LightSprite.tube(from: points[i - 1], to: points[i], width: width, color: color))
         }
-
-        let shape = SKShapeNode(path: path)
-        shape.strokeColor = color
-        shape.lineWidth = width
-        shape.lineCap = .round
-        shape.lineJoin = .round
-        shape.fillColor = .clear
-        shape.blendMode = .add
-
-        return shape
+        return node
     }
 
     /// Creates a random branch from the main lightning bolt
@@ -157,11 +138,13 @@ class LightningHelper {
         let container = SKNode()
 
         // Main branch
-        let mainBranch = createBoltShape(points: branchPoints, color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 0.7), width: 3)
+        let mainBranch = createBoltShape(points: branchPoints, color: UIColor(red: 0.72, green: 0.48, blue: 1.0, alpha: 1.0), width: 2.4)
+        mainBranch.alpha = 0.75
         container.addChild(mainBranch)
 
         // Branch core
-        let coreBranch = createBoltShape(points: branchPoints, color: UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.6), width: 1.5)
+        let coreBranch = createBoltShape(points: branchPoints, color: .white, width: 1)
+        coreBranch.alpha = 0.6
         coreBranch.zPosition = 1
         container.addChild(coreBranch)
 
@@ -209,15 +192,14 @@ class LightningHelper {
         }
 
         // Add screen flash effect
-        let flash = SKShapeNode(rectOf: sceneSize)
-        flash.fillColor = UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 0.2)
-        flash.strokeColor = .clear
+        let flash = SKSpriteNode(color: UIColor(red: 0.8, green: 0.6, blue: 1.0, alpha: 1.0), size: sceneSize)
+        flash.alpha = 0
         flash.position = CGPoint(x: sceneSize.width / 2 - position.x, y: sceneSize.height / 2 - position.y)
         flash.zPosition = -2
         flash.blendMode = .add
 
         let flashAnimation = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.4, duration: 0.05),
+            SKAction.fadeAlpha(to: 0.08, duration: 0.05),
             SKAction.fadeAlpha(to: 0.0, duration: 0.15)
         ])
         flash.run(flashAnimation)

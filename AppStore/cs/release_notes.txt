@@ -1,9 +1,16 @@
-Nekonečná hra, násobič série a přepracovaná podoba všech padesáti soubojů s bossem.
+Deset nových bossů, Přepětí, medaile, vylepšení v nekonečné hře a rychlejší, hustší boj — s novým ovládáním a ostřejším vzhledem.
 
-• NEKONEČNÁ HRA — běh, který nikde nekončí; odemkne se po dohrání první úrovně. Kola se zvětšují a utahují, každé třetí přibývají noví nepřátelé a každé páté přilétá boss. Drží tvůj rekord i nejhlubší dosažené kolo.
-• Zásahy, které padnou rychle za sebou, teď staví sérii, která násobí skóre až x8. Jeden zásah do tebe a série je pryč a okno se s její délkou zkracuje.
-• Bossové bojují ve třech dějstvích. Jak jim praská pancíř na dvou třetinách a jedné třetině životů, střílejí rychleji a sahají hlouběji do repertoáru — souboj se konečně dá číst z toho, jak vypadá.
-• Od osmé do padesáté úrovně měl každý boss stejných čtrnáct útoků — třiačtyřicet z padesáti soubojů bylo stejných, jen s delším ukazatelem životů. Za padesáti souboji stojí sedmnáct bossů a každý z nich má nově vlastní rukopis.
-• Úrovně mají tempo místo prázdna. Vlny přilétají zhruba o třetinu rychleji a druhá polovina úrovně přehrává tu první, jen sevřeněji — pořád máš do čeho střílet.
-• Přehřátí zbraní už tě nepřipraví o rozehranou sérii: chladnutí se zkrátilo ze tří sekund na půldruhé a mezi dávkami zbraně chladnou o polovinu rychleji.
-• Čeština v celé hře i v příběhu.
+• DESET NOVÝCH BOSSŮ — místo jednoho bosse na tebe čeká deset strojů. Každý je vykreslený drátěným modelem jako tvoje loď, pohybuje se po svém, má vlastní typický útok a výzbroj, kterou mu můžeš ustřelit: strážce, střemhlav útočící kudlanka, orbitální vír, úl kladoucí miny, krystalový kopiník, had, přízrak přeskakující po obrazovce, teserakt, chřtán — a nakonec samotné epicentrum. Každý souboj má tři dějství vyznačená na ukazateli životů a v pozdějších sektorech se bossové vracejí lépe vyzbrojení.
+• PŘEPĚTÍ — každé zničení se rozletí v krystaly energie, které se stahují do tvé lodi. Naplň ukazatel a odpal ho druhým prstem nebo dvojklepem: všechna nepřátelská palba na obrazovce se rozpadne v krystaly a tvé zbraně na šest sekund zezlátnou. Nebo si ho šetři — plný ukazatel se odpálí sám a pohltí zásah.
+• MEDAILE — každá úroveň nově skrývá tři: bez zásahu, dlouhá série a 85 % zničených nepřátel. Uvidíš je ve výběru úrovní i na úvodní kartě každé úrovně jako cíle pro další pokus.
+• VYLEPŠENÍ V NEKONEČNÉ HŘE — po každém poraženém bossovi si vybereš jedno ze tří vylepšení na zbytek běhu: rychlejší zbraně, delší Přepětí, širší pásmo průletů, život navíc a další. Skládej je do vlastní sestavy.
+• TĚSNÉ PRŮLETY — loď má nově malý zásahový bod, který se na trupu rozsvítí, když je palba blízko. Střely, které jen těsně prolétnou kolem, dávají body, nabíjejí Přepětí a chladí zbraně.
+• Relativní ovládání — loď se pohybuje s prstem, místo aby k němu skočila, takže palec může ležet kdekoli a loď nikdy nezakryje. Přidržený prst střílí, ať je kdekoli.
+• Opravdový proud palby: zbraně střílejí víc než dvakrát rychleji a nepřátelé snesou několik zásahů, při kterých bíle blikají a jiskří. Ti nejodolnější mají ukazatel životů a těžká zničení dopadnou se zastavením času, které smete palbu kolem.
+• Rychlejší úrovně — vlny přilétají hustěji, boss dorazí dřív a každý zlom jeho fáze vyčistí obrazovku ve sprše krystalů.
+• Veškerá nepřátelská palba má teď jednu barvu — sytě růžovou s bílým jádrem — takže je na první pohled odlišitelná od výbuchů, mincí i tvých střel. Mířené střely letí pomaleji a férověji.
+• Odstřelovači konečně odstřelují: kvůli chybě jejich zamířená rána nikdy nevystřelila.
+• Větší nepřátelé, laserové paprsky místo čárek, vzdálené planety, které už nevypadají jako asteroidy, a obloha, která ubíhá rychleji.
+• Nový vzhled mimo samotnou hru: menu, výběr úrovní, pauza i výsledky mají teď stejný filmový rámec jako příběh — černé pruhy, rohy hledáčku a písmo kreslené světlem.
+• Zvuk se při plné obrazovce už nesčítá v jeden šum.
+• Opravy: nekonečná hra ukončená z menu pauzy se teď započítá do rekordu, reset postupu už vydrží na všech zařízeních se stejným iCloudem a časovače vylepšení jsou nově česky.

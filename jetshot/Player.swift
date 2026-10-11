@@ -6,6 +6,7 @@
 //
 
 import SpriteKit
+import simd
 
 /// Player spaceship with movement, shooting, and power-up capabilities.
 /// Handles visual effects, animations, and power-up state management.
@@ -49,6 +50,68 @@ class Player: SKShapeNode {
     private var sideMissileNodes: [SKShapeNode] = []
     private var lightningIndicators: [SKShapeNode] = []
     private var barrierNodes: [SKShapeNode] = []
+
+    // Hitbox
+
+    /// Radius of the vulnerable core. See the note in `setupPlayer`.
+    nonisolated static let hitboxRadius: CGFloat = 5.5
+    /// Where the core sits on the hull: the centre of the fuselage, just under the
+    /// cockpit glass.
+    nonisolated static let hitboxCenter = CGPoint(x: 0, y: 1)
+    /// Reach of the pickup collector.
+    nonisolated static let collectorRadius: CGFloat = 26
+
+    private var hitboxMarker: SKNode?
+    private var dangerShown = false
+
+    /// Lights the core marker while hostile fire is close, and dims it after.
+    func setDangerProximity(_ near: Bool) {
+        guard near != dangerShown, let marker = hitboxMarker else { return }
+        dangerShown = near
+        marker.removeAllActions()
+        marker.run(.fadeAlpha(to: near ? 1.0 : 0.0, duration: near ? 0.08 : 0.35))
+    }
+
+    /// The gold corona an active Overdrive wraps the ship in.
+    func setOverdriveAura(_ on: Bool) {
+        childNode(withName: "overdriveAura")?.removeFromParent()
+        guard on else { return }
+
+        let aura = SKNode()
+        aura.name = "overdriveAura"
+        aura.zPosition = -4
+        addChild(aura)
+
+        let gold = ProjectileFX.overdriveBolt
+        // Kept dim: it sits under the hull, and a bright one washes the ship itself out
+        // at exactly the moment the player most needs to see where it is.
+        let glow = NeonFX.radialGlow(radius: 40, color: gold, softness: 0.7)
+        glow.alpha = 0.28
+        aura.addChild(glow)
+        glow.run(.repeatForever(.sequence([
+            .group([.scale(to: 1.12, duration: 0.18), .fadeAlpha(to: 0.38, duration: 0.18)]),
+            .group([.scale(to: 0.96, duration: 0.18), .fadeAlpha(to: 0.24, duration: 0.18)])
+        ])))
+
+        // Gyroscope rings wheeling round the hull on three axes, the way the film draws
+        // the epicentre's field: reads as a field, not a halo, and makes the state
+        // readable at a glance in a busy screen.
+        let gyro = WireBody(extent: 34, perspective: 4) { frame in
+            let axes = [Vec3(1, 0.25, 0), Vec3(0.2, 1, 0.3), Vec3(0.4, -0.3, 1)]
+            for (i, axis) in axes.enumerated() {
+                let q = rotation(frame.t * (2.4 + Float(i) * 0.9) * (i == 1 ? -1 : 1), axis)
+                let (u, v) = StoryScenery.basis(q.act(simd_normalize(axis)))
+                StoryScenery.dashedRing(frame.canvas, center: .zero, radius: 25 + Float(i) * 3.5, u: u, v: v,
+                                        phase: frame.t * 3, dashes: 5, fill: 0.55,
+                                        color: i == 1 ? StoryPalette.white : gold, alpha: 0.85, width: 1.3)
+            }
+        }
+        aura.addChild(gyro)
+
+        aura.setScale(0.4)
+        aura.alpha = 0
+        aura.run(.group([.scale(to: 1, duration: 0.2), .fadeIn(withDuration: 0.2)]))
+    }
 
     // Flight feel
     private var previousX: CGFloat = 0
@@ -127,52 +190,32 @@ class Player: SKShapeNode {
         path.closeSubpath()
 
         self.path = path
-        self.fillColor = UIColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 1.0) // Bright blue
-        self.strokeColor = UIColor(red: 0.4, green: 0.9, blue: 1.0, alpha: 1.0) // Light cyan
-        self.lineWidth = 2.5
+        // The hull is drawn in 3D by the wireframe below. The shape itself is only the
+        // dark glass under it, which keeps the world's lines from showing through the
+        // ship and gives the bloom its silhouette.
+        self.fillColor = UIColor(red: 0.01, green: 0.04, blue: 0.09, alpha: 0.82)
+        self.strokeColor = UIColor(red: 0.35, green: 0.85, blue: 1.0, alpha: 0.22)
+        self.lineWidth = 1
 
         // Position above safe area (home indicator) with padding
         let playerHeight = safeAreaBottom + GameConfiguration.playerBottomOffset
         self.position = CGPoint(x: sceneSize.width / 2, y: playerHeight)
         self.name = "player"
 
-        // Add cockpit detail
-        let cockpit = SKShapeNode(circleOfRadius: 3)
-        cockpit.fillColor = UIColor(red: 0.3, green: 0.8, blue: 1.0, alpha: 0.9)
-        cockpit.strokeColor = UIColor(red: 0.6, green: 1.0, blue: 1.0, alpha: 1.0)
-        cockpit.lineWidth = 1.5
-        cockpit.position = CGPoint(x: 0, y: 8)
-        cockpit.zPosition = 1
-        addChild(cockpit)
+        // The Singularity-7 itself: the film's wireframe hull, the same mesh the
+        // opening shows on its turntable, seen from above and a little behind. It rolls
+        // into a turn about its own axis rather than spinning flat on the screen.
+        let hull = WireBody(extent: 30, perspective: 4.2) { [weak self] frame in
+            self?.drawHull(frame)
+        }
+        hull.name = "hull3D"
+        hull.zPosition = 2
+        addChild(hull)
 
-        // Add engine glow effects
-        let leftEngine = SKShapeNode(rectOf: CGSize(width: 2.5, height: 6), cornerRadius: 1)
-        leftEngine.fillColor = UIColor(red: 0.0, green: 0.8, blue: 1.0, alpha: 0.8)
-        leftEngine.strokeColor = .clear
-        leftEngine.position = CGPoint(x: -4.5, y: -15)
-        leftEngine.zPosition = -1
-        addChild(leftEngine)
-
-        let rightEngine = SKShapeNode(rectOf: CGSize(width: 2.5, height: 6), cornerRadius: 1)
-        rightEngine.fillColor = UIColor(red: 0.0, green: 0.8, blue: 1.0, alpha: 0.8)
-        rightEngine.strokeColor = .clear
-        rightEngine.position = CGPoint(x: 4.5, y: -15)
-        rightEngine.zPosition = -1
-        addChild(rightEngine)
-
-        // Engine flame animation
-        let engineFlicker = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.5, duration: 0.1),
-            SKAction.fadeAlpha(to: 1.0, duration: 0.1)
-        ])
-        leftEngine.run(SKAction.repeatForever(engineFlicker))
-        rightEngine.run(SKAction.repeatForever(engineFlicker))
-
-        // Soft additive plumes underneath the particle thrusters. The particles
-        // alone are sparse dots; the plume is the bright column of light that
-        // makes the ship look like it is under power.
+        // Soft additive plumes under the exhaust: the bright column of light that makes
+        // the ship look like it is under power.
         for x in [-4.5, 4.5] as [CGFloat] {
-            let plume = NeonFX.radialGlow(radius: 11, color: UIColor(red: 0.25, green: 0.85, blue: 1.0, alpha: 1.0))
+            let plume = NeonFX.radialGlow(radius: 10, color: UIColor(red: 0.25, green: 0.85, blue: 1.0, alpha: 1.0))
             plume.position = CGPoint(x: x, y: -21)
             plume.yScale = 1.9
             plume.xScale = 0.62
@@ -187,10 +230,6 @@ class Player: SKShapeNode {
             plume.run(.repeatForever(flare))
         }
 
-        // Add particle effects for engine thrusters
-        addEngineThrusterParticles(at: CGPoint(x: -4.5, y: -18))
-        addEngineThrusterParticles(at: CGPoint(x: 4.5, y: -18))
-
         previousX = position.x
 
         // Levels the wings out once the player stops steering: touchesMoved just
@@ -200,78 +239,109 @@ class Player: SKShapeNode {
             self.framesSinceMove += 1
             guard self.framesSinceMove > 2 else { return }
             self.bankAngle *= 0.86
-            self.zRotation = self.bankAngle
+            self.zRotation = self.bankAngle * Self.yawShare
             for plume in self.enginePlumes {
                 plume.zRotation = -self.bankAngle * 0.55
             }
         }), withKey: "bankLevelling")
 
-        // Setup physics body
-        self.physicsBody = SKPhysicsBody(polygonFrom: path)
-        self.physicsBody?.isDynamic = true
-        self.physicsBody?.categoryBitMask = PhysicsCategory.player
-        self.physicsBody?.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.enemyBullet | PhysicsCategory.obstacle
-        self.physicsBody?.collisionBitMask = PhysicsCategory.none
-        self.physicsBody?.usesPreciseCollisionDetection = true
+        // Setup physics body: the core, not the hull.
+        //
+        // The whole ship polygon used to be the hitbox, so a round that clipped a wing
+        // tip — visibly off the cockpit — still cost a life. Shmups converged long ago
+        // on a small core that is drawn on the ship, which is what makes dense fire
+        // fair to weave through and what makes grazing (see `GrazeRules`) possible at
+        // all. The generous collector below keeps pickups as easy to grab as before.
+        let core = SKPhysicsBody(circleOfRadius: Self.hitboxRadius, center: Self.hitboxCenter)
+        core.isDynamic = true
+        core.categoryBitMask = PhysicsCategory.player
+        core.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.enemyBullet | PhysicsCategory.obstacle
+        core.collisionBitMask = PhysicsCategory.none
+        core.usesPreciseCollisionDetection = true
+        self.physicsBody = core
 
-        // Add subtle pulsing glow effect to player
-        GlowHelper.addPulsingEnhancedGlow(to: self, color: UIColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 1.0), minIntensity: 0.6, maxIntensity: 0.9, duration: 1.2)
+        // Pickup collector: coins and power-ups test against this, never the core.
+        let collector = SKNode()
+        collector.name = "collector"
+        let collectorBody = SKPhysicsBody(circleOfRadius: Self.collectorRadius)
+        collectorBody.isDynamic = true
+        collectorBody.affectedByGravity = false
+        collectorBody.categoryBitMask = PhysicsCategory.collector
+        collectorBody.contactTestBitMask = PhysicsCategory.coin | PhysicsCategory.powerUp
+        collectorBody.collisionBitMask = PhysicsCategory.none
+        collector.physicsBody = collectorBody
+        addChild(collector)
+
+        // The core, drawn: a white dot in a thin ring. Quiet until hostile fire is
+        // near, then lit (see `setDangerProximity`), so it is there when the player is
+        // threading rounds and out of the way when they are not.
+        let marker = SKNode()
+        marker.position = Self.hitboxCenter
+        marker.zPosition = 6
+        let ring = SKShapeNode(circleOfRadius: Self.hitboxRadius + 1)
+        ring.strokeColor = UIColor(red: 1.0, green: 0.55, blue: 0.8, alpha: 1.0)
+        ring.fillColor = UIColor(white: 0, alpha: 0.35)
+        ring.lineWidth = 1.4
+        marker.addChild(ring)
+        let dot = SKShapeNode(circleOfRadius: 2.2)
+        dot.fillColor = .white
+        dot.strokeColor = .clear
+        marker.addChild(dot)
+        marker.alpha = 0.0
+        addChild(marker)
+        hitboxMarker = marker
+
+        // A soft breathing halo behind the wireframe.
+        GlowHelper.addPulsingEnhancedGlow(to: self, color: UIColor(red: 0.2, green: 0.8, blue: 1.0, alpha: 1.0), minIntensity: 0.4, maxIntensity: 0.6, duration: 1.2)
     }
 
-    private func addEngineThrusterParticles(at position: CGPoint) {
-        // Create particle emitter for engine thruster effect
-        let thrusterEmitter = SKEmitterNode()
-        thrusterEmitter.position = position
-        thrusterEmitter.zPosition = -2
+    /// How much of the bank shows as a flat turn of the sprite; the rest is the hull's
+    /// 3D roll. A little yaw keeps the nose pointing into the turn.
+    private static let yawShare: CGFloat = 0.3
 
-        thrusterEmitter.particleTexture = ParticleTexture.glowCircle(diameter: 32)
+    /// Fraction of a second since the last shot, for the engines' kick.
+    private var recoilGlow: Float = 0
 
-        // Particle properties (optimized from 150 to 80 for better performance)
-        thrusterEmitter.particleBirthRate = 80
-        thrusterEmitter.numParticlesToEmit = 0 // Continuous emission
+    /// The film's hull without its nacelle rings: at gameplay size those forty edges
+    /// merge into a white blur over the engines.
+    private static let hullMesh: WireMesh = {
+        let full = WireMesh.ship
+        // Outline top and bottom (36 vertices) and the canopy (5) come first; the
+        // nacelle rings are everything after.
+        let nacelles = 41
+        return WireMesh(vertices: full.vertices, edges: full.edges.filter { $0.0 < nacelles && $0.1 < nacelles })
+    }()
 
-        // Particle lifetime
-        thrusterEmitter.particleLifetime = 0.5
-        thrusterEmitter.particleLifetimeRange = 0.25
+    private static let hullColor = UIColor(red: 0.55, green: 0.93, blue: 1.0, alpha: 1)
 
-        // Particle appearance
-        thrusterEmitter.particleScale = 0.2
-        thrusterEmitter.particleScaleRange = 0.075
-        thrusterEmitter.particleScaleSpeed = -0.28
+    private func drawHull(_ frame: WireBody.Frame) {
+        let c = frame.canvas
+        let t = frame.t
+        // Lie the film's mesh (forward -Z, up +Y) flat on the screen with the nose up,
+        // tip it back so the camera sits above and behind, then roll it.
+        let tilt = rotation(.pi / 2 - 0.42, Vec3(1, 0, 0))
+        let q = tilt * rotation(Float(bankAngle) * 1.9, Vec3(0, 0, 1))
+        let centre = Vec3(0, 1, 0)
+        let scale: Float = 1.08
+        c.mesh(Self.hullMesh, at: centre, rotation: q, scale: scale, color: Self.hullColor, alpha: 0.95,
+               width: 1.05, backAlpha: 0.3)
 
-        // Particle colors - bright cyan to blue gradient
-        thrusterEmitter.particleColor = UIColor(red: 0.0, green: 0.9, blue: 1.0, alpha: 1.0)
-        thrusterEmitter.particleColorBlendFactor = 1.0
-        thrusterEmitter.particleColorSequence = nil
-
-        // Color ramp for gradient effect
-        let colorKeyframe1 = SKKeyframeSequence(keyframeValues: [
-            UIColor(red: 0.0, green: 0.9, blue: 1.0, alpha: 1.0),
-            UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 0.8),
-            UIColor(red: 0.3, green: 0.5, blue: 1.0, alpha: 0.4),
-            UIColor(red: 0.4, green: 0.4, blue: 0.9, alpha: 0.0)
-        ], times: [0, 0.3, 0.6, 1.0])
-        thrusterEmitter.particleColorSequence = colorKeyframe1
-
-        // Particle alpha
-        thrusterEmitter.particleAlpha = 0.9
-        thrusterEmitter.particleAlphaRange = 0.2
-        thrusterEmitter.particleAlphaSpeed = -2.0
-
-        // Particle movement
-        thrusterEmitter.emissionAngle = .pi * 1.5 // Downward
-        thrusterEmitter.emissionAngleRange = .pi * 0.18
-        thrusterEmitter.particleSpeed = 70
-        thrusterEmitter.particleSpeedRange = 35
-
-        // Particle acceleration (slight upward drift to simulate turbulence)
-        thrusterEmitter.xAcceleration = 0
-        thrusterEmitter.yAcceleration = 20
-
-        // Blend mode for glowing effect
-        thrusterEmitter.particleBlendMode = .add
-
-        addChild(thrusterEmitter)
+        recoilGlow = max(0, recoilGlow - 0.08)
+        let engine: Float = 0.85 + recoilGlow
+        let back = q.act(Vec3(0, 0, 1))
+        for (i, nozzle) in WireMesh.shipNozzles.enumerated() {
+            let p = centre + q.act(nozzle * scale)
+            let flicker = 0.85 + 0.15 * sin(t * 47 + Float(i) * 2.1)
+            c.glow(p, radius: 5.5 * engine * flicker, color: StoryPalette.cyan, alpha: 0.9)
+            c.glow(p, radius: 2.3 * engine, color: StoryPalette.white, alpha: 1)
+            // Exhaust: a fan of lines trailing from the nozzle, lengths flickering.
+            for k in 0..<4 {
+                let a = Float(k) / 4 * 2 * .pi + t * 9
+                let side = q.act(Vec3(cos(a), sin(a), 0)) * 0.9
+                let length = (9 + 5 * sin(t * 31 + Float(k * 3 + i))) * engine
+                c.line(p + side, p + back * length, color: StoryPalette.blue, alpha: 0.55 * engine, width: 1)
+            }
+        }
     }
 
     func moveTo(x: CGFloat, y: CGFloat, sceneWidth: CGFloat, sceneHeight: CGFloat, safeAreaBottom: CGFloat) {
@@ -291,12 +361,28 @@ class Player: SKShapeNode {
         // let the levelling action ease it back out.
         let dx = targetX - position.x
         bankAngle = max(-0.38, min(0.38, -dx * 0.012))
-        zRotation = bankAngle
+        zRotation = bankAngle * Self.yawShare
         framesSinceMove = 0
 
         let moveAction = SKAction.move(to: CGPoint(x: targetX, y: targetY), duration: moveSpeed)
         run(moveAction)
         previousX = targetX
+    }
+
+    /// Where the ship may fly. Shared by every way of moving it.
+    static func flightBounds(sceneWidth: CGFloat, sceneHeight: CGFloat, safeAreaBottom: CGFloat) -> CGRect {
+        let minY = safeAreaBottom + 15
+        let maxY = minY + sceneHeight * 0.55
+        return CGRect(x: 10, y: minY, width: max(0, sceneWidth - 20), height: maxY - minY)
+    }
+
+    /// Moves the ship by a drag delta, clamped to the flight area. The relative-drag
+    /// path; see `GameScene`'s touch handling.
+    func steer(by delta: CGVector, sceneWidth: CGFloat, sceneHeight: CGFloat, safeAreaBottom: CGFloat) {
+        let bounds = Self.flightBounds(sceneWidth: sceneWidth, sceneHeight: sceneHeight, safeAreaBottom: safeAreaBottom)
+        position.x = min(max(position.x + delta.dx, bounds.minX), bounds.maxX)
+        position.y = min(max(position.y + delta.dy, bounds.minY), bounds.maxY)
+        updateBanking()
     }
 
     func moveToInstant(x: CGFloat, y: CGFloat, sceneWidth: CGFloat, sceneHeight: CGFloat, safeAreaBottom: CGFloat) {
@@ -331,7 +417,7 @@ class Player: SKShapeNode {
         let maxBank: CGFloat = 0.38
         let target = max(-maxBank, min(maxBank, -dx * 0.055))
         bankAngle += (target - bankAngle) * 0.25
-        zRotation = bankAngle
+        zRotation = bankAngle * Self.yawShare
 
         // Counter-rotate the plumes slightly: thrust keeps pointing more or less
         // down-range while the airframe rolls.
@@ -343,6 +429,7 @@ class Player: SKShapeNode {
     /// Brief squash on the hull when a shot goes out. Sub-100ms so it registers
     /// as kick rather than as the ship wobbling.
     func applyRecoil() {
+        recoilGlow = 0.35
         removeAction(forKey: "recoil")
         let dip = SKAction.scaleY(to: 0.9, duration: 0.045)
         dip.timingMode = .easeOut
@@ -351,8 +438,15 @@ class Player: SKShapeNode {
         run(.sequence([dip, back]), withKey: "recoil")
     }
 
-    func shoot() -> [SKShapeNode] {
-        var bullets: [SKShapeNode] = []
+    /// One volley: the bolts for every barrel, ready to be flown.
+    ///
+    /// Each round carries its angle (0 is straight up, positive leans right) in
+    /// `zRotation`, so the scene flies it along whatever it is pointing at. With
+    /// `overdrive`, every bolt is a gold, double-damage round and two extra bolts fan out
+    /// from the nose — the visible difference between the normal guns and the burst the
+    /// player saved up for.
+    func shoot(overdrive: Bool = false) -> [PlayerRound] {
+        var rounds: [PlayerRound] = []
 
         // Bullets 1-4 shoot straight forward
         let straightBulletCount = min(bulletCount, 4)
@@ -360,155 +454,36 @@ class Player: SKShapeNode {
         let totalWidth = CGFloat(straightBulletCount - 1) * spacing
         let startX = self.position.x - totalWidth / 2
 
-        // Create straight bullets (1-4)
         for i in 0..<straightBulletCount {
-            // Create laser bullet with gradient effect
-            let bullet = SKShapeNode(rectOf: CGSize(width: 5, height: 16), cornerRadius: 2.5)
-            bullet.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.8, alpha: 1.0) // Cyan-green
-            bullet.strokeColor = UIColor(red: 0.5, green: 1.0, blue: 1.0, alpha: 1.0)
-            bullet.lineWidth = 1.5
-            bullet.position = CGPoint(x: startX + CGFloat(i) * spacing, y: self.position.y + 20)
-            bullet.name = "bullet"
-
-            // Add bullet core
-            let core = SKShapeNode(rectOf: CGSize(width: 2, height: 14), cornerRadius: 1)
-            core.fillColor = UIColor(red: 0.8, green: 1.0, blue: 1.0, alpha: 1.0)
-            core.strokeColor = .clear
-            core.zPosition = 1
-            bullet.addChild(core)
-
-            // Setup physics body
-            bullet.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 5, height: 16))
-            bullet.physicsBody?.isDynamic = true
-            bullet.physicsBody?.categoryBitMask = PhysicsCategory.bullet
-            bullet.physicsBody?.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.obstacle
-            bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-            bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-            // Add enhanced glow effect to bullet
-            GlowHelper.addEnhancedGlow(to: bullet, color: UIColor(red: 0.0, green: 1.0, blue: 0.9, alpha: 1.0), intensity: 1.0)
-
-            bullets.append(bullet)
+            let round = ProjectileFX.playerRound(overdrive: overdrive)
+            round.position = CGPoint(x: startX + CGFloat(i) * spacing, y: self.position.y + 22)
+            rounds.append(round)
         }
 
         // Bullets 5-8 shoot at angles
+        var angles: [CGFloat] = []
         if bulletCount > 4 {
             let angledBulletCount = min(bulletCount - 4, 4) // Max 4 angled bullets (5-8)
-            let angles: [CGFloat] = [15, -15, 25, -25] // Degrees for bullets 5-8
-
-            for i in 0..<angledBulletCount {
-                let bullet = SKShapeNode(rectOf: CGSize(width: 5, height: 16), cornerRadius: 2.5)
-                bullet.fillColor = UIColor(red: 0.0, green: 1.0, blue: 0.8, alpha: 1.0)
-                bullet.strokeColor = UIColor(red: 0.5, green: 1.0, blue: 1.0, alpha: 1.0)
-                bullet.lineWidth = 1.5
-                bullet.position = CGPoint(x: self.position.x, y: self.position.y + 20)
-                bullet.name = "bullet"
-
-                // Store the angle in userData for movement
-                bullet.userData = ["angle": angles[i]]
-
-                // Rotate bullet to match shooting angle
-                bullet.zRotation = -angles[i] * .pi / 180
-
-                // Add bullet core
-                let core = SKShapeNode(rectOf: CGSize(width: 2, height: 14), cornerRadius: 1)
-                core.fillColor = UIColor(red: 0.8, green: 1.0, blue: 1.0, alpha: 1.0)
-                core.strokeColor = .clear
-                core.zPosition = 1
-                bullet.addChild(core)
-
-                // Setup physics body
-                bullet.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 5, height: 16))
-                bullet.physicsBody?.isDynamic = true
-                bullet.physicsBody?.categoryBitMask = PhysicsCategory.bullet
-                bullet.physicsBody?.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.obstacle
-                bullet.physicsBody?.collisionBitMask = PhysicsCategory.none
-                bullet.physicsBody?.usesPreciseCollisionDetection = true
-
-                // Add enhanced glow effect to bullet
-                GlowHelper.addEnhancedGlow(to: bullet, color: UIColor(red: 0.0, green: 1.0, blue: 0.9, alpha: 1.0), intensity: 1.0)
-
-                bullets.append(bullet)
-            }
+            angles.append(contentsOf: [15, -15, 25, -25].prefix(angledBulletCount))
+        }
+        if overdrive {
+            angles.append(contentsOf: [8, -8])
+        }
+        for angle in angles {
+            let round = ProjectileFX.playerRound(overdrive: overdrive)
+            round.position = CGPoint(x: self.position.x, y: self.position.y + 22)
+            round.zRotation = -angle * .pi / 180
+            rounds.append(round)
         }
 
-        return bullets
+        return rounds
     }
 
-    func shootMissile(side: Int) -> SKShapeNode {
-        // Create missile body (larger than regular bullet)
-        let missile = SKShapeNode(rectOf: CGSize(width: 10, height: 24), cornerRadius: 5)
-        missile.fillColor = UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0) // Bright orange-red
-        missile.strokeColor = UIColor(red: 1.0, green: 0.6, blue: 0.0, alpha: 1.0)
-        missile.lineWidth = 2
-
+    func shootMissile(side: Int) -> PlayerRound {
+        let missile = ProjectileFX.missile(homing: false)
         // Position based on side (-1 for left, 1 for right)
         let offsetX: CGFloat = CGFloat(side) * 20
         missile.position = CGPoint(x: self.position.x + offsetX, y: self.position.y + 20)
-        missile.name = "missile"
-
-        // Add missile warhead
-        let warhead = SKShapeNode(circleOfRadius: 3)
-        warhead.fillColor = UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)
-        warhead.strokeColor = UIColor(red: 1.0, green: 1.0, blue: 0.5, alpha: 1.0)
-        warhead.lineWidth = 1.5
-        warhead.position = CGPoint(x: 0, y: 10)
-        warhead.zPosition = 1
-        missile.addChild(warhead)
-
-        // Add fins
-        let leftFin = SKShapeNode(path: {
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: -5, y: -5))
-            path.addLine(to: CGPoint(x: -8, y: -8))
-            path.addLine(to: CGPoint(x: -5, y: -10))
-            path.closeSubpath()
-            return path
-        }())
-        leftFin.fillColor = UIColor(red: 0.8, green: 0.2, blue: 0.0, alpha: 1.0)
-        leftFin.strokeColor = UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0)
-        leftFin.lineWidth = 1
-        missile.addChild(leftFin)
-
-        let rightFin = SKShapeNode(path: {
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: 5, y: -5))
-            path.addLine(to: CGPoint(x: 8, y: -8))
-            path.addLine(to: CGPoint(x: 5, y: -10))
-            path.closeSubpath()
-            return path
-        }())
-        rightFin.fillColor = UIColor(red: 0.8, green: 0.2, blue: 0.0, alpha: 1.0)
-        rightFin.strokeColor = UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0)
-        rightFin.lineWidth = 1
-        missile.addChild(rightFin)
-
-        // Add engine trail
-        let trail = SKShapeNode(rectOf: CGSize(width: 4, height: 8), cornerRadius: 2)
-        trail.fillColor = UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 0.8)
-        trail.strokeColor = .clear
-        trail.position = CGPoint(x: 0, y: -14)
-        trail.zPosition = -1
-        missile.addChild(trail)
-
-        // Trail flicker animation
-        let flicker = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.4, duration: 0.1),
-            SKAction.fadeAlpha(to: 0.9, duration: 0.1)
-        ])
-        trail.run(SKAction.repeatForever(flicker))
-
-        // Setup physics body
-        missile.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 10, height: 24))
-        missile.physicsBody?.isDynamic = true
-        missile.physicsBody?.categoryBitMask = PhysicsCategory.bullet
-        missile.physicsBody?.contactTestBitMask = PhysicsCategory.enemy | PhysicsCategory.obstacle
-        missile.physicsBody?.collisionBitMask = PhysicsCategory.none
-        missile.physicsBody?.usesPreciseCollisionDetection = true
-
-        // Add glow effect to missile
-        GlowHelper.addEnhancedGlow(to: missile, color: UIColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 1.0), intensity: 1.2)
-
         return missile
     }
 
@@ -530,17 +505,14 @@ class Player: SKShapeNode {
     }
 
     private func createMissileVisual() -> SKShapeNode {
-        // Small visual representation of side missiles mounted on wings
-        let missile = SKShapeNode(rectOf: CGSize(width: 5, height: 12), cornerRadius: 2.5)
-        missile.fillColor = UIColor(red: 1.0, green: 0.3, blue: 0.0, alpha: 1.0)
-        missile.strokeColor = UIColor(red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0)
-        missile.lineWidth = 1.5
+        // A launcher pod on the wing: dark glass in an amber edge, the warhead lit.
+        let missile = SKShapeNode(rectOf: CGSize(width: 4.5, height: 12), cornerRadius: 2.2)
+        missile.fillColor = UIColor(red: 0.12, green: 0.04, blue: 0.0, alpha: 0.9)
+        missile.strokeColor = UIColor(red: 1.0, green: 0.58, blue: 0.18, alpha: 1.0)
+        missile.lineWidth = 1.2
         missile.zPosition = -1
 
-        // Add small warhead detail
-        let warhead = SKShapeNode(circleOfRadius: 1.5)
-        warhead.fillColor = UIColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)
-        warhead.strokeColor = .clear
+        let warhead = LightSprite.star(size: 9, color: UIColor(red: 1.0, green: 0.75, blue: 0.3, alpha: 1.0))
         warhead.position = CGPoint(x: 0, y: 5)
         missile.addChild(warhead)
 
@@ -549,57 +521,36 @@ class Player: SKShapeNode {
 
     private func updateShieldVisuals() {
         if hasShield {
-            // Create shield if it doesn't exist
-            if shieldNode == nil {
-                // Create container for shield effects
-                let shieldContainer = SKNode()
-                shieldContainer.name = "shieldContainer"
-                shieldContainer.zPosition = -1
-                addChild(shieldContainer)
+            guard shieldNode == nil else { return }
+            let cyan = UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0)
+            let shieldContainer = SKNode()
+            shieldContainer.name = "shieldContainer"
+            shieldContainer.zPosition = -1
+            addChild(shieldContainer)
 
-                // Add 3D vector sphere shield
-                let vectorSphere = VectorFX3D.createShieldSphere(
-                    radius: 35,
-                    color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0),
-                    persistent: true
-                )
-                vectorSphere.zPosition = 0
-                shieldContainer.addChild(vectorSphere)
+            // A geodesic bubble turning round the ship, its far side faint behind the
+            // near — the film's wireframe, not a flat ring.
+            let sphere = VectorFX3D.createShieldSphere(radius: 35, color: cyan, persistent: true)
+            sphere.zPosition = 3
+            shieldContainer.addChild(sphere)
 
-                // Add traditional shield ring for extra visibility
-                let shield = SKShapeNode(circleOfRadius: 35)
-                shield.fillColor = UIColor(red: 0.0, green: 0.8, blue: 1.0, alpha: 0.15)
-                shield.strokeColor = UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 0.9)
-                shield.lineWidth = 3.5
-                shield.zPosition = 1
-                shieldContainer.addChild(shield)
-                shieldNode = shield
+            // A faint glass skin and rim, for the bloom and for a silhouette that reads
+            // at a glance in a busy screen.
+            let shield = SKShapeNode(circleOfRadius: 35)
+            shield.fillColor = UIColor(red: 0.0, green: 0.7, blue: 1.0, alpha: 0.06)
+            shield.strokeColor = cyan.withAlphaComponent(0.45)
+            shield.lineWidth = 1.2
+            shield.zPosition = 1
+            shieldContainer.addChild(shield)
+            shieldNode = shield
 
-                // Add hexagonal pattern overlay
-                let hexPattern = createHexagonalPattern()
-                hexPattern.zPosition = 2
-                shield.addChild(hexPattern)
+            shield.run(.repeatForever(.sequence([.scale(to: 1.05, duration: 0.6), .scale(to: 1.0, duration: 0.6)])))
+            GlowHelper.addPulsingEnhancedGlow(to: shield, color: cyan, minIntensity: 0.35, maxIntensity: 0.6, duration: 1.2)
 
-                // Pulsing animation
-                let pulse = SKAction.sequence([
-                    SKAction.scale(to: 1.08, duration: 0.6),
-                    SKAction.scale(to: 1.0, duration: 0.6)
-                ])
-                shield.run(SKAction.repeatForever(pulse))
-
-                // Rotation animation for pattern
-                let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 8.0)
-                hexPattern.run(SKAction.repeatForever(rotate))
-
-                // Glow effect
-                GlowHelper.addPulsingEnhancedGlow(
-                    to: shield,
-                    color: UIColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 1.0),
-                    minIntensity: 0.6,
-                    maxIntensity: 1.0,
-                    duration: 1.2
-                )
-            }
+            // Raised with a flash of the bubble expanding through.
+            let flash = VectorFX3D.createShieldSphere(radius: 35, color: .white, persistent: false)
+            flash.zPosition = 4
+            shieldContainer.addChild(flash)
         } else {
             // Remove shield (remove parent container)
             if let container = childNode(withName: "shieldContainer") {
@@ -608,44 +559,6 @@ class Player: SKShapeNode {
             shieldNode?.removeFromParent()
             shieldNode = nil
         }
-    }
-
-    private func createHexagonalPattern() -> SKShapeNode {
-        let pattern = SKShapeNode()
-        let radius: CGFloat = 8
-        let positions: [CGPoint] = [
-            CGPoint(x: 0, y: 0),
-            CGPoint(x: -14, y: 8), CGPoint(x: 14, y: 8),
-            CGPoint(x: -14, y: -8), CGPoint(x: 14, y: -8),
-            CGPoint(x: 0, y: 16), CGPoint(x: 0, y: -16)
-        ]
-
-        for position in positions {
-            let hex = createHexagon(radius: radius)
-            hex.position = position
-            hex.strokeColor = UIColor(red: 0.4, green: 1.0, blue: 1.0, alpha: 0.4)
-            hex.lineWidth = 1.5
-            hex.fillColor = .clear
-            pattern.addChild(hex)
-        }
-
-        return pattern
-    }
-
-    private func createHexagon(radius: CGFloat) -> SKShapeNode {
-        let path = CGMutablePath()
-        for i in 0..<6 {
-            let angle = CGFloat(i) * .pi / 3
-            let x = radius * cos(angle)
-            let y = radius * sin(angle)
-            if i == 0 {
-                path.move(to: CGPoint(x: x, y: y))
-            } else {
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        path.closeSubpath()
-        return SKShapeNode(path: path)
     }
 
     func hasAnyPowerUps() -> Bool {
@@ -792,9 +705,14 @@ class Player: SKShapeNode {
 
                 // Create hexagonal barrier segment
                 let segment = SKShapeNode(circleOfRadius: 8)
-                segment.fillColor = UIColor(red: 0.2, green: 0.9, blue: 0.7, alpha: 0.6)
-                segment.strokeColor = UIColor(red: 0.4, green: 1.0, blue: 0.9, alpha: 1.0)
-                segment.lineWidth = 2.5
+                segment.fillColor = UIColor(red: 0.02, green: 0.12, blue: 0.1, alpha: 0.7)
+                segment.strokeColor = UIColor(red: 0.4, green: 1.0, blue: 0.9, alpha: 0.5)
+                segment.lineWidth = 1
+                // A turning crystal in each, the barrier's light.
+                let crystal = VectorFX3D.createCore(radius: 8, shape: .octahedron,
+                                                    color: UIColor(red: 0.4, green: 1.0, blue: 0.85, alpha: 1.0))
+                crystal.zPosition = 1
+                segment.addChild(crystal)
                 segment.position = CGPoint(
                     x: cos(angle) * radius,
                     y: sin(angle) * radius

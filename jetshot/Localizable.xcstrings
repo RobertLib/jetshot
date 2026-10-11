@@ -1,6 +1,166 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "boss.gyre": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VÍR"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GYRE"
+          }
+        }
+      }
+    },
+    "boss.heart": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EPICENTRUM"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EPICENTER"
+          }
+        }
+      }
+    },
+    "boss.hive": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ÚL"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HIVE"
+          }
+        }
+      }
+    },
+    "boss.lancer": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KOPINÍK"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LANCER"
+          }
+        }
+      }
+    },
+    "boss.mantis": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KUDLANKA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MANTIS"
+          }
+        }
+      }
+    },
+    "boss.maw": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHŘTÁN"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAW"
+          }
+        }
+      }
+    },
+    "boss.serpent": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HAD"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SERPENT"
+          }
+        }
+      }
+    },
+    "boss.tesseract": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TESERAKT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TESSERACT"
+          }
+        }
+      }
+    },
+    "boss.warden": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "STRÁŽCE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WARDEN"
+          }
+        }
+      }
+    },
+    "boss.wraith": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PŘÍZRAK"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WRAITH"
+          }
+        }
+      }
+    },
     "combo.chain": {
       "localizations": {
         "cs": {
@@ -262,13 +422,13 @@
         "cs": {
           "stringUnit": {
             "state": "translated",
-            "value": "🎉 VÍTĚZSTVÍ! 🎉"
+            "value": "VÍTĚZSTVÍ"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "🎉 VICTORY! 🎉"
+            "value": "VICTORY"
           }
         }
       }
@@ -278,13 +438,13 @@
         "cs": {
           "stringUnit": {
             "state": "translated",
-            "value": "Celkové skóre:"
+            "value": "CELKOVÉ SKÓRE"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Total Score:"
+            "value": "TOTAL SCORE"
           }
         }
       }
@@ -333,22 +493,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "LEVEL FAILED"
-          }
-        }
-      }
-    },
-    "hud.boss": {
-      "localizations": {
-        "cs": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "⚡ BOSS ⚡"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "⚡ BOSS ⚡"
           }
         }
       }
@@ -413,6 +557,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "LEVEL %lld"
+          }
+        }
+      }
+    },
+    "hud.overdrive": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PŘEPĚTÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OVERDRIVE"
+          }
+        }
+      }
+    },
+    "hud.overdriveHint": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DRUHÝ PRST NEBO DVOJKLEP"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SECOND FINGER OR DOUBLE TAP"
+          }
+        }
+      }
+    },
+    "hud.overdriveReady": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PŘEPĚTÍ PŘIPRAVENO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OVERDRIVE READY"
+          }
+        }
+      }
+    },
+    "hud.overdriveSaved": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PŘEPĚTÍ TĚ ZACHRÁNILO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OVERDRIVE SAVED YOU"
           }
         }
       }
@@ -497,6 +705,22 @@
         }
       }
     },
+    "levelComplete.grazes": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TĚSNÉ PRŮLETY  %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GRAZES  %lld"
+          }
+        }
+      }
+    },
     "levelComplete.newBest": {
       "localizations": {
         "cs": {
@@ -557,6 +781,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "LEVEL COMPLETE"
+          }
+        }
+      }
+    },
+    "levelSelect.medals": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDAILE  %lld / %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDALS  %lld / %lld"
           }
         }
       }
@@ -657,6 +897,102 @@
         }
       }
     },
+    "medal.chain": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SÉRIE x%lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHAIN x%lld"
+          }
+        }
+      }
+    },
+    "medal.earned": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDAILE ZÍSKÁNA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDAL EARNED"
+          }
+        }
+      }
+    },
+    "medal.goals": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDAILE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDALS"
+          }
+        }
+      }
+    },
+    "medal.hunter": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld %% ZNIČENO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld%% KILLED"
+          }
+        }
+      }
+    },
+    "medal.new": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOVÁ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEW"
+          }
+        }
+      }
+    },
+    "medal.untouched": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BEZ ZÁSAHU"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NO HITS"
+          }
+        }
+      }
+    },
     "menu.credits": {
       "localizations": {
         "cs": {
@@ -737,22 +1073,6 @@
         }
       }
     },
-    "pause.level": {
-      "localizations": {
-        "cs": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Úroveň %lld"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Level %lld"
-          }
-        }
-      }
-    },
     "pause.resume": {
       "localizations": {
         "cs": {
@@ -797,6 +1117,358 @@
           "stringUnit": {
             "state": "translated",
             "value": "PAUSED"
+          }
+        }
+      }
+    },
+    "perk.armor.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Život navíc, hned teď."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One extra life, right now."
+          }
+        }
+      }
+    },
+    "perk.armor.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PANCÍŘ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HULL PLATING"
+          }
+        }
+      }
+    },
+    "perk.arsenal.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hlaveň a raketnice navíc."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One more barrel and one more launcher."
+          }
+        }
+      }
+    },
+    "perk.arsenal.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZBROJNICE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ARMORY"
+          }
+        }
+      }
+    },
+    "perk.capacitor.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Přepětí se nabíjí rychleji."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Overdrive charges faster."
+          }
+        }
+      }
+    },
+    "perk.capacitor.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KONDENZÁTOR"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CAPACITOR"
+          }
+        }
+      }
+    },
+    "perk.chainKeeper.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Série mezi zničeními vydrží déle."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your chain holds longer between kills."
+          }
+        }
+      }
+    },
+    "perk.chainKeeper.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SETRVAČNOST"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MOMENTUM"
+          }
+        }
+      }
+    },
+    "perk.coolant.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zbraně se zahřívají mnohem pomaleji."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your guns heat up far more slowly."
+          }
+        }
+      }
+    },
+    "perk.coolant.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHLADIČ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "COOLANT"
+          }
+        }
+      }
+    },
+    "perk.daredevil.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Širší pásmo těsných průletů a dvojnásobné body za ně."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A wider graze ring, and grazes pay double."
+          }
+        }
+      }
+    },
+    "perk.daredevil.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ODVAHA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DAREDEVIL"
+          }
+        }
+      }
+    },
+    "perk.fireRate.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zbraně střílejí rychleji."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your guns fire faster."
+          }
+        }
+      }
+    },
+    "perk.fireRate.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PALEBNÁ SÍLA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FIREPOWER"
+          }
+        }
+      }
+    },
+    "perk.longOverdrive.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Přepětí trvá o dvě sekundy déle."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Overdrive lasts two seconds longer."
+          }
+        }
+      }
+    },
+    "perk.longOverdrive.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VÝDRŽ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SUSTAIN"
+          }
+        }
+      }
+    },
+    "perk.magnet.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mince k tobě létají až do konce běhu."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coins fly to you for the rest of the run."
+          }
+        }
+      }
+    },
+    "perk.magnet.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAGNETICKÉ JÁDRO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAGNET CORE"
+          }
+        }
+      }
+    },
+    "perk.roundShield.detail": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Každé kolo začneš za štítem."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every round starts behind a shield."
+          }
+        }
+      }
+    },
+    "perk.roundShield.name": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ŠTÍT KOLA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ROUND SHIELD"
+          }
+        }
+      }
+    },
+    "perk.subtitle": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BOSS PORAŽEN · KOLO %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BOSS DOWN · ROUND %lld"
+          }
+        }
+      }
+    },
+    "perk.title": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VYBER VYLEPŠENÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHOOSE AN UPGRADE"
           }
         }
       }
@@ -1053,6 +1725,198 @@
           "stringUnit": {
             "state": "translated",
             "value": "SLOW MOTION"
+          }
+        }
+      }
+    },
+    "powerUp.slowMotionShort": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ZPOMALENÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SLOW MO"
+          }
+        }
+      }
+    },
+    "sector.1": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KONEC VĚKŮ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "END OF AGES"
+          }
+        }
+      }
+    },
+    "sector.10": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EPICENTRUM KOLAPSU"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EPICENTER OF THE COLLAPSE"
+          }
+        }
+      }
+    },
+    "sector.2": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MRTVÉ CIVILIZACE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DEAD CIVILIZATIONS"
+          }
+        }
+      }
+    },
+    "sector.3": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DIMENZIONÁLNÍ TRHLINA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DIMENSIONAL RIFT"
+          }
+        }
+      }
+    },
+    "sector.4": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KVANTOVÉ PROSAKOVÁNÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QUANTUM BLEED"
+          }
+        }
+      }
+    },
+    "sector.5": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GRAVITAČNÍ STUDNY"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GRAVITY WELLS"
+          }
+        }
+      }
+    },
+    "sector.6": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "POSLEDNÍ SVĚTLO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LAST LIGHT"
+          }
+        }
+      }
+    },
+    "sector.7": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SPÁLENÉ RUINY"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BURNING RUINS"
+          }
+        }
+      }
+    },
+    "sector.8": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HLUBOKÁ TRHLINA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "THE DEEP RIFT"
+          }
+        }
+      }
+    },
+    "sector.9": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PŘEKRYV DIMENZÍ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OVERLAPPING DIMENSIONS"
+          }
+        }
+      }
+    },
+    "sector.label": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SEKTOR %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SECTOR %lld"
           }
         }
       }
@@ -1581,6 +2445,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "END OF AGES"
+          }
+        }
+      }
+    },
+    "story.protocolName": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PROTOKOL: VELKÝ TŘESK NULA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PROTOCOL: BIG BANG ZERO"
+          }
+        }
+      }
+    },
+    "story.shipName": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SINGULARITA-7"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SINGULARITY-7"
           }
         }
       }

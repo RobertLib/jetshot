@@ -62,43 +62,72 @@ final class BackgroundParentingTests: XCTestCase {
             return XCTFail("gameplay layer was never built")
         }
 
-        // Everything the starfield helper produces has to be reachable from the layer
-        // that setGameplayPaused(_:) actually pauses.
-        for name in ["starfield", "shootingStars", "meteors", "starfieldFar", "starfieldMid",
-                     "gradientBackground", "galaxy_0", "nebula_0"] {
-            XCTAssertNotNil(content.childNode(withName: name),
-                            "\(name) is not under gameContentNode — it would animate through a pause")
-            XCTAssertNil(scene.childNode(withName: name),
-                         "\(name) was parented straight to the scene")
-        }
+        // The world behind the fight has to be reachable from the layer that
+        // setGameplayPaused(_:) actually pauses.
+        XCTAssertNotNil(content.childNode(withName: GameBackdrop.nodeName),
+                        "the backdrop is not under gameContentNode — it would animate through a pause")
+        XCTAssertNil(scene.childNode(withName: GameBackdrop.nodeName),
+                     "the backdrop was parented straight to the scene")
 
         view.presentScene(MenuScene(size: view.bounds.size))
     }
 
     @MainActor
-    func testResizeRetargetsTheStarfieldToTheNewWidth() {
+    func testResizeRetargetsTheBackdropToTheNewSize() {
         let view = makeView()
         let scene = GameScene(size: view.bounds.size)
         scene.currentLevel = 2
         present(scene, in: view)
 
-        guard let starfield = scene.gameContentNode?.childNode(withName: "starfield") as? SKEmitterNode else {
-            return XCTFail("starfield emitter missing")
+        guard let backdrop = scene.gameContentNode?.childNode(withName: GameBackdrop.nodeName) as? GameBackdrop else {
+            return XCTFail("backdrop missing")
         }
-        let originalRange = starfield.particlePositionRange.dx
+        XCTAssertEqual(backdrop.viewport.size, view.bounds.size)
 
         // A Split View / rotation style resize. didChangeSize is what has to notice.
         scene.size = CGSize(width: 700, height: 500)
 
-        guard let resized = scene.gameContentNode?.childNode(withName: "starfield") as? SKEmitterNode else {
-            return XCTFail("starfield emitter disappeared across the resize")
-        }
-        XCTAssertNotEqual(resized.particlePositionRange.dx, originalRange,
-                          "the starfield kept the old screen width")
-        XCTAssertEqual(resized.particlePositionRange.dx, 700, accuracy: 0.5)
-        XCTAssertEqual(resized.position.y, 510, accuracy: 0.5,
-                       "the spawn line was not moved to the new top edge")
+        XCTAssertEqual(backdrop.viewport.width, 700, accuracy: 0.5, "the backdrop kept the old screen width")
+        XCTAssertEqual(backdrop.viewport.height, 500, accuracy: 0.5, "the backdrop kept the old screen height")
 
         view.presentScene(MenuScene(size: view.bounds.size))
+    }
+
+    /// Fifty levels as ten sectors of five, each its own place on the film's route, and
+    /// endless touring the same route.
+    func testEverySectorOfTheCampaignIsItsOwnWorld() {
+        let looks = stride(from: 1, through: 50, by: 5).map { BackdropLook.forLevel($0) }
+        XCTAssertEqual(looks.count, 10)
+        for (i, look) in looks.enumerated() {
+            for j in (i + 1)..<looks.count {
+                XCTAssertNotEqual(look, looks[j], "sectors \(i + 1) and \(j + 1) share a world")
+            }
+        }
+        for level in 1...50 {
+            let look = BackdropLook.forLevel(level)
+            let first = BackdropLook.forLevel((level - 1) / 5 * 5 + 1)
+            XCTAssertEqual(look.theme, first.theme, "level \(level) is not in its sector's world")
+            XCTAssertEqual(look.variant, first.variant, "level \(level) is not in its sector's colouring")
+        }
+        XCTAssertEqual(BackdropLook.forEndlessRound(1), BackdropLook.forLevel(1))
+    }
+
+    /// Within a sector the world stays, but no two levels fly over the same thing:
+    /// five levels of one unchanging picture is what made the campaign feel samey.
+    func testNoTwoLevelsShareAStage() {
+        let stages = (1...50).map { BackdropStage.of(BackdropLook.forLevel($0)) }
+        for i in 0..<stages.count {
+            for j in (i + 1)..<stages.count where BackdropLook.forLevel(i + 1).theme == BackdropLook.forLevel(j + 1).theme {
+                XCTAssertNotEqual(stages[i], stages[j], "levels \(i + 1) and \(j + 1) look the same")
+            }
+        }
+        for level in 1...50 {
+            let stage = stages[level - 1]
+            // Funnels cut their holes in a flat grid; they are not drawn into a shaped one.
+            if stage.has(.funnels) {
+                XCTAssertEqual(stage.ground, .flat, "level \(level) puts funnels in a shaped ground")
+                XCTAssertFalse(stage.has(.shockwaves), "level \(level) rolls shock fronts through funnels")
+            }
+        }
     }
 }

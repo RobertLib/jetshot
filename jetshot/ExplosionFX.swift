@@ -51,129 +51,190 @@ enum ExplosionFX {
 
     /// A detached, self-removing explosion node centred on its own origin.
     ///
-    /// The layers are deliberately staged in time — white flash, fireball, shockwave,
-    /// then debris and smoke — because a blast that happens all on one frame reads as a
-    /// single popping circle.
+    /// Drawn the way the story films draw light: a pin-sharp white core, an
+    /// anamorphic lens streak through it, a pressure wave laid into the world's floor
+    /// plane, and sparks and shards as lines of light. The layers are staged in time —
+    /// flash, streak, wave, then sparks — because a blast that happens all on one frame
+    /// reads as a single popping circle.
     ///
     /// The caller positions it and parents it (to `GameScene.effectsParent`, never the
     /// scene: the scene keeps ticking while the game is paused).
-    static func burst(size: ExplosionSize, particleMultiplier: CGFloat) -> SKNode {
+    ///
+    /// `tint` is the dead ship's own colour: its bloom, its streak and a ring of its
+    /// sparks, so every enemy type dies in its own colour rather than all in orange.
+    static func burst(size: ExplosionSize, particleMultiplier: CGFloat, tint: UIColor? = nil) -> SKNode {
         let container = SKNode()
         container.zPosition = 500
 
-        let sizeMultiplier = sizeMultiplier(for: size)
+        let m = sizeMultiplier(for: size)
 
         let hot = UIColor(red: 1.0, green: 0.96, blue: 0.82, alpha: 1.0)
         let fire = UIColor(red: 1.0, green: 0.52, blue: 0.12, alpha: 1.0)
         let ember = UIColor(red: 1.0, green: 0.78, blue: 0.22, alpha: 1.0)
+        let accent = tint ?? fire
 
         // 1. White-hot core: brightest for only a couple of frames.
-        let core = NeonFX.radialGlow(radius: 16 * sizeMultiplier, color: hot)
-        core.zPosition = 4
+        let core = LightSprite.star(size: 70 * m, color: hot)
+        core.zPosition = 6
         container.addChild(core)
-        let coreGrow = SKAction.scale(to: 2.1, duration: 0.13)
+        let coreGrow = SKAction.scale(to: 1.8, duration: 0.16)
         coreGrow.timingMode = .easeOut
-        core.run(.group([coreGrow, .fadeOut(withDuration: 0.13)]))
+        core.run(.group([coreGrow, .fadeOut(withDuration: 0.16)]))
 
-        // 2. Fireball: bigger, slower, cooling as it expands.
-        let fireball = NeonFX.radialGlow(radius: 22 * sizeMultiplier, color: fire)
-        fireball.zPosition = 3
-        fireball.alpha = 0.95
+        // 2. A bloom in the ship's colour over a short-lived fireball.
+        let bloom = NeonFX.radialGlow(radius: 26 * m, color: accent)
+        bloom.zPosition = 3
+        bloom.alpha = 0.75
+        container.addChild(bloom)
+        let bloomGrow = SKAction.scale(to: 2.3, duration: 0.42)
+        bloomGrow.timingMode = .easeOut
+        let bloomFade = SKAction.fadeOut(withDuration: 0.42)
+        bloomFade.timingMode = .easeIn
+        bloom.run(.group([bloomGrow, bloomFade]))
+
+        let fireball = NeonFX.radialGlow(radius: 15 * m, color: fire)
+        fireball.zPosition = 4
         container.addChild(fireball)
-        let ballGrow = SKAction.scale(to: 2.6, duration: 0.34)
-        ballGrow.timingMode = .easeOut
-        let ballFade = SKAction.fadeOut(withDuration: 0.34)
-        ballFade.timingMode = .easeIn
-        fireball.run(.group([ballGrow, ballFade]))
+        fireball.run(.group([.scale(to: 2.2, duration: 0.26), .fadeOut(withDuration: 0.26)]))
 
-        // 3. Shockwave ring, thinning as it travels outward.
-        container.addChild(NeonFX.shockwave(
-            at: .zero,
-            startRadius: 10 * sizeMultiplier,
-            endRadius: 62 * sizeMultiplier,
-            color: ember,
-            lineWidth: 2.5 + sizeMultiplier,
-            duration: 0.42
-        ))
-
-        // A second, faster wave on the heavy hits reads as overpressure.
-        if size == .large || size == .huge {
-            container.addChild(NeonFX.shockwave(
-                at: .zero,
-                startRadius: 6 * sizeMultiplier,
-                endRadius: 96 * sizeMultiplier,
-                color: hot.withAlphaComponent(0.7),
-                lineWidth: 2,
-                duration: 0.3
-            ))
+        // 3. The lens streak: the films' signature on every bright source.
+        let streakColor = StoryPalette.mix(accent, hot, 0.45)
+        for (length, thickness, alpha) in [(190 * m, 7 * m, 0.9), (110 * m, 2.5 * m, 1.0)] as [(CGFloat, CGFloat, CGFloat)] {
+            let flare = LightSprite.flare(length: length, thickness: thickness,
+                                          color: thickness < 3 * m ? .white : streakColor)
+            flare.zPosition = 7
+            flare.xScale = 0.2
+            flare.alpha = alpha
+            container.addChild(flare)
+            let open = SKAction.scaleX(to: 1, duration: 0.1)
+            open.timingMode = .easeOut
+            flare.run(.sequence([open, .group([.scaleX(to: 1.3, duration: 0.3), .fadeOut(withDuration: 0.3)])]))
         }
 
-        // 4. Sparks: fast, thin, drag to a stop.
-        let sparkCount = Int(CGFloat(Int(11 * sizeMultiplier)) * particleMultiplier)
+        // 4. The pressure wave, laid into the floor plane of the world behind.
+        container.addChild(LightRing.wave(from: 8 * m, to: 72 * m, width: 1.6 + 0.6 * m, color: ember,
+                                          duration: 0.5, squash: 0.42))
+        // A second, faster wave in the screen plane on the heavy hits reads as overpressure.
+        if size == .large || size == .huge {
+            container.addChild(LightRing.wave(from: 6 * m, to: 96 * m, width: 1.4, color: hot,
+                                              duration: 0.32, segments: 32))
+        }
+
+        // 5. Sparks: fast, thin, drag to a stop.
+        let sparkCount = Int(CGFloat(Int(11 * m)) * particleMultiplier)
         container.addChild(NeonFX.sparks(
             at: .zero,
             count: sparkCount,
             color: ember,
-            speed: 62 * sizeMultiplier,
-            length: 8 * min(sizeMultiplier, 1.4),
-            lifetime: 0.34
+            speed: 66 * m,
+            length: 9 * min(m, 1.4),
+            lifetime: 0.36
         ))
 
-        // 5. Debris chunks that tumble as they fly.
-        let debrisCount = Int(CGFloat(Int(5 * sizeMultiplier)) * particleMultiplier)
-        for i in 0..<max(0, debrisCount) {
-            let angle = CGFloat(i) * .pi * 2 / CGFloat(max(1, debrisCount)) + CGFloat.random(in: -0.4...0.4)
-            let chunkSize = CGFloat.random(in: 2...4) * min(sizeMultiplier, 1.5)
-            let chunk = SKShapeNode(rectOf: CGSize(width: chunkSize, height: chunkSize * 1.4), cornerRadius: 0.6)
-            chunk.fillColor = UIColor(red: 0.34, green: 0.25, blue: 0.22, alpha: 1.0)
-            chunk.strokeColor = ember.withAlphaComponent(0.85)
-            chunk.lineWidth = 0.8
-            chunk.zPosition = 5
-            container.addChild(chunk)
-
-            let distance = CGFloat.random(in: 30...58) * sizeMultiplier
-            let travel = SKAction.moveBy(
-                x: cos(angle) * distance,
-                y: sin(angle) * distance,
-                duration: 0.55
-            )
-            travel.timingMode = .easeOut
-            let tumble = SKAction.rotate(byAngle: CGFloat.random(in: -6...6), duration: 0.55)
-            chunk.run(.group([travel, tumble, .fadeOut(withDuration: 0.55)]))
+        // 5b. The ship's own colour, thrown wider and faster than the fire.
+        if let tint = tint {
+            container.addChild(NeonFX.sparks(
+                at: .zero,
+                count: Int(CGFloat(Int(9 * m)) * particleMultiplier),
+                color: tint,
+                speed: 100 * m,
+                length: 11 * min(m, 1.4),
+                lifetime: 0.42
+            ))
         }
 
-        // 6. Smoke: lingers after the light is gone, so the blast leaves a mark.
-        let smokeCount = max(1, Int(3 * particleMultiplier))
-        for _ in 0..<smokeCount {
-            let puff = NeonFX.radialGlow(
-                radius: CGFloat.random(in: 13...20) * sizeMultiplier,
-                color: UIColor(red: 0.30, green: 0.26, blue: 0.30, alpha: 1.0),
-                softness: 0.75,
-                additive: false
-            )
-            puff.alpha = 0.42
-            puff.zPosition = 1
-            puff.position = CGPoint(
-                x: CGFloat.random(in: -10...10) * sizeMultiplier,
-                y: CGFloat.random(in: -10...10) * sizeMultiplier
-            )
-            container.addChild(puff)
+        // 6. Shards: short lines of light tumbling outwards.
+        let shardCount = Int(CGFloat(Int(5 * m)) * particleMultiplier)
+        for i in 0..<max(0, shardCount) {
+            let angle = CGFloat(i) * .pi * 2 / CGFloat(max(1, shardCount)) + CGFloat.random(in: -0.4...0.4)
+            let length = CGFloat.random(in: 5...10) * min(m, 1.5)
+            let shard = LightSprite.tube(from: CGPoint(x: -length / 2, y: 0), to: CGPoint(x: length / 2, y: 0),
+                                         width: 1.2, color: i % 2 == 0 ? accent : hot)
+            shard.zPosition = 5
+            shard.zRotation = CGFloat.random(in: 0...(.pi))
+            container.addChild(shard)
 
-            let drift = SKAction.moveBy(
-                x: CGFloat.random(in: -14...14) * sizeMultiplier,
-                y: CGFloat.random(in: 4...18) * sizeMultiplier,
-                duration: 0.85
-            )
-            let swell = SKAction.scale(to: 1.9, duration: 0.85)
-            puff.run(.group([drift, swell, .fadeOut(withDuration: 0.85)]))
+            let distance = CGFloat.random(in: 30...62) * m
+            let travel = SKAction.moveBy(x: cos(angle) * distance, y: sin(angle) * distance, duration: 0.6)
+            travel.timingMode = .easeOut
+            let tumble = SKAction.rotate(byAngle: CGFloat.random(in: -7...7), duration: 0.6)
+            shard.run(.group([travel, tumble, .fadeOut(withDuration: 0.6)]))
         }
 
         // Remove container after animation
         container.run(.sequence([
-            .wait(forDuration: 1.1),
+            .wait(forDuration: 1.0),
             .removeFromParent()
         ]))
 
+        return container
+    }
+
+    /// The dead ship's own outline coming apart: every edge of its hull flung
+    /// outwards and spinning, the way the opening film's entities die.
+    ///
+    /// - Parameters:
+    ///   - path: The hull, in the ship's own coordinates.
+    ///   - rotation, scale: The ship's, so the pieces start exactly where it was.
+    static func shatter(path: CGPath, color: UIColor, at position: CGPoint,
+                        rotation: CGFloat = 0, scale: CGFloat = 1) -> SKNode {
+        var segments: [(CGPoint, CGPoint)] = []
+        var start = CGPoint.zero
+        var current = CGPoint.zero
+        path.applyWithBlock { element in
+            let e = element.pointee
+            switch e.type {
+            case .moveToPoint:
+                current = e.points[0]
+                start = current
+            case .addLineToPoint:
+                segments.append((current, e.points[0]))
+                current = e.points[0]
+            case .addQuadCurveToPoint:
+                segments.append((current, e.points[1]))
+                current = e.points[1]
+            case .addCurveToPoint:
+                segments.append((current, e.points[2]))
+                current = e.points[2]
+            case .closeSubpath:
+                if current != start { segments.append((current, start)) }
+                current = start
+            @unknown default:
+                break
+            }
+        }
+        // Long round outlines would throw a confetti of tiny pieces; keep it legible.
+        if segments.count > 16 {
+            let step = Int((Double(segments.count) / 16).rounded(.up))
+            segments = stride(from: 0, to: segments.count, by: step).map { segments[$0] }
+        }
+
+        let container = SKNode()
+        container.position = position
+        container.zRotation = rotation
+        container.setScale(scale)
+        container.zPosition = 499
+
+        for (a, b) in segments {
+            let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+            let piece = LightSprite.tube(from: CGPoint(x: a.x - mid.x, y: a.y - mid.y),
+                                         to: CGPoint(x: b.x - mid.x, y: b.y - mid.y), width: 1.7, color: color)
+            piece.position = mid
+            container.addChild(piece)
+
+            let length = max(0.001, (mid.x * mid.x + mid.y * mid.y).squareRoot())
+            let out = length > 0.5
+                ? CGVector(dx: mid.x / length, dy: mid.y / length)
+                : CGVector(dx: CGFloat.random(in: -1...1), dy: CGFloat.random(in: -1...1))
+            let distance = CGFloat.random(in: 16...40)
+            let fly = SKAction.moveBy(x: out.dx * distance, y: out.dy * distance, duration: 0.55)
+            fly.timingMode = .easeOut
+            let spin = SKAction.rotate(byAngle: CGFloat.random(in: -4...4), duration: 0.55)
+            let fade = SKAction.fadeOut(withDuration: 0.55)
+            fade.timingMode = .easeIn
+            piece.run(.group([fly, spin, fade, .scale(to: 0.6, duration: 0.55)]))
+        }
+        container.run(.sequence([.wait(forDuration: 0.6), .removeFromParent()]))
         return container
     }
 

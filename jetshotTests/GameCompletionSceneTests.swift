@@ -60,9 +60,10 @@ final class GameCompletionSceneTests: XCTestCase {
         present(scene, in: view)
 
         // The total was previously computed, passed in, and then thrown away unrendered.
+        // It is printed grouped the way the locale groups it, as every score is.
         var found = false
         scene.enumerateChildNodes(withName: "//*") { node, stop in
-            if let label = node as? SKLabelNode, label.text?.contains("\(total)") == true {
+            if let label = node as? SKLabelNode, label.text?.contains(total.formatted()) == true {
                 found = true
                 stop.pointee = true
             }
