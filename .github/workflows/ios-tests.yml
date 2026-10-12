@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -38,17 +38,47 @@ jobs:
           xcrun simctl list devices available
           xcodebuild -showdestinations -project jetshot.xcodeproj -scheme jetshot
 
-      - name: Build application and run tests
+      - name: Build application and tests
+        timeout-minutes: 10
         run: |
-          xcodebuild test \
+          # Keep the app's iCloud entitlements with a local simulator signature.
+          xcodebuild build-for-testing \
             -project jetshot.xcodeproj \
             -scheme jetshot \
             -configuration Debug \
             -destination "$DESTINATION" \
             -destination-timeout 120 \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY=- \
+            | tee build.log
+
+      - name: Verify iCloud storage tests
+        timeout-minutes: 5
+        run: |
+          # Catch a missing KVS entitlement before the slower gameplay tests.
+          xcodebuild test-without-building \
+            -project jetshot.xcodeproj \
+            -scheme jetshot \
+            -configuration Debug \
+            -destination "$DESTINATION" \
+            -derivedDataPath DerivedData \
+            -parallel-testing-enabled NO \
+            -only-testing:jetshotTests/ProgressEpochTests \
+            -resultBundlePath ProgressResults.xcresult \
+            | tee progress-tests.log
+
+      - name: Run complete XCTest suite
+        timeout-minutes: 15
+        run: |
+          xcodebuild test-without-building \
+            -project jetshot.xcodeproj \
+            -scheme jetshot \
+            -configuration Debug \
+            -destination "$DESTINATION" \
+            -derivedDataPath DerivedData \
             -parallel-testing-enabled NO \
             -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild.log
 
       - name: Upload test results and build log
@@ -57,7 +87,10 @@ jobs:
         with:
           name: ios-test-results
           path: |
+            ProgressResults.xcresult
             TestResults.xcresult
+            build.log
+            progress-tests.log
             xcodebuild.log
           if-no-files-found: warn
           retention-days: 14
