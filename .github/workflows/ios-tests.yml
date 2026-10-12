@@ -1,0 +1,63 @@
+name: iOS build and tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and run XCTest
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Match the Xcode version used to create the test target.
+      # https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DESTINATION: platform=iOS Simulator,name=iPhone 17,OS=26.5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Show Xcode and available simulators
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+          xcrun simctl list devices available
+          xcodebuild -showdestinations -project jetshot.xcodeproj -scheme jetshot
+
+      - name: Build application and run tests
+        run: |
+          xcodebuild test \
+            -project jetshot.xcodeproj \
+            -scheme jetshot \
+            -configuration Debug \
+            -destination "$DESTINATION" \
+            -destination-timeout 120 \
+            -parallel-testing-enabled NO \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee xcodebuild.log
+
+      - name: Upload test results and build log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-test-results
+          path: |
+            TestResults.xcresult
+            xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 14
