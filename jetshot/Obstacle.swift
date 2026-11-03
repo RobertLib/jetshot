@@ -190,29 +190,13 @@ class Obstacle: SKNode {
 
         case .spinner:
             // Create enhanced cross shape with 4 arms
-            let armWidth = size.width
-            let armLength = size.height / 2
-
             let path = CGMutablePath()
 
             // Create 4 arms in cross formation
             for i in 0..<4 {
                 let angle = CGFloat(i) * .pi / 2
-                let armPath = CGMutablePath()
-
-                // Arm shape (wider at base, narrow at tip)
-                armPath.move(to: CGPoint(x: -armWidth / 2, y: 0))
-                armPath.addLine(to: CGPoint(x: -armWidth / 3, y: armLength * 0.8))
-                armPath.addLine(to: CGPoint(x: 0, y: armLength))
-                armPath.addLine(to: CGPoint(x: armWidth / 3, y: armLength * 0.8))
-                armPath.addLine(to: CGPoint(x: armWidth / 2, y: 0))
-                armPath.closeSubpath()
-
-                // Rotate arm to correct angle
-                var transform = CGAffineTransform(rotationAngle: angle)
-                if let transformedPath = armPath.copy(using: &transform) {
-                    path.addPath(transformedPath)
-                }
+                path.addLines(between: Self.spinnerArm(size: size), transform: CGAffineTransform(rotationAngle: angle))
+                path.closeSubpath()
             }
 
             bodyNode = SKShapeNode(path: path)
@@ -221,7 +205,7 @@ class Obstacle: SKNode {
             bodyNode.lineWidth = 3.5
 
             // Add center core
-            let core = SKShapeNode(circleOfRadius: 15)
+            let core = SKShapeNode(circleOfRadius: Self.spinnerCoreRadius)
             core.fillColor = type.color.withAlphaComponent(0.9)
             core.strokeColor = type.strokeColor
             core.lineWidth = 3
@@ -391,31 +375,13 @@ class Obstacle: SKNode {
             bodyNode.addChild(hub)
 
         case .waveWall:
-            // Wall with wavy edges
+            // Wall with wavy edges: up the left edge, back down the right.
             let path = CGMutablePath()
-            let waveCount = 6
-            let height = size.height
             let width = size.width
-            let amplitude: CGFloat = 6
+            let samples = Self.waveWallSamples(size: size)
 
-            path.move(to: CGPoint(x: -width/2, y: -height/2))
-
-            // Left wavy edge
-            for i in 0...waveCount * 3 {
-                let t = CGFloat(i) / CGFloat(waveCount * 3)
-                let y = -height/2 + height * t
-                let wave = sin(t * CGFloat.pi * CGFloat(waveCount)) * amplitude
-                path.addLine(to: CGPoint(x: -width/2 + wave, y: y))
-            }
-
-            // Right wavy edge (reverse)
-            for i in stride(from: waveCount * 3, through: 0, by: -1) {
-                let t = CGFloat(i) / CGFloat(waveCount * 3)
-                let y = -height/2 + height * t
-                let wave = sin(t * CGFloat.pi * CGFloat(waveCount)) * amplitude
-                path.addLine(to: CGPoint(x: width/2 + wave, y: y))
-            }
-
+            path.addLines(between: samples.map { CGPoint(x: -width / 2 + $0.shift, y: $0.y) }
+                                  + samples.reversed().map { CGPoint(x: width / 2 + $0.shift, y: $0.y) })
             path.closeSubpath()
 
             bodyNode = SKShapeNode(path: path)
@@ -584,14 +550,14 @@ class Obstacle: SKNode {
         let size = type.size
 
         switch type {
-        case .wall, .horizontalWall, .movingWall, .rotatingBar, .zigzagWall, .waveWall:
+        case .wall, .horizontalWall, .movingWall, .rotatingBar, .zigzagWall:
             physicsBody = SKPhysicsBody(rectangleOf: size)
 
+        case .waveWall:
+            physicsBody = SKPhysicsBody(bodies: Self.waveWallBodies(size: size))
+
         case .spinner:
-            // Cross shape - use two rectangles
-            let verticalBody = SKPhysicsBody(rectangleOf: size)
-            let horizontalBody = SKPhysicsBody(rectangleOf: CGSize(width: size.height, height: size.width))
-            physicsBody = SKPhysicsBody(bodies: [verticalBody, horizontalBody])
+            physicsBody = SKPhysicsBody(bodies: Self.spinnerBodies(size: size))
 
         case .spiralBlade:
             physicsBody = SKPhysicsBody(bodies: Self.spiralBladeBodies())
@@ -647,6 +613,65 @@ class Obstacle: SKNode {
     /// the hitbox so the two cannot drift apart.
     private static let ringInnerFraction: CGFloat = 0.6
     private static let spiralArmCount = 3
+    private static let spinnerCoreRadius: CGFloat = 15
+
+    /// One spinner arm pointing along +y, wide at the root and tapering to a point.
+    /// Shared by the drawing and the hitbox, like the ring's hole.
+    private static func spinnerArm(size: CGSize) -> [CGPoint] {
+        let width = size.width, length = size.height / 2
+        return [CGPoint(x: -width / 2, y: 0), CGPoint(x: -width / 3, y: length * 0.8), CGPoint(x: 0, y: length),
+                CGPoint(x: width / 3, y: length * 0.8), CGPoint(x: width / 2, y: 0)]
+    }
+
+    /// The spinner as drawn: its four tapering arms and the round core over their roots.
+    ///
+    /// It used to be a "+" of two full-width rectangles: solid to square corners 7.5 pt
+    /// either side of every pointed tip, and not solid on the parts of the core between
+    /// the arms. Each arm is convex, so it is one polygon; the spinner never scales, so
+    /// the core can be a true circle.
+    private static func spinnerBodies(size: CGSize) -> [SKPhysicsBody] {
+        let arm = spinnerArm(size: size)
+        var bodies = [SKPhysicsBody(circleOfRadius: spinnerCoreRadius)]
+        for i in 0..<4 {
+            let path = CGMutablePath()
+            path.addLines(between: arm, transform: CGAffineTransform(rotationAngle: CGFloat(i) * .pi / 2))
+            path.closeSubpath()
+            bodies.append(SKPhysicsBody(polygonFrom: path))
+        }
+        return bodies
+    }
+
+    /// Points up the wave wall, bottom to top, each with how far both edges are shifted
+    /// sideways there: six half-waves of 6 pt, three samples to each. Shared by the
+    /// drawing and the hitbox.
+    private static func waveWallSamples(size: CGSize) -> [(y: CGFloat, shift: CGFloat)] {
+        let waveCount = 6
+        let steps = waveCount * 3
+        let amplitude: CGFloat = 6
+        return (0...steps).map { i in
+            let t = CGFloat(i) / CGFloat(steps)
+            return (y: -size.height / 2 + size.height * t, shift: sin(t * .pi * CGFloat(waveCount)) * amplitude)
+        }
+    }
+
+    /// The wave wall as drawn: a band of constant width whose edges both weave ±6 pt.
+    ///
+    /// It used to be the plain 25 pt rectangle, so wherever the band leans one way the
+    /// hitbox stuck 5 pt out past the edge it leans away from, and the edge it leans
+    /// into could be hit through without effect. Both edges shift by the same amount at
+    /// each sample, so the strip between two samples is a parallelogram — convex, as
+    /// each piece of a compound body has to be.
+    private static func waveWallBodies(size: CGSize) -> [SKPhysicsBody] {
+        let samples = waveWallSamples(size: size)
+        let half = size.width / 2
+        return zip(samples, samples.dropFirst()).map { low, high in
+            let path = CGMutablePath()
+            path.addLines(between: [CGPoint(x: -half + low.shift, y: low.y), CGPoint(x: half + low.shift, y: low.y),
+                                    CGPoint(x: half + high.shift, y: high.y), CGPoint(x: -half + high.shift, y: high.y)])
+            path.closeSubpath()
+            return SKPhysicsBody(polygonFrom: path)
+        }
+    }
 
     /// The ring as drawn: a band of segments around an open centre.
     ///
@@ -784,19 +809,40 @@ class Obstacle: SKNode {
     }
 
     private func startHorizontalMovement() {
-        // Move left-right in a wave pattern
-        let moveDistance: CGFloat = 100
-        let moveDuration: TimeInterval = 2.0
+        // Move left-right, 100 pt end to end, 2 s a sweep.
+        startSwaying(reach: 50, sweepDuration: 2.0, key: "horizontalMove")
+    }
 
-        let moveRight = SKAction.moveBy(x: moveDistance, y: 0, duration: moveDuration)
-        let moveLeft = SKAction.moveBy(x: -moveDistance, y: 0, duration: moveDuration)
+    /// Sways the obstacle from side to side, up to `reach` either way of where it
+    /// spawned, taking `sweepDuration` from one end to the other.
+    ///
+    /// The sway used to be a sweep right and back, so it ran from the spawn point to
+    /// a full sweep right of it: on the right of the screen part of every sweep was
+    /// spent off it, and the strip to the left of where it spawned was never covered.
+    /// It opens with a half sweep out to one end, so it then swings evenly about the
+    /// spawn point. The reach is trimmed for a wall spawned near an edge, so the whole
+    /// drawn wall stays on screen at both ends of the sway.
+    private func startSwaying(reach: CGFloat, sweepDuration: TimeInterval, key: String) {
+        let halfWidth = (bodyNode.path?.boundingBoxOfPath.width ?? type.size.width) / 2
+        let reach = Self.swayReach(reach, halfWidth: halfWidth, at: position.x, sceneWidth: sceneSize.width)
+        guard reach > 0 else { return }
 
-        moveRight.timingMode = .easeInEaseOut
-        moveLeft.timingMode = .easeInEaseOut
+        // Eased out only: it leaves the spawn point at speed, as a sweep passes through
+        // its middle, and slows into the end like every sweep after it.
+        let open = SKAction.moveBy(x: reach, y: 0, duration: sweepDuration / 2)
+        open.timingMode = .easeOut
+        let sweepLeft = SKAction.moveBy(x: -2 * reach, y: 0, duration: sweepDuration)
+        sweepLeft.timingMode = .easeInEaseOut
+        let sweepRight = SKAction.moveBy(x: 2 * reach, y: 0, duration: sweepDuration)
+        sweepRight.timingMode = .easeInEaseOut
 
-        let sequence = SKAction.sequence([moveRight, moveLeft])
-        let forever = SKAction.repeatForever(sequence)
-        run(forever, withKey: "horizontalMove")
+        run(.sequence([open, .repeatForever(.sequence([sweepLeft, sweepRight]))]), withKey: key)
+    }
+
+    /// How far a wall `halfWidth` either side of its centre may sway from `x` without
+    /// any of it leaving a screen `sceneWidth` wide: `reach`, or less near an edge.
+    nonisolated static func swayReach(_ reach: CGFloat, halfWidth: CGFloat, at x: CGFloat, sceneWidth: CGFloat) -> CGFloat {
+        return max(0, min(reach, x - halfWidth, sceneWidth - halfWidth - x))
     }
 
     private func startPulsating() {
@@ -833,19 +879,8 @@ class Obstacle: SKNode {
     }
 
     private func startWaveMovement() {
-        // Smooth sine wave movement
-        let moveDistance: CGFloat = 120
-        let moveDuration: TimeInterval = 2.5
-
-        let moveRight = SKAction.moveBy(x: moveDistance, y: 0, duration: moveDuration)
-        let moveLeft = SKAction.moveBy(x: -moveDistance, y: 0, duration: moveDuration)
-
-        moveRight.timingMode = .easeInEaseOut
-        moveLeft.timingMode = .easeInEaseOut
-
-        let sequence = SKAction.sequence([moveRight, moveLeft])
-        let forever = SKAction.repeatForever(sequence)
-        run(forever, withKey: "waveMove")
+        // Smooth sine wave movement, 120 pt end to end, 2.5 s a sweep.
+        startSwaying(reach: 60, sweepDuration: 2.5, key: "waveMove")
     }
 
     // Method to destroy a single block in destructible wall

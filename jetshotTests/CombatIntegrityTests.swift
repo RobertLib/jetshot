@@ -208,6 +208,55 @@ final class CombatIntegrityTests: XCTestCase {
         XCTAssertNotNil(extraLife.physicsBody, "a dead ship collected a power-up")
     }
 
+    /// Everything a ship fights with goes down with it. Rounds fired a moment before the
+    /// last hit used to fly on and land through the whole death sequence: kills paid onto
+    /// the game-over score, and a boss on its last hit was "defeated" by a dead ship —
+    /// its celebration even brought the wreck back into view — before GAME OVER arrived.
+    func testADestroyedShipsWeaponsNeitherKillNorPay() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        harness.scene.bossManager.spawnBoss(level: 1) {}
+        XCTAssertTrue(spin(harness, until: { harness.scene.bossManager.isBossActive() }),
+                      "the boss never finished its entrance")
+        guard let boss = harness.scene.bossManager.getBoss() else { return XCTFail("no boss") }
+        _ = harness.scene.bossManager.bossTakeDamage(amount: boss.maxHealthPoints - 1)
+
+        // A round already in the air when the ship goes down, parked clear of everything.
+        let inFlight = harness.fireBullets(onto: CGPoint(x: 20, y: harness.scene.size.height * 0.5))
+
+        let player = harness.player
+        var hits = 0
+        while harness.scene.currentLives > 0 && hits < 10 {
+            harness.scene.debugSetInvulnerable(false)
+            let livesBefore = harness.scene.currentLives
+            harness.addEnemyBullet(at: player.position)
+            spin(harness, until: { harness.scene.currentLives < livesBefore }, timeout: 2)
+            hits += 1
+        }
+        XCTAssertEqual(harness.scene.currentLives, 0, "the ship never ran out of lives")
+        XCTAssertTrue(inFlight.allSatisfy { $0.physicsBody == nil }, "a round in flight stayed armed")
+
+        let enemy = harness.addEnemy(.fast, at: CGPoint(x: 100, y: harness.scene.size.height * 0.55))
+        enemy.health = 1
+        let score = harness.scene.currentScore
+
+        // Rounds still reaching the boss and an enemy, and the barrier — re-armed on the
+        // wreck, since a hit takes a barrier before a life — sweeping through another.
+        harness.fireBullets(onto: boss.position)
+        harness.fireBullets(onto: enemy.position)
+        harness.scene.debugActivatePowerUp(.barrier)
+        let swept = harness.addEnemy(.fast, at: player.position)
+        swept.health = 1
+        harness.spin(0.3)
+
+        XCTAssertTrue(harness.scene.bossManager.isBossActive(), "a destroyed ship's round defeated the boss")
+        XCTAssertNotNil(enemy.parent, "a destroyed ship's round killed an enemy")
+        XCTAssertNotNil(swept.parent, "a destroyed ship's barrier killed an enemy")
+        XCTAssertEqual(harness.scene.currentScore, score, "a destroyed ship was paid for a kill")
+    }
+
     // MARK: - After the boss
 
     func testNothingHurtsTheShipOnceTheBossIsDead() {

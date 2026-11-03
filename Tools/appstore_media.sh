@@ -153,7 +153,7 @@ settle_after_boot() { sleep 45; }
 # good enough to survive level 43 unaided for twelve seconds — and `-autopilot` is
 # on because a ship that is not being dragged does not fire, so a still frame of an
 # idle game has no bullets in it at all. `-cool` rides along with it: the bot holds
-# the trigger down for the whole run, and since 1.0.8's faster guns that locks them
+# the trigger down for the whole run, and at the guns' current rate that locks them
 # out for a second and a half every nine — the first try at this list caught level
 # 34 in exactly that gap, a full arsenal and not one bullet on screen.
 #
@@ -164,7 +164,7 @@ settle_after_boot() { sleep 45; }
 # likes — on the first run of this list, in four of the eight boss candidates.
 #
 # The boss settles are short because the guns are not what they were. Eight barrels
-# at 1.0.8's cadence take level 40's boss from 0.3 to nothing in about seven seconds,
+# at the current cadence take level 40's boss from 0.3 to nothing in about seven seconds,
 # and the 15 s this shot used to wait photographed an empty sky.
 #
 # A settle written `a/b` is `a` seconds on the iPhone and `b` on the iPad, taken as

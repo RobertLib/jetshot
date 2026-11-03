@@ -278,7 +278,8 @@ enum EnemyType {
     /// the type's movement routine outright, so beyond the formation types this is only
     /// the plain line fighters, whose routine is a straight descent with nothing lost —
     /// the same set the campaign's own formation waves use. A turret in a formation never
-    /// docks, a bouncer never bounces and a ghost's phasing is cleared by the attack run.
+    /// docks and a bouncer never bounces. A ghost keeps phasing: the attack run clears
+    /// every action, its phasing loop included, and then restarts that loop.
     var canFlyInFormation: Bool {
         switch self {
         case .basic, .fast, .heavy: return true
@@ -302,7 +303,16 @@ class Enemy: SKShapeNode {
     }()
     private var movementDuration: TimeInterval = 4.0 // Will be set in startMovement
     let enemyType: EnemyType
-    private var sceneSize: CGSize
+    /// The scene size at spawn. Only a fallback for `sceneSize`, for an enemy that is not
+    /// in a scene yet.
+    private let spawnSceneSize: CGSize
+
+    /// The playfield's size right now. It used to be the size stored at spawn, so after a
+    /// mid-level resize a bouncer kept bouncing off the old edges and a teleporter could
+    /// jump past the edge of a narrower screen.
+    private var sceneSize: CGSize {
+        return gameScene?.size ?? scene?.size ?? spawnSceneSize
+    }
 
     // Health system
     var health: Int
@@ -364,9 +374,22 @@ class Enemy: SKShapeNode {
     // Freeze properties
     private weak var freezeOverlay: SKShapeNode?
 
+    /// Keys of every action that animates the hull's own alpha: the ghost's phasing, the
+    /// teleporter's blink, a docked turret's glow and the mirror's shimmer. A freeze cuts
+    /// them all; see `freeze(duration:)`.
+    private static let alphaLoopKeys = ["ghostFade", "teleportBlink", "dockGlow", "mirrorShimmer"]
+
+    /// Whether a freeze bomb holds this enemy. A freeze never thaws — it ends in the
+    /// detonation, which removes the overlay — so the overlay is the whole state.
+    ///
+    /// The freeze itself is `isPaused` on this node, and SpriteKit clears `isPaused` on
+    /// every descendant of the scene when the app comes back to the foreground (see
+    /// `GameScene.holdRequestedGameplayPause()`). GameScene reads this to put it back.
+    var isFrozen: Bool { freezeOverlay != nil }
+
     init(sceneSize: CGSize, scene: SKScene, type: EnemyType = .basic) {
         self.enemyType = type
-        self.sceneSize = sceneSize
+        self.spawnSceneSize = sceneSize
         self.shootInterval = TimeInterval.random(in: type.shootIntervalRange)
         // Accept SKScene but store a weak reference to GameScene when possible
         self.gameScene = scene as? GameScene
@@ -457,6 +480,15 @@ class Enemy: SKShapeNode {
     /// rendering glitch. Armour that takes a round should momentarily go white
     /// hot, which is the convention players already understand.
     func flashDamage() {
+        // Not on a frozen enemy. A freeze pauses this node and everything parented to it,
+        // so the flash went up and never faded: a solid white silhouette for the rest of
+        // the freeze, in place of the ice. The squash could not play either. The ice
+        // already marks the enemy and GameScene still sparks the hit, so only the health
+        // readout changes.
+        guard !isFrozen else {
+            updateHealthBar()
+            return
+        }
         guard let path = self.path else { return }
 
         let overlay: SKShapeNode
@@ -1827,10 +1859,14 @@ class Enemy: SKShapeNode {
     // Move along a bezier curve path (for formation attacks)
     func moveAlongPath(_ path: [CGPoint], duration: TimeInterval, completion: @escaping () -> Void) {
         guard path.count >= 2 else {
-            if !hasCompletedMovement {
-                hasCompletedMovement = true
-                completion()
-            }
+            // Nothing to fly, so the run ends before it starts, and it has to end the way
+            // every run does: through `despawn()`. This used to latch `hasCompletedMovement`
+            // and call `completion()` and nothing else. Every removal step checks that flag
+            // first, so the enemy stayed where it was, still registered and still firing,
+            // and held up the level's completion for good.
+            guard !hasCompletedMovement else { return }
+            despawn()
+            completion()
             return
         }
 
@@ -1887,6 +1923,12 @@ class Enemy: SKShapeNode {
         if enemyType == .ghost {
             startGhostPhasing()
         }
+
+        // And the hit squash, which goes back to the resting scale only as its last step.
+        // Cut off partway, it left an enemy hit just before its dive flying the whole run
+        // up to 14% wide and 12% short.
+        xScale = restingScale
+        yScale = restingScale
 
         moveAlongPath(path, duration: duration, completion: completion)
     }
@@ -2666,10 +2708,25 @@ class Enemy: SKShapeNode {
         run(repeatAction, withKey: shootActionKey)
     }
 
+    /// Whether the enemy's centre is over the visible playfield.
+    private var isOnPlayfield: Bool {
+        let size = sceneSize
+        return (0...size.width).contains(position.x) && (0...size.height).contains(position.y)
+    }
+
     /// One volley. Internal rather than private so tests can fire it on demand instead of
     /// waiting out `startShooting()`'s randomised interval.
     func shoot() {
         guard let scene = gameScene, parent != nil else { return }
+
+        // Not from off the screen. The fire timer starts in `init`, and a formation member
+        // waits up to index x 0.2 s parked above the top edge before it flies in, so a
+        // bomber's 0.9-1.6 s timer had the back of a six-to-eight-strong wave firing from
+        // out of sight. Every entry starts off the playfield (flankers from the sides), so
+        // the rule is general: a volley skipped here is one missed tick, and the timer
+        // tries again next interval. The other routes to a shot (a turret's dock, the
+        // laser's stops, a mine's detonation) all happen at stops on the playfield.
+        guard isOnPlayfield else { return }
 
         // A phased ghost can't be hit, so it doesn't fire either: a shot from the one
         // state that is immune to return fire is not something the player can answer.
@@ -2793,13 +2850,24 @@ class Enemy: SKShapeNode {
             scene.addChild(reticle)
         }
 
+        // On the sniper's clock. The reticle sits on the playfield, not on the sniper, so
+        // it used to run at full speed while the shot it announces is scheduled on the
+        // sniper, which SLOW MO runs at half speed: the lock closed and flashed at 0.8 s,
+        // was gone by 1.0 s, and the round came at 1.6 s. Both are children of the same
+        // layer, so a matching `speed` puts them on the same clock. The watcher below
+        // keeps it matched if SLOW MO starts or ends mid-lock.
+        reticle.speed = speed
+
         // A sniper killed mid-lock never fires, so its reticle goes with it rather than
-        // flashing a lock on a shot that is not coming.
+        // flashing a lock on a shot that is not coming. Frozen counts too: the sniper is
+        // still alive, but its shot is an action on it and a freeze only ends in the
+        // detonation.
         reticle.run(SKAction.customAction(withDuration: lockDuration) { [weak self] node, _ in
-            guard let self = self, self.parent != nil, !self.hasCompletedMovement else {
+            guard let self = self, self.parent != nil, !self.hasCompletedMovement, !self.isFrozen else {
                 node.removeFromParent()
                 return
             }
+            node.speed = self.speed
         })
 
         // Wait for lock, then shoot
@@ -2857,11 +2925,26 @@ class Enemy: SKShapeNode {
         // Pause all actions
         isPaused = true
 
-        // Freeze solid. Pausing a ghost mid-phase would hold it below 0.5, where the
-        // player's rounds pass through it, for the whole freeze.
-        if enemyType == .ghost {
-            removeAction(forKey: "ghostFade")
-            alpha = 1
+        // Freeze solid and in full view. The loops that animate the hull's alpha are cut,
+        // not just paused, and the hull is put back to opaque. Paused, a ghost held
+        // mid-phase stayed below 0.5, where the player's rounds pass through it. A
+        // teleporter caught mid-blink stayed invisible or half-faded while it could still
+        // be hit, and a turret's dock glow or a mirror's shimmer held whatever fade it had
+        // reached.
+        for key in Self.alphaLoopKeys {
+            removeAction(forKey: key)
+        }
+        alpha = 1
+
+        // Likewise a hit reaction that is still playing. Paused partway, it left a
+        // white-washed or squashed enemy for the whole freeze. Hits taken while frozen
+        // skip it altogether; see `flashDamage()`.
+        hitFlashOverlay?.removeAllActions()
+        hitFlashOverlay?.alpha = 0
+        if action(forKey: "hitSquash") != nil {
+            removeAction(forKey: "hitSquash")
+            xScale = restingScale
+            yScale = restingScale
         }
 
         // A laser's beam is its child now and would freeze with it, still lit and still
@@ -3005,42 +3088,57 @@ class Enemy: SKShapeNode {
     private func performBouncerMovement(completion: @escaping () -> Void) {
         // Bouncer moves diagonally and bounces off screen edges
         var currentVelocity = CGVector(dx: CGFloat.random(in: -150...150), dy: -200)
-        let updateInterval: TimeInterval = 0.016 // ~60fps
 
-        let updateAction = SKAction.run { [weak self] in
-            guard let self = self else { return }
+        // Each tick moves it by the time that has actually passed on this node's own action
+        // clock. It used to move a fixed 0.016 s worth per tick, which held its pace only
+        // because SpriteKit carries a long frame's leftover time through the repeat and
+        // ran several ticks in it. A custom action's elapsed time is the clock the old
+        // ticks ran on: it stops for a pause or a freeze and runs at half rate under
+        // SLOW MO. Clamped like the scene's own frame delta, so a hitch can't throw it
+        // through a wall.
+        let maxStep = CGFloat(GameConfiguration.maxFrameDelta)
+        var lastElapsed: CGFloat = 0
+        let tick = SKAction.customAction(withDuration: 10) { [weak self] _, elapsed in
+            guard let self = self, !self.hasCompletedMovement else { return }
+
+            // Each pass of the repeat below counts from zero again.
+            if elapsed < lastElapsed {
+                lastElapsed = 0
+            }
+            let step = min(elapsed - lastElapsed, maxStep)
+            lastElapsed = elapsed
 
             // Update position
-            let newX = self.position.x + currentVelocity.dx * CGFloat(updateInterval)
-            let newY = self.position.y + currentVelocity.dy * CGFloat(updateInterval)
+            let minX: CGFloat = 30
+            let maxX = max(minX, self.sceneSize.width - 30)
+            let newX = self.position.x + currentVelocity.dx * step
+            let newY = self.position.y + currentVelocity.dy * step
 
-            // Bounce off left/right edges
-            if newX < 30 || newX > self.sceneSize.width - 30 {
-                currentVelocity.dx = -currentVelocity.dx
+            // Bounce off left/right edges, always back towards the middle. A plain flip
+            // turned a bouncer that a resize had left outside the new edges straight round
+            // again on the next frame: a rattle against the wall, with a sound each time.
+            if newX < minX || newX > maxX {
+                let inward = newX < minX ? abs(currentVelocity.dx) : -abs(currentVelocity.dx)
+                if inward != currentVelocity.dx {
+                    currentVelocity.dx = inward
 
-                // Play bounce sound
-                if let gameScene = self.gameScene {
-                    SoundManager.shared.playBouncerBounceSound(on: gameScene)
+                    // Play bounce sound
+                    if let gameScene = self.gameScene {
+                        SoundManager.shared.playBouncerBounceSound(on: gameScene)
+                    }
                 }
             }
 
-            self.position = CGPoint(
-                x: max(30, min(self.sceneSize.width - 30, newX)),
-                y: newY
-            )
+            self.position = CGPoint(x: min(max(newX, minX), maxX), y: newY)
 
             // Check if off screen
             if self.position.y < -20 {
-                if !self.hasCompletedMovement {
-                    self.despawn()
-                    completion()
-                }
+                self.despawn()
+                completion()
             }
         }
 
-        let wait = SKAction.wait(forDuration: updateInterval)
-        let sequence = SKAction.sequence([updateAction, wait])
-        run(SKAction.repeatForever(sequence), withKey: "bouncing")
+        run(SKAction.repeatForever(tick), withKey: "bouncing")
     }
 
     private func performTeleporterMovement(completion: @escaping () -> Void) {
@@ -3066,7 +3164,8 @@ class Enemy: SKShapeNode {
             }
             let fadeIn = SKAction.fadeIn(withDuration: 0.2)
 
-            self.run(SKAction.sequence([fadeOut, teleport, fadeIn]))
+            // Keyed so a freeze can cut it; see `alphaLoopKeys`.
+            self.run(SKAction.sequence([fadeOut, teleport, fadeIn]), withKey: "teleportBlink")
         }
 
         let wait = SKAction.wait(forDuration: teleportInterval)

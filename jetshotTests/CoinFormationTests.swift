@@ -134,6 +134,52 @@ final class CoinFormationTests: XCTestCase {
         XCTAssertLessThanOrEqual(placed[0].x, size.width - margin + 0.001)
     }
 
+    /// A formation falls as the shape it was laid out in, at the speed its lowest coin
+    /// always fell at. Every coin used to take ten seconds to the bottom from its own
+    /// height, so the higher ones fell faster and the shape flattened on the way down.
+    @MainActor
+    func testAFormationKeepsItsShapeAsItFalls() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+        let scene = SKScene(size: CGSize(width: 390, height: 844))
+        scene.physicsWorld.gravity = .zero
+        harness.present(scene, settle: 0.1)
+
+        let coinManager = CoinManager(
+            scene: scene,
+            config: CoinSpawnConfig(spawnInterval: 1, spawnProbability: 1, minCoins: 1000, maxCoins: 1000)
+        )
+        // A formation with some height to it: a flat line would keep its shape anyway.
+        var formation: [Coin] = []
+        var clock: TimeInterval = 1
+        coinManager.update(currentTime: clock)
+        for _ in 0..<40 where formation.isEmpty {
+            let before = Set(scene.children.map { ObjectIdentifier($0) })
+            clock += 2
+            coinManager.update(currentTime: clock)
+            let spawned = scene.children.compactMap { $0 as? Coin }.filter { !before.contains(ObjectIdentifier($0)) }
+            let ys = spawned.map(\.position.y)
+            if let low = ys.min(), let high = ys.max(), high - low > 20 { formation = spawned }
+        }
+        guard let lowest = formation.map(\.position.y).min() else {
+            return XCTFail("no formation with any height to it ever spawned")
+        }
+
+        let start = formation.map(\.position)
+        let started = Date()
+        harness.spin(1.0)
+        let elapsed = CGFloat(Date().timeIntervalSince(started))
+
+        let drops = zip(start, formation).map { $0.y - $1.position.y }
+        for (i, coin) in formation.enumerated() {
+            XCTAssertEqual(coin.position.x, start[i].x, accuracy: 0.001, "a coin drifted sideways")
+            XCTAssertEqual(drops[i], drops[0], accuracy: 0.5,
+                           "coins of one formation fell \(drops[i]) and \(drops[0]) pt: the shape is squashing")
+        }
+        let pace = (lowest + 50) / 10 // today's: the bottom row out of the screen in ten seconds
+        XCTAssertEqual(drops[0] / elapsed, pace, accuracy: pace * 0.15, "the formation falls at a new speed")
+    }
+
     // `CoinFormation` is not CaseIterable; mirror the list its own `random()` uses.
     private static let allFormations: [CoinFormation] = [
         .line, .vShape, .circle, .wave, .diagonal, .cross, .arrow, .zigzag

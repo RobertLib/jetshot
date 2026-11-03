@@ -176,6 +176,9 @@ class VectorFX3D {
     ///
     /// It used to be left for the caller to remove, and the only caller (the sniper)
     /// never did: every lock-on stayed on the playfield for the rest of the level.
+    ///
+    /// The whole timeline runs on the node's own clock, so a caller whose shot runs on a
+    /// different one sets `speed` to match; see `Enemy.shootAimed`.
     static func createTargetingReticle(at target: CGPoint, color: UIColor, lockDuration: TimeInterval = 1.0) -> SKNode {
         let container = SKNode()
         container.position = target

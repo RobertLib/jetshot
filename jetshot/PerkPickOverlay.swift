@@ -39,6 +39,9 @@ final class PerkPickOverlay: SKNode {
         static let header: CGFloat = 2
     }
 
+    /// Laid out once, for the size it opens at — see `SettingsOverlay.init`, on the same
+    /// terms, for why nothing needs to follow a resize.
+    ///
     /// - Parameters:
     ///   - stacks: what the run already holds, for the pips on each card.
     ///   - frameDepths: the letterbox's bars, deep enough to close over the HUD.

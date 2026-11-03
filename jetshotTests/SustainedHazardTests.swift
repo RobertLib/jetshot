@@ -7,7 +7,8 @@ import XCTest
 import SpriteKit
 @testable import jetshot
 
-/// A boss's beam, against the scene's damage and cancel rules.
+/// A boss's beam, against the scene's damage and cancel rules — and, for the sustained
+/// damage rule, the other thing a ship can sit inside: an obstacle.
 ///
 /// A beam is unlike a round: it is not spent by what it touches, it can be sat in, and
 /// it is named apart from rounds (`bosslaser`, not `enemyBullet`). Each of those used to
@@ -57,6 +58,31 @@ final class SustainedHazardTests: XCTestCase {
             "a ship sitting in a beam was never hit once its protection ran out"
         )
         XCTAssertNotNil(beam.parent, "the beam was used up by the hit")
+    }
+
+    /// The same for a wall. A ship that flew into one under a shield, or stayed in it
+    /// through its blink, sat inside it unharmed once the protection ran out, until it
+    /// left and came back.
+    func testAnObstacleTheShipStaysInHurtsOnceItCanBeHurt() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        harness.scene.debugSetInvulnerable(true)
+        let wall = Obstacle(type: .wall, sceneSize: harness.scene.size, position: harness.player.position)
+        // Held over the ship rather than left to fall past it.
+        wall.removeAllActions()
+        harness.gameContent.addChild(wall)
+        harness.spin(0.3)
+        let livesInside = harness.scene.currentLives
+
+        harness.scene.debugSetInvulnerable(false)
+        harness.spin(0.3)
+
+        XCTAssertEqual(
+            harness.scene.currentLives, livesInside - 1,
+            "a ship sitting in a wall was never hit once its protection ran out"
+        )
     }
 
     func testABarrierDoesNotDeleteABeam() {

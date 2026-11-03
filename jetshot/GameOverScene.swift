@@ -112,7 +112,10 @@ class GameOverScene: SKScene {
         let flatline = createFlatline(width: min(card.width, 220))
         card.add(flatline, gapAbove: 18, height: 40, reveal: false)
 
-        let title = FilmUI.title(L10n.GameOver.title, size: 34, color: StoryPalette.mix(red, .white, 0.2),
+        // "LEVEL FAILED" under a tag that reads ENDLESS · ROUND 27 named a level the run
+        // never had.
+        let titleText = isEndless ? L10n.GameOver.endlessTitle : L10n.GameOver.title
+        let title = FilmUI.title(titleText, size: 34, color: StoryPalette.mix(red, .white, 0.2),
                                  glow: red, tracking: 6, maxWidth: card.width)
         title.alpha = 0
         card.add(title, gapAbove: 16, height: title.frame.height, reveal: false)

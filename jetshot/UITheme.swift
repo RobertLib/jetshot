@@ -450,10 +450,10 @@ struct UITheme {
     /// other texture caches; the next request re-renders on demand.
     ///
     /// This was the one texture cache that warning did not reach, while
-    /// `ParallaxBackgroundHelper`, `ParticleTexture`, `NeonFX` and `SurfaceFX` were all
-    /// swept. Small in practice — the key is the screen size, so a phone only ever holds
-    /// one entry — but "every texture cache is cleared under pressure" is easier to keep
-    /// true than a list with one silent exception on it.
+    /// `ParticleTexture`, `ProjectileFX`, `ShardSystem`, `NeonFX` and `SurfaceFX` were
+    /// all swept. Small in practice — the key is the screen size, so a phone only ever
+    /// holds one entry — but "every texture cache is cleared under pressure" is easier to
+    /// keep true than a list with one silent exception on it.
     static func clearCaches() {
         scrimCache.removeAll()
     }

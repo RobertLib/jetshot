@@ -12,10 +12,12 @@ import XCTest
 /// score — which is right for two devices playing one save and wrong for a reset: the
 /// other device still held the old progress, pushed it back up on its next merge, and
 /// the reset came undone everywhere. Each reset now opens a new epoch, and two stores
-/// are only unioned while they share one; across epochs the newer store wins whole.
+/// are only unioned while they share one; across epochs the newer store wins whole —
+/// unless this device's progress is known to have been made after the newer reset.
 ///
 /// The decision itself is the pure `CloudStorageManager.reconcile(local:cloud:)`, covered
-/// first. The rest goes through the production manager with isolated memory stores.
+/// first. The rest goes through the production manager with isolated memory stores;
+/// `CloudSyncTests` drives the merge itself.
 @MainActor
 final class ProgressEpochTests: XCTestCase {
 
@@ -52,14 +54,15 @@ final class ProgressEpochTests: XCTestCase {
     }
 
     /// The case that used to undo a reset: this device still holds the old save, and
-    /// another device has reset since.
-    func testANewerResetInTheCloudWinsOverOlderLocalProgress() {
+    /// another device has reset since. With no start time — every 1.0.8 install — the
+    /// local progress is of unknown age, and unknown has to count as older than the reset.
+    func testANewerResetInTheCloudWinsOverLocalProgressOfUnknownAge() {
         let local = Store.Snapshot(values: [
             Keys.completedLevels: Array(1...20),
             Keys.levelScores: ["1": 9000],
             Keys.endlessRecords: ["bestScore": 80000, "bestRound": 31]
         ], epoch: 0)
-        let cloud = Store.Snapshot(values: [Keys.completedLevels: [1]], epoch: 1)
+        let cloud = Store.Snapshot(values: [Keys.completedLevels: [1]], epoch: 1, resetAt: 5_000)
 
         let merged = Store.reconcile(local: local, cloud: cloud)
 
@@ -67,6 +70,102 @@ final class ProgressEpochTests: XCTestCase {
         XCTAssertEqual(merged.values[Keys.completedLevels] as? [Int], [1], "the old save was merged back into the reset one")
         XCTAssertNil(merged.values[Keys.levelScores], "a score from before the reset survived it")
         XCTAssertNil(merged.values[Keys.endlessRecords], "an endless record from before the reset survived it")
+        XCTAssertEqual(merged.resetAt, 5_000)
+        XCTAssertEqual(merged.startedAt, 5_000, "adopted progress was all made after the cloud's reset")
+    }
+
+    /// A start time is only an exemption when it is *after* the reset; and a reset made
+    /// by 1.0.8 carries no time to compare it with.
+    func testProgressStartedBeforeTheResetOrAgainstAnUndatedResetStillLoses() {
+        let local = Store.Snapshot(values: [Keys.completedLevels: [1, 2, 3]], epoch: 0, startedAt: 4_000)
+        let cases: [(label: String, cloud: Store.Snapshot)] = [
+            ("started before the reset", Store.Snapshot(values: [:], epoch: 1, resetAt: 5_000)),
+            ("reset made by 1.0.8", Store.Snapshot(values: [:], epoch: 1))
+        ]
+
+        for (label, cloud) in cases {
+            let merged = Store.reconcile(local: local, cloud: cloud)
+
+            XCTAssertEqual(merged.epoch, 1, label)
+            XCTAssertTrue(merged.values.isEmpty, "\(label): pre-reset progress survived the reset")
+        }
+    }
+
+    /// The new iPad: the account was reset long ago, this device was played offline
+    /// since, and it is behind on the epoch only because it had not synced yet.
+    func testADeviceThatStartedAfterTheCloudsResetIsUnionedIntoIt() {
+        let local = Store.Snapshot(values: [
+            Keys.completedLevels: Array(1...20),
+            Keys.levelScores: ["1": 900, "20": 4000]
+        ], epoch: 0, startedAt: 9_000)
+        let cloud = Store.Snapshot(values: [
+            Keys.completedLevels: [1, 2],
+            Keys.levelScores: ["1": 1500]
+        ], epoch: 3, resetAt: 5_000)
+
+        let merged = Store.reconcile(local: local, cloud: cloud)
+
+        XCTAssertEqual(merged.epoch, 3, "the union has to move this device onto the cloud's epoch")
+        XCTAssertEqual(merged.resetAt, 5_000)
+        XCTAssertEqual(merged.values[Keys.completedLevels] as? [Int], Array(1...20), "post-reset progress was wiped")
+        XCTAssertEqual(merged.values[Keys.levelScores] as? [String: Int], ["1": 1500, "20": 4000])
+        XCTAssertEqual(merged.startedAt, 5_000, "the cloud's half dates from its reset, so the union does too")
+    }
+
+    /// The start time has to stay a lower bound on *all* of a device's progress.
+    func testASameEpochUnionDatesTheResultFromTheEarlierOfBothSides() {
+        let local = Store.Snapshot(values: [Keys.completedLevels: [4]], epoch: 2, resetAt: 5_000, startedAt: 9_000)
+
+        let addedTo = Store.reconcile(local: local, cloud: Store.Snapshot(
+            values: [Keys.completedLevels: [1]], epoch: 2, resetAt: 5_000))
+        XCTAssertEqual(addedTo.startedAt, 5_000, "remote progress came in, but the start time stayed later than it")
+
+        let unchanged = Store.reconcile(local: local, cloud: Store.Snapshot(
+            values: [Keys.completedLevels: [4]], epoch: 2, resetAt: 5_000))
+        XCTAssertEqual(unchanged.startedAt, 9_000, "nothing came in, yet the start time moved")
+
+        let epochZero = Store.reconcile(
+            local: Store.Snapshot(values: [Keys.completedLevels: [4]], epoch: 0, startedAt: 9_000),
+            cloud: Store.Snapshot(values: [Keys.completedLevels: [1]], epoch: 0))
+        XCTAssertNil(epochZero.startedAt, "epoch 0 has no reset time, so progress from it is of unknown age")
+    }
+
+    /// iCloud resolves conflicts per key, so a device that had not seen a reset can land
+    /// its old collection after it. The epoch tag gives such a write away.
+    func testACloudKeyTaggedWithAnOlderEpochReadsAsAbsent() {
+        let values: [String: Any] = [
+            Keys.completedLevels: [1, 2, 3],
+            Keys.levelScores: ["1": 900],
+            Keys.levelStars: ["1": 3]
+        ]
+        let tags = [Keys.completedLevels: 1, Keys.levelScores: 2]
+
+        let current = Store.currentCloudValues(values, tags: tags, epoch: 2)
+
+        XCTAssertNil(current[Keys.completedLevels], "a write made under an older epoch was read as current")
+        XCTAssertEqual(current[Keys.levelScores] as? [String: Int], ["1": 900])
+        XCTAssertEqual(current[Keys.levelStars] as? [String: Int], ["1": 3], "an untagged 1.0.8 write was rejected")
+    }
+
+    /// Another Apple ID's epochs are not this device's timeline: nothing is wiped, and a
+    /// higher local epoch is not pushed into the new account.
+    func testAnAccountChangeUnionsIntoTheNewAccountAndAdoptsItsEpoch() {
+        let local = Store.Snapshot(values: [
+            Keys.completedLevels: [1, 2, 3],
+            Keys.levelScores: ["1": 100]
+        ], epoch: 2, resetAt: 5_000, startedAt: 9_000)
+        let cloud = Store.Snapshot(values: [
+            Keys.completedLevels: [7],
+            Keys.levelScores: ["7": 700]
+        ], epoch: 0)
+
+        let merged = Store.reconcileAfterAccountChange(local: local, cloud: cloud)
+
+        XCTAssertEqual(merged.epoch, 0, "the previous account's epoch was pushed into the new one")
+        XCTAssertNil(merged.resetAt)
+        XCTAssertEqual(merged.values[Keys.completedLevels] as? [Int], [1, 2, 3, 7])
+        XCTAssertEqual(merged.values[Keys.levelScores] as? [String: Int], ["1": 100, "7": 700])
+        XCTAssertNil(merged.startedAt, "two accounts' histories mixed, so the start time is unknown")
     }
 
     func testANewerResetOnThisDeviceWinsOverOlderCloudProgress() {

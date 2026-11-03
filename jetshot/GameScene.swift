@@ -4,7 +4,7 @@
 //
 //  Created by Robert Libšanský on 16.10.2025.
 //
-// WARNING: This file is large (~3900 lines) and still wants splitting up:
+// WARNING: This file is large and still wants splitting up:
 //  - CollisionHandler for physics collision logic
 //  - PowerUpHandler for power-up activation/deactivation
 //  - UIManager for UI setup and updates
@@ -27,7 +27,6 @@
 //    which is absolute system time and runs through pauses and backgrounding.
 
 import SpriteKit
-import GameplayKit
 
 // Physics categories for collision detection.
 //
@@ -114,15 +113,61 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var scoreHUD: SKNode?
     private var score: Int = 0 {
         didSet {
-            scoreLabel.text = "\(score)"
-            // A short overshoot on every gain makes scoring feel earned.
-            scoreLabel.removeAction(forKey: "scorePunch")
-            let up = SKAction.scale(to: 1.22, duration: 0.07)
-            up.timingMode = .easeOut
-            let down = SKAction.scale(to: 1.0, duration: 0.16)
-            down.timingMode = .easeOut
-            scoreLabel.run(.sequence([up, down]), withKey: "scorePunch")
+            showScore()
+            // A short overshoot on a gain makes scoring feel earned. Started only when
+            // none is playing: shards and grazes change the score dozens of times a
+            // second, and restarting it on each one rebuilt the actions every time and
+            // held the number at the top of the swell for as long as the stream lasted.
+            if scoreLabel.action(forKey: "scorePunch") == nil {
+                scoreLabel.run(Self.scorePunch, withKey: "scorePunch")
+            }
         }
+    }
+
+    private static let scorePunch: SKAction = {
+        let up = SKAction.scale(to: 1.22, duration: 0.07)
+        up.timingMode = .easeOut
+        let down = SKAction.scale(to: 1.0, duration: 0.16)
+        down.timingMode = .easeOut
+        return .sequence([up, down])
+    }()
+
+    /// The HUD score's point size, before `showScore(refit:)` shrinks a long one.
+    private static let scoreFontSize: CGFloat = 24
+
+    /// Writes the score into the HUD, digit-grouped like every other screen that prints
+    /// one — the results, level select and the pause menu all use `formatted()`.
+    ///
+    /// The number is centred between the lives on the left and the pause button on the
+    /// right, which on a 375 pt phone at full lives is room for about seven characters at
+    /// full size. Grouping adds a separator every three digits, so a long score is shrunk to
+    /// fit rather than run into the ships. Refitted only when the length changes (or when
+    /// asked), since this runs on every point scored.
+    private func showScore(refit: Bool = false) {
+        let text = score.formatted()
+        let lengthChanged = text.count != scoreLabel.text?.count
+        scoreLabel.text = text
+        guard refit || lengthChanged else { return }
+
+        scoreLabel.fontSize = Self.scoreFontSize
+        // Measured unscaled: the punch above may be mid-swell.
+        let width = scoreLabel.frame.width / max(scoreLabel.xScale, 0.01)
+        let room = scoreLabelMaxWidth
+        if width > room, width > 0 {
+            scoreLabel.fontSize = max(12, Self.scoreFontSize * room / width)
+        }
+    }
+
+    /// How wide the HUD score may print: centred, and clear of the lives row at its
+    /// fullest and of the pause button. Not of the lives row as it stands, or the number
+    /// would grow and shrink as lives come and go.
+    private var scoreLabelMaxWidth: CGFloat {
+        let gap: CGFloat = 10
+        let livesRight = Self.lifeIconsLeftMargin
+            + CGFloat(GameConfiguration.maxLives) * (Self.lifeIconSize + Self.lifeIconSpacing) - Self.lifeIconSpacing
+        let pauseLeft = pauseButton?.frame.minX ?? size.width
+        let half = min(size.width / 2 - livesRight, pauseLeft - size.width / 2) - gap
+        return max(0, half * 2)
     }
 
     /// Read-only score, for `jetshotTests`.
@@ -199,6 +244,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // running through pauses and backgrounding, so using it directly made every
     // interval below fire at once on resume.
     private var gameTime: TimeInterval = 0
+
+    /// The clock the hostile spawners run on: enemy waves — and the formation timers
+    /// `EnemyManager` hands down — obstacles and asteroids. `gameTime`, slowed further by
+    /// SLOW MO (`slowMotionFactor`).
+    ///
+    /// SLOW MO used to slow only what had already arrived. Spawning carried on at the
+    /// full rate while everything on screen moved at half speed, so for the six seconds
+    /// it ran the playfield filled up twice as densely — and a formation, flying in at
+    /// half speed against a hold timer counting at full, could use up the queue's whole
+    /// safety hold before it attacked. Pickups — power-ups and coins — keep `gameTime`.
+    private var spawnClock: TimeInterval = 0
     private var lastFrameTime: TimeInterval = 0
     private var lastShootTime: TimeInterval = 0
     private var lastCleanupTime: TimeInterval = 0  // For bullet cleanup optimization
@@ -456,6 +512,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         setGameplayPaused(true)
     }
 
+    /// Re-freezes enemies that SpriteKit has thawed behind the freeze bomb's back.
+    ///
+    /// A freeze is `isPaused` on the enemy itself, and the same foreground unpause that
+    /// `holdRequestedGameplayPause()` answers for `gameContentNode` clears it on every
+    /// frozen enemy too. Nothing put it back: after a call or Control Centre mid-freeze,
+    /// RESUME let the "frozen" enemies fly and fire for the rest of the freeze, their ice
+    /// overlays left pulsing where they used to be. Run from the same place, for the same
+    /// reason — the frame that unpauses calls `update(_:)` before it evaluates actions.
+    private func holdFrozenEnemies() {
+        for enemy in activeEnemies.values where enemy.isFrozen && !enemy.isPaused {
+            enemy.isPaused = true
+        }
+    }
+
     /// Schedules a power-up expiry on the gameplay clock.
     ///
     /// These used to be scheduled on the scene, whose actions keep advancing while the
@@ -708,13 +778,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Only handle resize after initial setup
         guard isInitialized, let view = view else { return }
 
-        // Update camera position to center of new size
-        camera?.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        // Re-centre the camera on the new size, dropping any shake in flight first: its
+        // last step is an absolute move back to the *old* centre, so a resize mid-shake
+        // used to leave the whole picture, HUD included, off centre until the next shake.
+        recentreCamera()
 
         safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)
 
-        // Update player bounds
-        player.updateBounds(sceneSize: size, safeAreaBottom: safeAreaBottom)
+        // Keep the ship inside the new flight area. Only while it is the player's to fly:
+        // the intro's entry and the exit after a boss deliberately take it outside, and
+        // their moves would be fought by a clamp.
+        if isGameStarted {
+            player.updateBounds(sceneSize: size, safeAreaBottom: safeAreaBottom)
+        }
 
         // Re-render the vignette for the new size
         NeonFX.attachGrade(to: self)
@@ -1055,11 +1131,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         scoreHUD = hud
 
         scoreLabel = SKLabelNode(fontNamed: UITheme.Typography.fontNumeric)
-        scoreLabel.fontSize = 24
+        scoreLabel.fontSize = Self.scoreFontSize
         scoreLabel.fontColor = UITheme.Colors.primaryCyanLight
         scoreLabel.verticalAlignmentMode = .center
         scoreLabel.horizontalAlignmentMode = .center
-        scoreLabel.text = "\(score)"
         scoreLabel.zPosition = 2
         hud.addChild(scoreLabel)
 
@@ -1077,6 +1152,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Setup pause button (same height as score)
         setupPauseButton(topMargin: topMargin)
+
+        // After the pause button, which bounds how wide the number may print.
+        showScore(refit: true)
 
         // Setup heat bar
         weaponHeat.installHUD(on: uiNode, sceneWidth: size.width)
@@ -1104,6 +1182,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return CGPoint(x: 42, y: max(safeAreaBottom, 10) + 36)
     }
 
+    /// The lives row: one ship per life, left to right from the screen edge. Shared with
+    /// `scoreLabelMaxWidth`, which keeps the HUD score clear of the row at its longest.
+    private static let lifeIconSize: CGFloat = 22
+    private static let lifeIconSpacing: CGFloat = 6
+    private static let lifeIconsLeftMargin: CGFloat = 20
+    /// Not private, so `HUDLayoutTests` can find the row.
+    static let lifeIconName = "lifeIcon"
+
     private func updateLivesDisplay(topMargin: CGFloat) {
         // Store current top margin for future updates
         currentTopMargin = topMargin
@@ -1113,13 +1199,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         livesNodes.removeAll()
 
         // Create detailed player ship shapes for each life
-        let shipSize: CGFloat = 22
-        let spacing: CGFloat = 6
-        let leftMargin: CGFloat = 20
+        let shipSize = Self.lifeIconSize
+        let spacing = Self.lifeIconSpacing
+        let leftMargin = Self.lifeIconsLeftMargin
 
         // Position ships at the same height as score label and pause button
         for i in 0..<max(0, lives) {
             let ship = createDetailedPlayerShip(size: shipSize)
+            ship.name = Self.lifeIconName
             ship.position = CGPoint(x: leftMargin + shipSize / 2 + CGFloat(i) * (shipSize + spacing),
                                     y: size.height - topMargin)
             ship.zPosition = 100
@@ -1201,9 +1288,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let originalPlayerY = player.position.y
         player.position.y = -50
 
+        // Hung off the scene, not `gameContentNode`, which is what keeps it animating
+        // while gameplay is paused for the intro. (`speed` has no bearing on a pause.)
         let introNode = SKNode()
         introNode.zPosition = 2000
-        introNode.speed = 1.0 // Always animate at normal speed even when scene is paused
         introNode.name = "levelIntro"
 
         // Level 1 holds fractionally longer than the rest: long enough to read the words
@@ -1864,14 +1952,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Don't handle game touches when paused or game hasn't started
-        if gameContentNode.isPaused || !isGameStarted { return }
-
         // Only the steering finger flies the ship. Testing membership rather than
         // taking `touches.first` matters once a second finger is down: a moved event
         // for that finger alone must not be read as a drag.
         guard let steering = steeringTouch, touches.contains(steering) else { return }
         let location = steering.location(in: self)
+
+        // Paused, or not flying yet: the ship stays put, but the finger is still
+        // followed. Steering is relative to the last place it was seen, so a finger held
+        // through a two-handed pause and moved under the menu used to throw the ship the
+        // whole distance on its first move after RESUME.
+        if gameContentNode.isPaused || !isGameStarted {
+            lastSteerLocation = location
+            return
+        }
 
         let sensitivity = GameConfiguration.dragSensitivity
         let delta = CGVector(
@@ -2048,10 +2142,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// *this*, not over wall-clock time, which a hit-stop or a clamped frame skews.
     var gameplayClock: TimeInterval { gameTime }
 
+    /// The hostile spawners' clock, read-only for `jetshotTests`, which check it against
+    /// `gameplayClock` to see SLOW MO slow the arrivals. See `spawnClock`.
+    var spawnerClock: TimeInterval { spawnClock }
+
     /// When lightning last struck, on the gameplay clock.
     private var lastLightningTime: TimeInterval = -1
 
     private func shootLightning() {
+        // A destroyed ship's weapons are out of the fight; see `isShipDestroyed`.
+        guard !isShipDestroyed else { return }
+
         // Play lightning sound
         SoundManager.shared.playLightningSound(on: self)
 
@@ -2063,11 +2164,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         )
         effectsParent.addChild(lightning)
 
-        // Destroy every enemy on screen. Collected first: removing nodes from inside
-        // the enumeration that is walking them is asking for trouble.
+        // Destroy every enemy on screen — on it, not merely in the tree. Enemies spawn
+        // 50 pt above the top edge and formations fly in from there, so the whole tree
+        // also held ships that had not yet appeared; they died out of sight and paid out.
+        //
+        // Collected first, as every sweep here that changes the tree does: each kill
+        // removes its enemy and adds an explosion, shards and a shatter to the very node
+        // being walked.
         var struck: [Enemy] = []
+        let playfield = CGRect(origin: .zero, size: size)
         gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
-            if let enemy = node as? Enemy { struck.append(enemy) }
+            if let enemy = node as? Enemy, enemy.frame.intersects(playfield) { struck.append(enemy) }
         }
         for enemy in struck {
             enemy.health = 0
@@ -2138,11 +2245,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             secondBody = contact.bodyA
         }
 
-        // A ship that is going down is out of the fight. Its bodies are pulled in
-        // `playerDestroyed()`, but contacts already queued for this physics step still
-        // arrive. `player` is the lowest category and `collector` the highest, so the
-        // ship is always first or second respectively.
+        // A ship that is going down is out of the fight, and so is everything it owns:
+        // its core, its collector, its barrier and every round it fired. The bodies are
+        // pulled in `playerDestroyed()`, but contacts already queued for this physics
+        // step still arrive — and rounds fired a moment before the last hit kept flying
+        // and landing for the whole death sequence: kills paid onto the game-over score,
+        // and a boss on its last hit could be "defeated" by a dead ship, its slow-motion
+        // celebration bringing the wreck back into view before GAME OVER arrived anyway.
+        //
+        // `player` and `bullet` are the two lowest categories, so whichever of them a
+        // contact involves is `firstBody`; `barrier` and `collector` are the two highest,
+        // so they are `secondBody`. (None of the four tests against another.)
         if isShipDestroyed && (firstBody.categoryBitMask == PhysicsCategory.player
+                               || firstBody.categoryBitMask == PhysicsCategory.bullet
+                               || secondBody.categoryBitMask == PhysicsCategory.barrier
                                || secondBody.categoryBitMask == PhysicsCategory.collector) {
             return
         }
@@ -2180,37 +2296,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Player hit obstacle
         if firstBody.categoryBitMask == PhysicsCategory.player &&
            secondBody.categoryBitMask == PhysicsCategory.obstacle {
-            // Find the obstacle - could be direct parent or grandparent (for destructible blocks)
-            var obstacle: Obstacle?
-            if let directObstacle = secondBody.node as? Obstacle {
-                obstacle = directObstacle
-            } else if let parentObstacle = secondBody.node?.parent as? Obstacle {
-                obstacle = parentObstacle
-            } else if let grandparentObstacle = secondBody.node?.parent?.parent as? Obstacle {
-                obstacle = grandparentObstacle
-            }
-
-            playerDidCollideWithObstacle(obstacle: obstacle)
+            playerDidCollideWithObstacle(obstacle: Self.obstacle(owning: secondBody.node))
         }
 
         // Bullet hit obstacle
         if firstBody.categoryBitMask == PhysicsCategory.bullet &&
            secondBody.categoryBitMask == PhysicsCategory.obstacle {
-            // Find the obstacle - could be direct parent or grandparent (for destructible blocks)
-            var obstacle: Obstacle?
-            let hitNode: SKNode? = secondBody.node
-
-            if let directObstacle = secondBody.node as? Obstacle {
-                obstacle = directObstacle
-            } else if let parentObstacle = secondBody.node?.parent as? Obstacle {
-                obstacle = parentObstacle
-            } else if let grandparentObstacle = secondBody.node?.parent?.parent as? Obstacle {
-                obstacle = grandparentObstacle
-            }
-
             bulletDidCollideWithObstacle(bullet: firstBody.node,
-                                        obstacle: obstacle,
-                                        hitNode: hitNode)
+                                        obstacle: Self.obstacle(owning: secondBody.node),
+                                        hitNode: secondBody.node)
         }
 
         // Pickups meet the ship's collector, not its core (see `PhysicsCategory.collector`).
@@ -2240,8 +2334,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Barrier hit enemy
         //
-        // `barrier` (256) outranks every other category, so the sort above always puts
-        // it in `secondBody` — never in `firstBody`. Testing it as `firstBody` (the
+        // `barrier` (256) outranks everything it meets — only the collector (512) is
+        // higher, and the two never touch — so the sort above always puts it in
+        // `secondBody`, never in `firstBody`. Testing it as `firstBody` (the
         // previous shape of these two branches) could not match, which left the whole
         // barrier power-up as decoration: four rotating segments that destroyed nothing
         // and blocked nothing, despite the physics bodies being wired up correctly.
@@ -2259,6 +2354,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    /// The obstacle a hit volume belongs to: the node itself, or — for a destructible
+    /// wall, whose blocks carry their own bodies — the wall its parent or grandparent.
+    private static func obstacle(owning node: SKNode?) -> Obstacle? {
+        if let obstacle = node as? Obstacle { return obstacle }
+        if let obstacle = node?.parent as? Obstacle { return obstacle }
+        return node?.parent?.parent as? Obstacle
+    }
+
     private func bulletDidCollideWithEnemy(bullet: SKNode?, enemy: Enemy?) {
         guard let bullet = bullet, let enemy = enemy else { return }
 
@@ -2273,7 +2376,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
 
-        // GHOST: phased out, it is not there to be hit. The round flies on through.
+        // GHOST: phased out, it is not there to be hit. The round flies on through, and
+        // a homing missile drops its lock on it (see `canTakeMissile`).
         if enemy.isGhostPhased { return }
 
         // VORTEX: Absorbs bullets (30% chance to absorb, otherwise damages vortex)
@@ -2401,6 +2505,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// how they drift apart. Removal stays with the caller, because the mine and the
     /// splitter each retire their enemy in their own way.
     private func rewardKill(of enemy: Enemy, at position: CGPoint, label: Bool = true) {
+        // Nothing is paid to a destroyed ship. Its own weapons are already out of the
+        // fight (see `didBegin`), but a freeze bomb's detonations run on the frozen
+        // enemies' own timer (`Enemy.freeze`) and still go off during the death sequence.
+        guard !isShipDestroyed else { return }
+
         tally(enemy)
         enemiesDestroyed += 1
         let awarded = addScore(enemy.enemyType.points)
@@ -2644,12 +2753,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return beamNames.contains(name)
     }
 
-    /// Damage from what the ship can stay inside: a beam and a boss's hull.
+    /// Damage from what the ship can stay inside: a beam, a boss's hull and an obstacle.
     ///
     /// Physics reports a contact once, as it begins. A ship that entered a beam while
     /// invulnerable or shielded — or that stayed in it through the blink after the hit
     /// it took on the way in — was never touched again for as long as the beam burned,
-    /// and the same went for a ship parked inside a boss. Rounds do not need this: the
+    /// and the same went for a ship parked inside a boss, or inside a wall, a rotating
+    /// bar or a spinner it had flown into under a shield: when the shield ran out it sat
+    /// in the wall unharmed until it left and came back. Rounds do not need this: the
     /// contact that begins spends them.
     ///
     /// Called every frame from `update(_:)`. Cheap: it reads the core's own contact
@@ -2666,6 +2777,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
             if body.categoryBitMask == PhysicsCategory.enemy && (node is Boss || node is BossPart) {
                 playerDidCollideWithBoss()
+                return
+            }
+            if body.categoryBitMask == PhysicsCategory.obstacle, let obstacle = Self.obstacle(owning: node) {
+                playerDidCollideWithObstacle(obstacle: obstacle)
                 return
             }
         }
@@ -2692,9 +2807,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             removePowerUpTimer(named: "magnet")
         }
         if !player.hasSlowMotion {
+            // A pending expiry is what says SLOW MO was running until this hit. The reset
+            // walks every enemy, rock, wall and round on screen, and almost every hit
+            // that degrades a power-up comes from a ship that never had slow motion.
+            let wasSlowed = gameContentNode?.action(forKey: "slowMotionDeactivation") != nil
             cancelPowerUpExpiry(key: "slowMotionDeactivation")
             removePowerUpTimer(named: "slowMotion")
-            resetEntitySpeeds()
+            if wasSlowed {
+                resetEntitySpeeds()
+            }
         }
         if !player.hasScoreMultiplier {
             cancelPowerUpExpiry(key: "scoreMultiplierDeactivation")
@@ -3167,7 +3288,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         schedulePowerUpExpiry(after: duration, key: "slowMotionDeactivation") { [weak self] in
             guard let self = self else { return }
             self.player?.hasSlowMotion = false
-            // `resetEntitySpeeds()` already restores enemies, asteroids and bullets.
+            // `resetEntitySpeeds()` already restores everything SLOW MO slowed.
             // The old inline copy of it also cleared `activeEnemies`, which left every
             // enemy already on screen missing from the cache until the next rebuild.
             self.resetEntitySpeeds()
@@ -3205,7 +3326,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // The closest enemies get a missile each.
         var enemies: [Enemy] = []
         gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
-            if let enemy = node as? Enemy, enemy.health > 0 {
+            if let enemy = node as? Enemy, Self.canTakeMissile(enemy) {
                 enemies.append(enemy)
             }
         }
@@ -3243,6 +3364,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// reference never cleared — drew it to the wreck's last position to hover there
     /// for the rest of its five seconds.
     private func launchHomingMissile(lockedOn target: SKNode?) {
+        // The salvo leaves in a stagger; a ship destroyed part-way through fires no more.
+        guard !isShipDestroyed else { return }
+
         // Amber, the player's missile colour; pink is reserved for hostile fire. Built
         // by `ProjectileFX`, which also gives it its physics and its damage.
         let missile = ProjectileFX.missile(homing: true)
@@ -3273,18 +3397,33 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         missile.run(SKAction.sequence([homing, SKAction.removeFromParent()]))
     }
 
-    /// Whether a missile's lock is still worth flying at: on the playfield and alive.
+    /// Whether a missile's lock is still worth flying at: on the playfield, alive and
+    /// there to be hit.
     private func isLiveMissileTarget(_ node: SKNode?) -> Bool {
         guard let node = node, node.parent != nil else { return false }
-        if let enemy = node as? Enemy { return enemy.health > 0 }
+        if let enemy = node as? Enemy { return Self.canTakeMissile(enemy) }
         if let boss = node as? Boss { return boss.isAlive() }
         return false
+    }
+
+    /// An enemy a missile can lock on to.
+    ///
+    /// Not a phased ghost. Rounds pass through one (`bulletDidCollideWithEnemy`), but a
+    /// missile locked on it steered to its centre every frame and hovered there for as
+    /// long as it stayed phased, while anything it could have hit went untouched. That it
+    /// then landed when the ghost turned solid was down to SpriteKit reporting afresh a
+    /// contact that had begun while the ghost was phased — not something to lean on, as
+    /// a contact is meant to begin once. Dropping the lock sends the missile at something
+    /// it can hit; once the ghost is solid again it is a target like any other, and the
+    /// missile comes back in on a contact that begins then.
+    private static func canTakeMissile(_ enemy: Enemy) -> Bool {
+        return enemy.health > 0 && !enemy.isGhostPhased
     }
 
     private func nearestMissileTarget(to point: CGPoint) -> SKNode? {
         var candidates: [SKNode] = []
         gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
-            if let enemy = node as? Enemy, enemy.health > 0 {
+            if let enemy = node as? Enemy, Self.canTakeMissile(enemy) {
                 candidates.append(enemy)
             }
         }
@@ -3356,11 +3495,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let destroyAction = SKAction.sequence([
                 SKAction.wait(forDuration: delay),
                 SKAction.run { [weak self] in
-                    // Skipped if something else got to it during the stagger.
-                    guard enemy.parent != nil else { return }
-                    self?.createExplosion(at: enemy.position, size: .normal, tint: enemy.enemyType.strokeColor)
-                    self?.shatter(enemy)
-                    self?.rewardKill(of: enemy, at: enemy.position, label: false)
+                    // Skipped if something else got to it during the stagger, or if the
+                    // ship has been destroyed since: a dead ship's weapons are out of the
+                    // fight (see `didBegin`), its nuke's tail included.
+                    guard let self = self, !self.isShipDestroyed, enemy.parent != nil else { return }
+                    self.createExplosion(at: enemy.position, size: .normal, tint: enemy.enemyType.strokeColor)
+                    self.shatter(enemy)
+                    self.rewardKill(of: enemy, at: enemy.position, label: false)
                     enemy.markAsDestroyed()
                     enemy.removeFromParent()
                 }
@@ -3383,9 +3524,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 SKAction.run { [weak self] in
                     // Skipped if something else got to it during the stagger, as for
                     // the enemies above — otherwise a rock already shot paid twice.
-                    guard asteroid.parent != nil else { return }
+                    guard let self = self, !self.isShipDestroyed, asteroid.parent != nil else { return }
                     asteroid.createExplosionEffect()
-                    self?.addScore(asteroid.asteroidSize.points)
+                    self.addScore(asteroid.asteroidSize.points)
                     asteroid.markAsDestroyed()
                     asteroid.removeFromParent()
                 }
@@ -3496,7 +3637,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// again in the window between the boss dying and the level ending — the bug the note
     /// on `bossSpawned` records.
     ///
-    /// The warning half closes a 2.8 s gap: the boss itself is not created until
+    /// The warning half closes a 2.2 s gap: the boss itself is not created until
     /// `showBossWarning`'s completion runs, and `powerUpManager` keeps spawning through
     /// the warning. A power-up grabbed in that window used to raise a fresh bar that then
     /// sat under the boss health bar for its entire duration.
@@ -3530,12 +3671,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func resetEntitySpeeds() {
-        // Reset speed for all enemies, asteroids and bullets to normal
-        gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
-            node.speed = 1.0
-        }
-        gameContentNode.enumerateChildNodes(withName: "asteroid") { node, _ in
-            node.speed = 1.0
+        // Reset speed for everything `applySlowMotion` slows
+        for name in ["enemy", "obstacle", "asteroid"] {
+            gameContentNode.enumerateChildNodes(withName: name) { node, _ in
+                node.speed = 1.0
+            }
         }
         gameContentNode.enumerateChildNodes(withName: "enemyBullet") { node, _ in
             self.setHostileRoundSpeed(node, to: 1.0)
@@ -3579,7 +3719,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         pruneCoinCache()
 
-        for (_, coin) in activeCoins {
+        // Not a coin already collected. `Coin.collect` drops its body and flies it to the
+        // score for 0.4 s, in the scene and in this cache all the while, and pulling on
+        // it bent that flight back towards the ship.
+        for (_, coin) in activeCoins where coin.physicsBody != nil {
             let dx = self.player.position.x - coin.position.x
             let dy = self.player.position.y - coin.position.y
             let distance = sqrt(dx * dx + dy * dy)
@@ -3690,12 +3833,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    /// What SLOW MO scales the hostile side of the fight by: the speed of what is on
+    /// screen (`applySlowMotion`) and the rate new arrivals spawn at (`spawnClock`).
+    private static let slowMotionFactor: CGFloat = 0.5
+
+    /// Slows everything hostile: enemies, obstacles, asteroids, hostile fire and the boss.
+    ///
+    /// Pickups are left at full speed on purpose — coins and power-ups are what the
+    /// player is flying towards, not away from, and a slowed reward would only be one
+    /// that took longer to reach. Their spawners stay on `gameTime` for the same reason.
     private func applySlowMotion(currentTime: TimeInterval) {
         // Only update every 0.1 seconds to reduce performance impact
         guard currentTime - lastSlowMotionUpdateTime >= 0.1 else { return }
         lastSlowMotionUpdateTime = currentTime
 
-        let slowFactor: CGFloat = 0.5
+        let slowFactor = Self.slowMotionFactor
 
         // Slow down enemies - use cached dictionary only for performance
         var toRemove: [ObjectIdentifier] = []
@@ -3714,10 +3866,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             activeEnemies.removeValue(forKey: id)
         }
 
-        // Slow down asteroids
-        gameContentNode.enumerateChildNodes(withName: "asteroid") { node, _ in
-            if node.speed != slowFactor {
-                node.speed = slowFactor
+        // Slow down asteroids, and the obstacles — walls, bars, spinners — which fly on
+        // actions just as the asteroids do and used to be left at full speed.
+        for name in ["asteroid", "obstacle"] {
+            gameContentNode.enumerateChildNodes(withName: name) { node, _ in
+                if node.speed != slowFactor {
+                    node.speed = slowFactor
+                }
             }
         }
 
@@ -3736,7 +3891,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var invulnerableUntil: TimeInterval = 0
 
     /// Set once the last life is gone, for the death sequence: nothing more lands on the
-    /// ship and nothing more is collected. See `playerDestroyed()`.
+    /// ship, nothing more is collected, and nothing the ship fired — rounds, missiles,
+    /// the barrier, lightning, a nuke's tail — kills or pays. See `playerDestroyed()`.
     private var isShipDestroyed = false
 
     /// Set by the boss's killing blow and held until the level is over: the fight is won,
@@ -3800,6 +3956,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isShipDestroyed = true
         player.physicsBody = nil
         player.childNode(withName: "collector")?.physicsBody = nil
+
+        // Everything the ship fights with goes down with it: its rounds still in the air,
+        // which went on landing — and paying — through the whole sequence, and the
+        // barrier. (A hit takes the barrier before a life, so it should not be up by now;
+        // disarming it here makes that a rule rather than a consequence of the order in
+        // `Player.degradePowerUps()`.) `didBegin` already ignores all of them; stripping
+        // the bodies stops their contacts being reported at all, and the rounds fade
+        // rather than fly visibly through enemies they can no longer hurt.
+        player.enumerateChildNodes(withName: "barrierSegment") { node, _ in
+            node.physicsBody = nil
+        }
+        for node in gameContentNode.children where node.physicsBody?.categoryBitMask == PhysicsCategory.bullet {
+            node.physicsBody = nil
+            node.run(.sequence([.fadeOut(withDuration: 0.2), .removeFromParent()]))
+        }
 
         // Stop all player actions and shooting
         player.removeAllActions()
@@ -4031,6 +4202,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Before anything below reads `gameContentNode.isPaused`.
         holdRequestedGameplayPause()
+        holdFrozenEnemies()
 
         // Check if player is exiting and off screen (must be before pause/start checks)
         if isPlayerExiting && player.position.y > size.height + 50 {
@@ -4087,6 +4259,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         deltaTime = realDelta * TimeInterval(timeScale)
         gameTime += deltaTime
+        spawnClock += player.hasSlowMotion ? deltaTime * TimeInterval(Self.slowMotionFactor) : deltaTime
 
         // Overdrive countdown, and the shards it and every kill throw out.
         if overdrive.update(currentTime: gameTime) {
@@ -4152,24 +4325,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             lastShootTime = lateBy < deltaTime ? lastShootTime + interval : gameTime
         }
 
-        // Update enemy spawning (with slow motion modifier)
+        // Hostile spawning — enemy waves, obstacles, asteroids — runs on `spawnClock`, so
+        // SLOW MO slows the arrivals along with what has already arrived.
         if !isLevelProgressionSuspended {
-            enemyManager.update(currentTime: gameTime)
+            enemyManager.update(currentTime: spawnClock)
         }
+        obstacleManager.update(currentTime: spawnClock)
+        asteroidManager?.update(currentTime: spawnClock)
 
-        // Update obstacle spawning
-        obstacleManager.update(currentTime: gameTime)
-
-        // Update powerup spawning
+        // Pickups keep the gameplay clock, as they keep their full speed under SLOW MO.
         powerUpManager.update(currentTime: gameTime)
-
-        // Update coin spawning
         coinManager.update(currentTime: gameTime)
 
-        // Update asteroid spawning
-        asteroidManager?.update(currentTime: gameTime)
-
-        // Apply slow motion to enemies, asteroids, and bullets if active
+        // Apply slow motion to enemies, obstacles, asteroids and hostile fire if active
         if player.hasSlowMotion {
             applySlowMotion(currentTime: gameTime)
         }
@@ -4206,10 +4374,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let minX = -margin
         let maxX = size.width + margin
 
+        // Collected first and removed afterwards, like every other sweep here that changes
+        // the tree it walks (see `shootLightning`).
+        var offScreen: [SKNode] = []
         gameContentNode.enumerateChildNodes(withName: "enemyBullet") { node, _ in
             let pos = node.position
             if pos.y < minY || pos.y > maxY || pos.x < minX || pos.x > maxX {
-                node.removeFromParent()
+                offScreen.append(node)
             }
         }
 
@@ -4217,8 +4388,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         gameContentNode.enumerateChildNodes(withName: "bullet") { node, _ in
             let pos = node.position
             if pos.y > maxY || pos.x < minX || pos.x > maxX {
-                node.removeFromParent()
+                offScreen.append(node)
             }
+        }
+
+        for node in offScreen {
+            node.removeFromParent()
         }
     }
 
@@ -4303,16 +4478,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             activateShield()
         }
 
+        // On `spawnClock`, the clock these three managers are ticked on.
         enemyManager.appendWaves(
             EndlessDirector.waves(forRound: endlessRound),
-            currentTime: gameTime
+            currentTime: spawnClock
         )
 
         // Replaced rather than appended, so the hazards are this round's and not the
         // tail of an earlier round's track. See `AsteroidManager.replaceWaves`.
         let hazards = LevelManager.shared.endlessHazardWaves(forRound: endlessRound)
-        obstacleManager.replaceWaves(hazards.obstacles, currentTime: gameTime)
-        asteroidManager?.replaceWaves(hazards.asteroids, currentTime: gameTime)
+        obstacleManager.replaceWaves(hazards.obstacles, currentTime: spawnClock)
+        asteroidManager?.replaceWaves(hazards.asteroids, currentTime: spawnClock)
 
         powerUpManager.updateConfig(endlessPowerUpConfig(forRound: endlessRound))
         coinManager.refreshAllowance()
@@ -4658,6 +4834,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     /// cost the no-hit medal on a level already cleared. No blink: nothing hit the ship,
     /// and the clear at the end of one would lift this early.
     private func protectShipAfterBossDefeat() {
+        // A destroyed ship has nothing left to protect, and the alpha below would bring
+        // the faded wreck back on screen. Its weapons can no longer kill the boss (see
+        // `didBegin`), so this is the backstop, not the rule.
+        guard !isShipDestroyed else { return }
         isBossBeaten = true
         isInvulnerable = true
         invulnerableUntil = .infinity
@@ -5103,7 +5283,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // A reflection born during SLOW MO leaves at the effect's pace immediately,
         // rather than flying at full speed until the next periodic sweep.
         if player.hasSlowMotion {
-            setHostileRoundSpeed(bullet, to: 0.5)
+            setHostileRoundSpeed(bullet, to: Self.slowMotionFactor)
         }
 
         // Give it a lifetime, since removeAllActions() above threw away the sequence
@@ -5399,9 +5579,11 @@ extension GameScene {
 
             // A boss shot wants the boss, not the wave that happened to be on screen
             // when the run was hijacked.
+            var wave: [SKNode] = []
             self.gameContentNode.enumerateChildNodes(withName: "enemy") { node, _ in
-                node.removeFromParent()
+                wave.append(node)
             }
+            wave.forEach { $0.removeFromParent() }
             self.pruneEnemyCache()
             self.spawnBoss()
 

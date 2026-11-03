@@ -67,6 +67,11 @@ final class WeaponHeatSystem {
     private enum GaugeStatus { case normal, overheatLit, overheatDark, ready }
     private var shownStatus: GaugeStatus?
 
+    /// The heat level the fill's colour was last made for, and how finely it is stepped.
+    /// See `updateHeatBar()`.
+    private var shownColorLevel: CGFloat?
+    private static let heatColorSteps: CGFloat = 50
+
     private weak var scene: SKScene?
 
     init(scene: SKScene) {
@@ -143,6 +148,7 @@ final class WeaponHeatSystem {
         // again on every resize, and a freshly built bar starts empty, so without this
         // a mid-level relayout blanked the gauge.
         shownStatus = nil
+        shownColorLevel = nil
         updateHeatBar()
     }
 
@@ -283,19 +289,26 @@ final class WeaponHeatSystem {
         // start of the track — see `installHUD(on:sceneWidth:)`.
         fillContainer.xScale = heat
 
-        // Color changes based on heat level
-        if heat < 0.5 {
-            // Green to yellow
-            let green = 1.0 - (heat * 2)
-            heatBar.fillColor = UIColor(red: heat * 2, green: green, blue: 0.0, alpha: 0.9)
-        } else if heat < 0.8 {
-            // Yellow to orange
-            let progress = (heat - 0.5) / 0.3
-            heatBar.fillColor = UIColor(red: 1.0, green: 1.0 - (progress * 0.5), blue: 0.0, alpha: 0.9)
-        } else {
-            // Orange to red
-            let progress = (heat - 0.8) / 0.2
-            heatBar.fillColor = UIColor(red: 1.0, green: 0.5 - (progress * 0.5), blue: 0.0, alpha: 0.9)
+        // Color changes based on heat level, in steps of 2% heat. This runs every frame
+        // while the guns cool, and it used to make and set a new colour on every one of
+        // them. Within a band a step moves a channel by 0.05 at most, which doesn't show
+        // on an 8 pt bar.
+        let colorLevel = (heat * Self.heatColorSteps).rounded() / Self.heatColorSteps
+        if colorLevel != shownColorLevel {
+            shownColorLevel = colorLevel
+            if colorLevel < 0.5 {
+                // Green to yellow
+                let green = 1.0 - (colorLevel * 2)
+                heatBar.fillColor = UIColor(red: colorLevel * 2, green: green, blue: 0.0, alpha: 0.9)
+            } else if colorLevel < 0.8 {
+                // Yellow to orange
+                let progress = (colorLevel - 0.5) / 0.3
+                heatBar.fillColor = UIColor(red: 1.0, green: 1.0 - (progress * 0.5), blue: 0.0, alpha: 0.9)
+            } else {
+                // Orange to red
+                let progress = (colorLevel - 0.8) / 0.2
+                heatBar.fillColor = UIColor(red: 1.0, green: 0.5 - (progress * 0.5), blue: 0.0, alpha: 0.9)
+            }
         }
 
         // Pulse effect when near overheating.

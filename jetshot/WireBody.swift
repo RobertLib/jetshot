@@ -34,11 +34,11 @@ final class WireBody: SKNode {
     private let fov: Float
     private let baseSettings: WireCanvas.Settings
     private let render: (Frame) -> Void
-    /// Seconds between redraws; 0 redraws every frame. Slow, distant or small things
-    /// can afford 30 Hz and give the frame budget back to the playfield.
-    private let interval: Float
+    /// Paces redraws to the interval given at init; 0 redraws every frame. Slow,
+    /// distant or small things can afford 30 Hz and give the frame budget back to
+    /// the playfield.
+    private var pacer: FramePacer
     private(set) var clock: Float
-    private var sinceDraw: Float = .infinity
     private var lastElapsed: CGFloat = 0
 
     /// Master brightness for the body, multiplied into every line it draws.
@@ -64,7 +64,7 @@ final class WireBody: SKNode {
         settings.widthReference = distance
         baseSettings = settings
         self.render = render
-        self.interval = interval
+        pacer = FramePacer(interval: interval)
         clock = seed
         super.init()
         addChild(canvas)
@@ -85,21 +85,85 @@ final class WireBody: SKNode {
         lastElapsed = elapsed
         dt = min(max(dt, 0), 0.1)
         clock += dt
-        sinceDraw += dt
+        pacer.advance(by: dt)
         // Nothing to see: a scan cone waiting at zero alpha, a hidden effect. The clock
         // still runs, so it picks up where it should when it shows again.
         if isHidden || alpha < 0.01 || (parent.map { $0.isHidden || $0.alpha < 0.01 } ?? false) { return }
-        if sinceDraw >= interval { draw() }
+        if pacer.claimRedraw(frame: dt) { paint() }
     }
 
     /// Redraws now, whatever the interval says.
     func draw() {
-        sinceDraw = 0
+        pacer.restart()
+        paint()
+    }
+
+    private func paint() {
         canvas.settings = baseSettings
         canvas.settings.intensity = intensity
         canvas.begin(WireCamera(position: Vec3(0, 0, distance), target: .zero, fov: fov))
         render(Frame(t: clock, canvas: canvas))
         canvas.end()
+    }
+}
+
+// MARK: - Frame pacing
+
+/// Spaces redraws `interval` seconds apart on a clock that advances once a frame.
+///
+/// The obvious version — redraw once the time since the last redraw reaches the
+/// interval, then zero it — runs a nominal 30 Hz anywhere between 20 and 30. Two 60 Hz
+/// frames add up to exactly 1/30 s, so the slightest jitter in frame time leaves the sum
+/// a hair short and the redraw slips to the third frame, and zeroing throws away the
+/// overshoot: a spinning body judders between two- and three-frame steps. Subtracting
+/// the interval instead keeps the average right but not the steps, because every slot
+/// still falls exactly on a frame boundary and jitter still decides which side.
+///
+/// So a slot is taken on the frame nearest to it, within half a frame either side, and
+/// the next slot is one interval on from that one. Jitter only moves the remainder by
+/// its own size, far from the half-frame line, so the cadence locks: every second frame
+/// at 60 Hz, every fourth at 120. A redraw more than half a frame late — a hitch, a
+/// stall, a body that was hidden — starts the schedule afresh from that frame instead
+/// of catching up in a burst.
+nonisolated struct FramePacer {
+    let interval: Float
+    /// Time since the last slot taken; the next is due an interval after it. Starts a
+    /// little negative when that slot was taken a fraction of a frame early.
+    private var sinceSlot: Float = 0
+    private var forced = true
+
+    init(interval: Float) {
+        self.interval = max(0, interval)
+    }
+
+    /// Runs the clock on by a frame, whether or not anything is drawn on it.
+    mutating func advance(by dt: Float) {
+        sinceSlot += dt
+    }
+
+    /// Whether to redraw on the frame just advanced over, `dt` long. A yes takes the
+    /// slot, so ask once a frame, and only when a redraw would follow.
+    mutating func claimRedraw(frame dt: Float) -> Bool {
+        if forced {
+            restart()
+            return true
+        }
+        let tolerance = min(dt, interval) / 2
+        guard sinceSlot + tolerance >= interval else { return false }
+        sinceSlot -= interval
+        if sinceSlot > tolerance { sinceSlot = 0 }
+        return true
+    }
+
+    /// Restarts the schedule from a redraw made out of turn.
+    mutating func restart() {
+        forced = false
+        sinceSlot = 0
+    }
+
+    /// Makes the next frame that asks redraw, whatever the schedule says.
+    mutating func force() {
+        forced = true
     }
 }
 

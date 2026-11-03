@@ -230,13 +230,13 @@
         "cs": {
           "stringUnit": {
             "state": "translated",
-            "value": "REKORD  %lld"
+            "value": "REKORD  %@"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "BEST  %lld"
+            "value": "BEST  %@"
           }
         }
       }
@@ -246,13 +246,13 @@
         "cs": {
           "stringUnit": {
             "state": "translated",
-            "value": "REKORD  %lld  ·  KOLO %lld"
+            "value": "REKORD  %@  ·  KOLO %lld"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "BEST  %lld  ·  ROUND %lld"
+            "value": "BEST  %@  ·  ROUND %lld"
           }
         }
       }
@@ -445,6 +445,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "TOTAL SCORE"
+          }
+        }
+      }
+    },
+    "gameOver.endlessTitle": {
+      "localizations": {
+        "cs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BĚH SKONČIL"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RUN OVER"
           }
         }
       }
@@ -726,13 +742,13 @@
         "cs": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOVÝ REKORD  +%lld"
+            "value": "NOVÝ REKORD  +%@"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "NEW BEST  +%lld"
+            "value": "NEW BEST  +%@"
           }
         }
       }

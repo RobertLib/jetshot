@@ -40,6 +40,10 @@ class SoundManager: NSObject {
     /// The last level track selected, which a one-off track hands back to when it ends.
     private var rotationResource: String?
 
+    /// The last track that stopped playing on its own, and when. See
+    /// `audioPlayerDidFinishPlaying(_:successfully:)`.
+    private var lastMusicFailure: (resource: String, time: CFTimeInterval)?
+
     /// Exposed so `jetshotTests` can assert every track is actually in the bundle.
     /// A renamed or unbundled track is otherwise silent at runtime, which is exactly
     /// how five sound effects once shipped referencing files that were never added.
@@ -172,6 +176,20 @@ class SoundManager: NSObject {
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        // The media server restarting (it crashed, or Settings › Developer › Reset Media
+        // Services). See `handleMediaServicesWereReset()`.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(mediaServicesWereReset),
+            name: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance()
+        )
     }
 
     /// Puts the session in `.ambient`, once, before anything plays.
@@ -196,6 +214,104 @@ class SoundManager: NSObject {
         }
     }
 
+    // MARK: - Session activation
+
+    /// Whether the shared session is active, as far as this manager has asked for it.
+    private enum SessionState {
+        case inactive, activating, active
+    }
+    private var sessionState: SessionState = .inactive
+
+    /// Bumped by every activation request and by everything that deactivates the
+    /// session, so an activation that finishes after it has been overtaken is ignored.
+    private var activationRequest = 0
+
+    /// The music start waiting on the activation in flight. Only the latest is kept: a
+    /// newer request is for a newer player, or the same one.
+    private var pendingMusicStart: (() -> Void)?
+
+    /// Where `setActive(true)` runs.
+    ///
+    /// It used to run on the main thread, on the way into every track and after every
+    /// interruption, and iOS 27 logs a warning for exactly that: activation is a
+    /// round trip to the audio server, and it can stall the frame that asks for it.
+    private static let sessionQueue = DispatchQueue(label: "com.jetshot.audioSession", qos: .userInitiated)
+
+    /// Starts `player` once the session is active: straight away when it already is,
+    /// otherwise after an activation off the main thread. Playback still follows
+    /// activation, as it did when the two ran back to back on the main thread.
+    ///
+    /// Asked of the current music player only, and checked again as it starts: the
+    /// music may have been switched off, or the player replaced, while it waited.
+    private func startPlayback(of player: AVAudioPlayer, crossfade: Bool = false) {
+        let start = { [weak self, weak player] in
+            guard let self = self, let player = player, player === self.musicPlayer,
+                  self.isMusicEnabled, !player.isPlaying else { return }
+            player.play()
+            if crossfade {
+                player.setVolume(self.musicVolume, fadeDuration: Self.crossfadeIn)
+            }
+        }
+        guard sessionState != .active else {
+            start()
+            return
+        }
+        pendingMusicStart = start
+        activateSession()
+    }
+
+    /// Activates the session on `sessionQueue`, then starts whatever music is waiting.
+    ///
+    /// Once is enough until something deactivates it (`sessionDidDeactivate()`), so a
+    /// change of track or screen no longer pays for an activation at all.
+    private func activateSession() {
+        guard sessionState == .inactive else { return }
+        sessionState = .activating
+        activationRequest += 1
+        let request = activationRequest
+        Self.sessionQueue.async { [weak self] in
+            let failure: (any Error)?
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+                failure = nil
+            } catch {
+                failure = error
+            }
+            DispatchQueue.main.async {
+                self?.sessionActivationDidFinish(request: request, failure: failure)
+            }
+        }
+    }
+
+    private func sessionActivationDidFinish(request: Int, failure: (any Error)?) {
+        // Overtaken: an interruption or a reset has deactivated the session since it was
+        // asked for, and whatever plays next asks again.
+        guard request == activationRequest, sessionState == .activating else { return }
+        let start = pendingMusicStart
+        pendingMusicStart = nil
+        if let failure = failure {
+            // No music rather than playback on a session that refused to start. The next
+            // screen, or the game coming back to the front, asks again.
+            sessionState = .inactive
+            #if DEBUG
+            print("❌ Could not activate the audio session: \(failure)")
+            #endif
+            return
+        }
+        sessionState = .active
+        start?()
+    }
+
+    /// The system has deactivated the session (an interruption, the app going into the
+    /// background, where it is suspended) or torn it down (a media-services reset), so
+    /// the next playback has to activate it again. Anything waiting on an activation in
+    /// flight is dropped with it.
+    private func sessionDidDeactivate() {
+        sessionState = .inactive
+        pendingMusicStart = nil
+        activationRequest += 1
+    }
+
     /// Picks the music back up when the player returns to the game.
     ///
     /// Only a player that already exists is touched: with none, nothing has asked for
@@ -207,6 +323,13 @@ class SoundManager: NSObject {
         resumeMusic()
     }
 
+    /// A suspended app's session is deactivated by the system, without a word. Noted
+    /// here, so the music coming back with the game activates it first rather than
+    /// assuming it never went. See `startPlayback(of:crossfade:)`.
+    @objc private func handleAppDidEnterBackground() {
+        sessionDidDeactivate()
+    }
+
     @objc private func handleAudioSessionInterruption(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -215,6 +338,8 @@ class SoundManager: NSObject {
         switch type {
         case .began:
             musicPlayer?.pause()
+            // The interruption has taken the session; the way back in reactivates it.
+            sessionDidDeactivate()
         case .ended:
             let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
@@ -225,16 +350,43 @@ class SoundManager: NSObject {
             // in front — otherwise `handleAppDidBecomeActive()` does it on the way back.
             guard options.contains(.shouldResume)
                     || UIApplication.shared.applicationState == .active else { return }
-            do {
-                try AVAudioSession.sharedInstance().setActive(true)
-            } catch {
-                #if DEBUG
-                print("❌ Could not reactivate audio session after interruption: \(error)")
-                #endif
-            }
+            // Reactivates the session, off the main thread, and then plays.
             resumeMusic()
         @unknown default:
             break
+        }
+    }
+
+    /// Hops to the main thread, where every player here lives. AVFAudio does not say
+    /// which thread this notification arrives on.
+    @objc nonisolated private func mediaServicesWereReset() {
+        Task { @MainActor [weak self] in
+            self?.handleMediaServicesWereReset()
+        }
+    }
+
+    /// The media server has restarted, and everything made before it is gone.
+    ///
+    /// Every `AVAudioPlayer` is dead and the session is back at its defaults —
+    /// `.soloAmbient`, inactive. None of that was noticed: the category stayed wrong,
+    /// so the next effect stopped the player's own music (what `configureAudioSession()`
+    /// exists to prevent); the detached cues went silent for good; and
+    /// `ensurePlaying` went on calling `play()` on a dead music player. As QA1749 asks,
+    /// everything is rebuilt instead: the category set again, the effects and their
+    /// players made anew, and the music, if there was any, started on a fresh player.
+    private func handleMediaServicesWereReset() {
+        let hadMusic = musicPlayer != nil
+        sessionDidDeactivate()
+        configureAudioSession()
+        // Released rather than stopped: there is nothing left behind them to stop.
+        musicPlayer = nil
+        musicPlayerResource = nil
+        fadingMusicPlayer = nil
+        preloadSounds()
+        // Only if there was music to bring back, as `handleAppDidBecomeActive()` does;
+        // `startBackgroundMusic()` honours the music switch.
+        if hadMusic {
+            startBackgroundMusic()
         }
     }
 
@@ -731,11 +883,14 @@ class SoundManager: NSObject {
         musicPlayer?.stop()
         musicPlayer = nil
         musicPlayerResource = nil
+        pendingMusicStart = nil
         stopFadingMusic()
     }
 
     func pauseMusic() {
         musicPlayer?.pause()
+        // Nor may a start still waiting on the session go ahead once it is ready.
+        pendingMusicStart = nil
         // Or a track still fading out plays on for a moment after the switch is off.
         stopFadingMusic()
     }
@@ -750,7 +905,7 @@ class SoundManager: NSObject {
     /// or in a new one when the player holds another track or there is none.
     private func ensurePlaying(_ resource: String) {
         if let player = musicPlayer, musicPlayerResource == resource {
-            if !player.isPlaying { player.play() }
+            if !player.isPlaying { startPlayback(of: player) }
             return
         }
         play(resource: resource)
@@ -797,8 +952,9 @@ class SoundManager: NSObject {
         }
 
         do {
-            // The category is set once, in `configureAudioSession()`.
-            try AVAudioSession.sharedInstance().setActive(true)
+            // The category is set once, in `configureAudioSession()`, and the session is
+            // activated on the way into playback, off the main thread — see
+            // `startPlayback(of:crossfade:)`.
 
             // Stop the outgoing player explicitly rather than relying on it being
             // torn down when the property is reassigned.
@@ -815,15 +971,13 @@ class SoundManager: NSObject {
             player.prepareToPlay()
             // Coming in under a track that is fading out (the end of a story film):
             // rise under it rather than land at full volume on top of it.
-            if fadingMusicPlayer != nil {
+            let crossfade = fadingMusicPlayer != nil
+            if crossfade {
                 player.volume = 0
-                player.play()
-                player.setVolume(musicVolume, fadeDuration: Self.crossfadeIn)
-            } else {
-                player.play()
             }
             musicPlayer = player
             musicPlayerResource = resource
+            startPlayback(of: player, crossfade: crossfade)
         } catch {
             #if DEBUG
             print("❌ Could not play music file \(resource).\(Self.musicExtension): \(error)")
@@ -840,16 +994,38 @@ class SoundManager: NSObject {
 // MARK: - AVAudioPlayerDelegate
 
 extension SoundManager: AVAudioPlayerDelegate {
+    /// How soon a track that failed again is given up on, rather than retried.
+    private static let musicRetryWindow: CFTimeInterval = 10
+
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        // Players loop indefinitely (numberOfLoops = -1), so reaching here at all
-        // means playback stopped for some reason other than the track ending.
-        // Restart the current track rather than advancing: which track plays is a
-        // property of the level, decided by setMusicForLevel(_:).
+        // Music players loop forever (`numberOfLoops = -1`) and `stop()` does not come
+        // through here, so a track never arrives by running out: it stopped, and a false
+        // `flag` says why — the file could not be decoded. This used to return unless
+        // `flag` was true, which is the one case that cannot happen, so the restart
+        // below never ran and a decode failure left the music silent.
         //
         // Only for the current player: one already let go of (a fading one) ending says
         // nothing about the track that should be playing now.
-        guard flag, player === musicPlayer, isMusicEnabled,
-              let resource = currentMusicResource else { return }
+        guard player === musicPlayer else { return }
+
+        // Let go of either way. Left in place, `ensurePlaying` would keep calling `play()`
+        // on a player that has given up, as if it were merely paused.
+        musicPlayer = nil
+        musicPlayerResource = nil
+        guard isMusicEnabled, let resource = currentMusicResource else { return }
+
+        // The same track again, on a fresh player — which track plays is the level's,
+        // decided by `setMusicForLevel(_:)`. But once only: a file that cannot be decoded
+        // fails again at once, and restarting on every failure would rebuild and fail
+        // in a tight loop on the main thread. After a second failure inside the window
+        // the music stays off until the next screen asks for it, which is retry enough.
+        let now = CACurrentMediaTime()
+        let previous = lastMusicFailure
+        lastMusicFailure = (resource, now)
+        if let previous = previous, previous.resource == resource,
+           now - previous.time < Self.musicRetryWindow {
+            return
+        }
         play(resource: resource)
     }
 }

@@ -17,12 +17,16 @@ pause menu and settings (music, sound and haptics, each switchable on its own).
 Data: the game stores progress (completed levels, scores, star ratings, weapon
 loadouts, earned medals and endless records) in UserDefaults and mirrors it to
 NSUbiquitousKeyValueStore. It also stores and syncs a progress reset counter
-(progressEpoch), so that older progress on another device cannot undo a reset.
-These values follow the player's own iCloud account across their devices. They
-are the only data that leaves the device, go to the user's own iCloud and nowhere
-else, and are not accessible to the developer. The iCloud key-value entitlement
-in jetshot.entitlements is there for exactly this. With no iCloud account signed
-in the game works normally against local storage.
+(progressEpoch) and the time of the last reset (progressResetAt), so that older
+progress on another device cannot undo a reset; in iCloud each progress value is
+accompanied by a small key holding the reset counter it was saved under (for
+example completedLevels.epoch). A local-only timestamp (progressStartedAt)
+records when the device's current progress began; it is never synced. The synced
+values follow the player's own iCloud account across their devices. They are the
+only data that leaves the device, go to the user's own iCloud and nowhere else,
+and are not accessible to the developer. The iCloud key-value entitlement in
+jetshot.entitlements is there for exactly this. With no iCloud account signed in
+the game works normally against local storage.
 
 Age rating: 4+. The game is an abstract arcade shooter — the ships, enemies and
 explosions are drawn as geometric vector shapes, there are no characters, no

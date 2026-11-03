@@ -12,6 +12,11 @@ import AVFoundation
 ///
 /// Driven against the real `SoundManager.shared`, so the music genuinely plays in the
 /// test host. The music switch is persisted, so every test puts it back as it found it.
+///
+/// The session is activated off the main thread before a track starts (see
+/// `SoundManager.startPlayback(of:crossfade:)`), so whether a player is *playing* is
+/// waited for rather than read on the next line; which player holds which track is
+/// still decided synchronously.
 @MainActor
 final class MusicPlaybackTests: XCTestCase {
 
@@ -50,7 +55,7 @@ final class MusicPlaybackTests: XCTestCase {
 
             XCTAssertEqual(sound.musicPlayerResource, tracks[1],
                            "the music came back on with the previous level's track")
-            XCTAssertEqual(sound.musicPlayer?.isPlaying, true)
+            XCTAssertTrue(waitUntil { sound.musicPlayer?.isPlaying == true })
         }
     }
 
@@ -108,12 +113,13 @@ final class MusicPlaybackTests: XCTestCase {
         try withMusicOn { sound in
             sound.setMusicForLevel(2)
             let player = try XCTUnwrap(sound.musicPlayer)
+            XCTAssertTrue(waitUntil { player.isPlaying }, "the track never started, so this proves nothing")
 
             postInterruption(.began)
             XCTAssertFalse(player.isPlaying, "the interruption did not pause the music, so this proves nothing")
 
             postInterruption(.ended)
-            XCTAssertTrue(player.isPlaying, "the music stayed paused after the interruption ended")
+            XCTAssertTrue(waitUntil { player.isPlaying }, "the music stayed paused after the interruption ended")
         }
     }
 
@@ -123,16 +129,83 @@ final class MusicPlaybackTests: XCTestCase {
         try withMusicOn { sound in
             sound.setMusicForLevel(2)
             let player = try XCTUnwrap(sound.musicPlayer)
+            XCTAssertTrue(waitUntil { player.isPlaying }, "the track never started, so this proves nothing")
 
             postInterruption(.began)
             XCTAssertFalse(player.isPlaying)
 
             NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
-            XCTAssertTrue(player.isPlaying, "the music stayed paused after the game came back to the front")
+            XCTAssertTrue(waitUntil { player.isPlaying }, "the music stayed paused after the game came back to the front")
+        }
+    }
+
+    // MARK: - Failures
+
+    /// A media-services reset kills every player and puts the session back to
+    /// `.soloAmbient`. Nothing noticed: the next effect stopped the player's own music,
+    /// the detached cues stayed silent and the music player stayed dead.
+    func testAMediaServicesResetRebuildsTheAudio() throws {
+        try withMusicOn { sound in
+            sound.preloadSounds()
+            sound.setMusicForLevel(6)
+            let oldMusic = try XCTUnwrap(sound.musicPlayer)
+            let oldClick = try XCTUnwrap(sound.detachedPlayers["button-click.mp3"])
+            XCTAssertTrue(waitUntil { oldMusic.isPlaying }, "the track never started, so this proves nothing")
+
+            // What the reset leaves behind.
+            try AVAudioSession.sharedInstance().setCategory(.soloAmbient)
+            NotificationCenter.default.post(name: AVAudioSession.mediaServicesWereResetNotification,
+                                            object: AVAudioSession.sharedInstance())
+
+            XCTAssertTrue(waitUntil { sound.musicPlayer !== oldMusic && sound.musicPlayer?.isPlaying == true },
+                          "the music did not come back on a fresh player")
+            XCTAssertEqual(sound.musicPlayerResource, tracks[5], "the music came back on another track")
+            XCTAssertEqual(AVAudioSession.sharedInstance().category, .ambient,
+                           "the session was left in the category the reset put it in")
+            XCTAssertFalse(sound.detachedPlayers["button-click.mp3"] === oldClick,
+                           "the detached cues were left on their dead players")
+            oldMusic.stop()
+        }
+    }
+
+    /// A looping player only ever reports finishing when it could not decode its file.
+    /// That case used to be ignored outright; it is retried once, on a fresh player, and
+    /// a second failure straight after is left alone rather than retried in a loop.
+    func testAFailedTrackIsRetriedOnceNotForever() throws {
+        try withMusicOn { sound in
+            sound.setMusicForLevel(7)
+            let first = try XCTUnwrap(sound.musicPlayer)
+
+            sound.audioPlayerDidFinishPlaying(first, successfully: false)
+            let retry = try XCTUnwrap(sound.musicPlayer, "a decode failure left the music off without a retry")
+            XCTAssertFalse(retry === first, "the failed player was kept rather than replaced")
+            XCTAssertEqual(sound.musicPlayerResource, tracks[6])
+
+            sound.audioPlayerDidFinishPlaying(retry, successfully: false)
+            XCTAssertNil(sound.musicPlayer, "a track failing again at once was retried again")
+
+            // Here they decode perfectly well, and may be playing; a real failure has stopped.
+            first.stop()
+            retry.stop()
+
+            // The next screen asks for the music again, and gets it.
+            sound.startBackgroundMusic()
+            XCTAssertEqual(sound.musicPlayerResource, tracks[6])
+            XCTAssertTrue(waitUntil { sound.musicPlayer?.isPlaying == true })
         }
     }
 
     // MARK: - Helpers
+
+    /// Turns the run loop until `condition` holds — the session activation hops off the
+    /// main thread and back — or two seconds pass. Returns the final answer.
+    private func waitUntil(_ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        return condition()
+    }
 
     /// Runs `body` with the music switched on, then puts the switch back.
     private func withMusicOn(_ body: (SoundManager) throws -> Void) rethrows {

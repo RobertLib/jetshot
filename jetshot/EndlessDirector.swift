@@ -99,7 +99,8 @@ final class EndlessDirector {
 
     /// The roster, widening by tier. Each tier adds a pair of enemies that changes what
     /// the player has to do rather than just how much of it: tier 1 starts weaving, tier 3
-    /// starts charging and sniping, tier 6 starts splitting and teleporting.
+    /// starts charging and sniping, tier 6 starts phasing and splitting, tier 7 starts
+    /// bouncing and teleporting.
     private static let tiers: [[EnemyType]] = [
         [.basic, .fast],
         [.striker, .zigzag],

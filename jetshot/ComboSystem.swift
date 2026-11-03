@@ -133,6 +133,13 @@ final class ComboSystem {
     /// mid-animation.
     private var isMeterVisible: Bool = false
 
+    /// The multiplier and chain the meter's labels currently show; nil when they show
+    /// something else (a fresh meter, or "chain lost"). `refreshHUD` runs every frame of a
+    /// live chain, and it used to rebuild the localised hint, reset both labels and make
+    /// two colours on every one of them, for values that change only on a kill.
+    private var shownMultiplier: Int?
+    private var shownChain: Int?
+
     // MARK: - HUD
 
     private var meterNode: SKNode?
@@ -161,6 +168,8 @@ final class ComboSystem {
         meterNode?.removeFromParent()
         meterNode = nil
         isMeterVisible = false
+        shownMultiplier = nil
+        shownChain = nil
         multiplierLabel = nil
         chainLabel = nil
         decayFillContainer = nil
@@ -327,17 +336,26 @@ final class ComboSystem {
 
         showMeter()
 
-        multiplierLabel?.text = "x\(multiplier)"
-        multiplierLabel?.fontColor = Self.tierColor(forMultiplier: multiplier)
-        decayFill?.fillColor = Self.tierColor(forMultiplier: multiplier)
+        // The labels and colours only when what they show has changed; the decay bar
+        // below is the one part that moves every frame.
+        if multiplier != shownMultiplier {
+            shownMultiplier = multiplier
+            let color = Self.tierColor(forMultiplier: multiplier)
+            multiplierLabel?.text = "x\(multiplier)"
+            multiplierLabel?.fontColor = color
+            decayFill?.fillColor = color
+        }
 
-        if let next = ComboRules.nextTierChain(forChain: chain) {
-            chainLabel?.text = L10n.Combo.toNextTier(
-                remaining: next - chain,
-                multiplier: ComboRules.multiplier(forChain: next)
-            )
-        } else {
-            chainLabel?.text = L10n.Combo.chain(chain)
+        if chain != shownChain {
+            shownChain = chain
+            if let next = ComboRules.nextTierChain(forChain: chain) {
+                chainLabel?.text = L10n.Combo.toNextTier(
+                    remaining: next - chain,
+                    multiplier: ComboRules.multiplier(forChain: next)
+                )
+            } else {
+                chainLabel?.text = L10n.Combo.chain(chain)
+            }
         }
 
         let window = currentWindow
@@ -364,6 +382,9 @@ final class ComboSystem {
         multiplierLabel?.fontColor = UITheme.Colors.dangerRed
         chainLabel?.text = L10n.Combo.lost
         decayFillContainer?.xScale = 0.001
+        // The labels no longer show the chain, so the next one has to repaint them.
+        shownMultiplier = nil
+        shownChain = nil
 
         // Held briefly before it goes, so the player reads what they just lost rather
         // than only noticing the meter is missing.

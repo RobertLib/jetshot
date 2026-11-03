@@ -116,4 +116,72 @@ final class SniperLockOnTests: XCTestCase {
         harness.spin(0.8)
         XCTAssertTrue(enemyRounds(in: harness).isEmpty, "a sniper fired after it was gone")
     }
+
+    /// The reticle sits on the playfield and the shot is scheduled on the sniper, which
+    /// SLOW MO runs at half speed. On separate clocks the lock flashed at 0.8 s and was
+    /// gone by 1.0 s, with the round still to come at 1.6 s.
+    @MainActor
+    func testReticleRunsOnASlowedSnipersClock() {
+        let harness = GameplayHarness()
+        harness.startPlaying()
+        defer { harness.teardown() }
+
+        harness.player.removeAllActions()
+        harness.player.position = CGPoint(x: 200, y: 200)
+
+        let sniper = addSniper(to: harness, at: CGPoint(x: 200, y: 700))
+        // What `GameScene.applySlowMotion` does to every live enemy.
+        sniper.speed = 0.5
+        sniper.shoot()
+
+        guard let reticle = harness.node(named: reticleName) else {
+            return XCTFail("the sniper fired without a lock-on reticle")
+        }
+
+        // Past the end of an unslowed lock and its exit, short of the slowed shot.
+        harness.spin(1.15)
+        XCTAssertTrue(enemyRounds(in: harness).isEmpty, "precondition: the slowed shot came early")
+        XCTAssertNotNil(reticle.parent, "the reticle ran its lock at full speed and left long before the shot")
+
+        // The shot leaves at the end of the slowed lock, and the reticle is still up then,
+        // flashing the lock.
+        let deadline = Date().addingTimeInterval(1.5)
+        while Date() < deadline, enemyRounds(in: harness).isEmpty {
+            harness.spin(0.02)
+        }
+        XCTAssertEqual(enemyRounds(in: harness).count, 1, "the slowed sniper never fired")
+        XCTAssertNotNil(reticle.parent, "the reticle was gone before the shot it announces")
+
+        harness.spin(0.8)
+        XCTAssertNil(reticle.parent, "the reticle stayed on the playfield after its lock")
+    }
+
+    /// A frozen sniper is alive but its shot never comes: the shot is an action on it, and
+    /// a freeze only ends in the detonation. Its reticle must not flash a lock for it.
+    @MainActor
+    func testReticleGoesWithASniperFrozenMidLock() {
+        let harness = GameplayHarness()
+        harness.startPlaying()
+        defer { harness.teardown() }
+
+        harness.player.removeAllActions()
+        harness.player.position = CGPoint(x: 200, y: 200)
+
+        let sniper = addSniper(to: harness, at: CGPoint(x: 200, y: 700))
+        sniper.shoot()
+
+        guard let reticle = harness.node(named: reticleName) else {
+            return XCTFail("the sniper fired without a lock-on reticle")
+        }
+
+        harness.spin(0.2)
+        sniper.freeze(duration: 5)
+        harness.spin(0.2)
+
+        XCTAssertNotNil(sniper.parent, "precondition: the frozen sniper is still on the playfield")
+        XCTAssertNil(reticle.parent, "a frozen sniper's reticle stayed up to flash a lock on a shot that is not coming")
+
+        harness.spin(0.8)
+        XCTAssertTrue(enemyRounds(in: harness).isEmpty, "a frozen sniper fired")
+    }
 }

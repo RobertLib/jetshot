@@ -54,6 +54,11 @@ class EnemyManager {
 
     /// Longest the queue will wait on a formation before moving on regardless — a
     /// backstop, well past the ~8.5 s the largest formation needs to enter and attack.
+    ///
+    /// Measured on the clock `update(currentTime:)` is ticked with, as is the formation's
+    /// own attack delay (`FormationManager`). In `GameScene` that is `spawnClock`, which
+    /// SLOW MO slows along with the formation's flight — on the full-rate clock, a big
+    /// formation entering at half speed could outlast this hold before it attacked.
     private static let maxFormationHold: TimeInterval = 12
 
     init(scene: SKScene, waves: [EnemyWave]) {
@@ -67,6 +72,9 @@ class EnemyManager {
         }
     }
 
+    /// Advances the queue to `currentTime`, which must always come from the same clock —
+    /// every interval here is a difference between two readings of it. `GameScene` passes
+    /// its `spawnClock`; `appendWaves(_:currentTime:)` must be handed the same.
     func update(currentTime: TimeInterval) {
         guard scene != nil else { return }
 

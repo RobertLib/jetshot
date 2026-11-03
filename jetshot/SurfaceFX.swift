@@ -33,8 +33,11 @@ enum SurfaceFX {
         // Baked into one cached texture rather than an SKCropNode full of stripe
         // shapes: a crop node costs an offscreen render pass per obstacle, and
         // obstacle-heavy levels put several on screen at once.
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
         let key = "hazard|\(Int(size.width))x\(Int(size.height))|\(Int(cornerRadius))"
             + "|\(Int(alpha * 100))|\(Int(stripeWidth))"
+            + "|\(Int(r * 255))_\(Int(g * 255))_\(Int(b * 255))_\(Int(a * 255))"
 
         let texture: SKTexture
         if let cached = textureCache[key] {

@@ -96,6 +96,11 @@ final class SettingsOverlay: SKNode {
 
     // MARK: - Construction
 
+    /// Laid out once, for the size it opens at, and never again. Nothing resizes a scene
+    /// after it has arrived: the app is portrait-only and full-screen
+    /// (`UIRequiresFullScreen`), and the first scene waits for the real screen (see
+    /// `GameViewController.viewDidLayoutSubviews()`).
+    ///
     /// - Parameter sceneSize: used to size the full-screen scrim.
     init(sceneSize: CGSize, onDismiss: (() -> Void)? = nil) {
         self.onDismiss = onDismiss

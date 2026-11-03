@@ -71,9 +71,6 @@ class Asteroid: SKShapeNode {
     var movementCompletion: (() -> Void)?
     var hasCompletedMovement: Bool = false
 
-    // Visual properties
-    private var vertexCount: Int = 0
-
     init(sceneSize: CGSize, scene: SKScene, size: AsteroidSize = .large, startPosition: CGPoint? = nil) {
         self.asteroidSize = size
         self.sceneSize = sceneSize
@@ -96,38 +93,12 @@ class Asteroid: SKShapeNode {
     }
 
     private func setupAsteroid(sceneSize: CGSize, startPosition: CGPoint?) {
-        // Create irregular asteroid shape
         let baseRadius = asteroidSize.baseSize
-        self.vertexCount = Int.random(in: 8...12)
 
-        let path = CGMutablePath()
-        var points: [CGPoint] = []
-
-        for i in 0..<vertexCount {
-            let angle = (CGFloat(i) / CGFloat(vertexCount)) * 2 * .pi
-            // Add randomness to radius for irregular shape
-            let radiusVariation = CGFloat.random(in: 0.7...1.0)
-            let radius = baseRadius * radiusVariation
-
-            let x = cos(angle) * radius
-            let y = sin(angle) * radius
-            points.append(CGPoint(x: x, y: y))
-        }
-
-        // Create path from points
-        if let firstPoint = points.first {
-            path.move(to: firstPoint)
-            for point in points.dropFirst() {
-                path.addLine(to: point)
-            }
-            path.closeSubpath()
-        }
-
-        self.path = path
-
-        // The polygon is the physics outline only. What is drawn is a rock in real 3D,
-        // tumbling on its own axis in the films' light-tube wireframe, over a dark body
-        // that keeps the world's lines from showing through it.
+        // The node's own path is never drawn: it is the hitbox's outline (see below).
+        // What is drawn is a rock in real 3D, tumbling on its own axis in the films'
+        // light-tube wireframe, over a dark body that keeps the world's lines from
+        // showing through it.
         let strokeColor = Self.rockColor
         self.fillColor = .clear
         self.strokeColor = .clear
@@ -157,6 +128,10 @@ class Asteroid: SKShapeNode {
         rock.zPosition = 1
         addChild(rock)
 
+        let hitRadius = Self.hitRadius(of: mesh)
+        self.path = CGPath(ellipseIn: CGRect(x: -hitRadius, y: -hitRadius, width: hitRadius * 2, height: hitRadius * 2),
+                           transform: nil)
+
         // Position at top or specific position
         if let startPos = startPosition {
             self.position = startPos
@@ -166,7 +141,7 @@ class Asteroid: SKShapeNode {
         }
 
         // Setup physics
-        self.physicsBody = SKPhysicsBody(polygonFrom: path)
+        self.physicsBody = SKPhysicsBody(circleOfRadius: hitRadius)
         self.physicsBody?.isDynamic = true
         self.physicsBody?.categoryBitMask = PhysicsCategory.asteroid
         self.physicsBody?.contactTestBitMask = PhysicsCategory.bullet | PhysicsCategory.player
@@ -181,11 +156,29 @@ class Asteroid: SKShapeNode {
         )
         self.run(SKAction.repeatForever(rotateAction))
 
-        // Only a faint halo: rock is not a light source.
-        GlowHelper.addEnhancedGlow(to: self, color: strokeColor, intensity: 0.16)
+        // Only a faint halo: rock is not a light source. Bloomed from a disc the size of
+        // the dark body, the same for every rock of a size, rather than from this rock's
+        // own outline: see `GlowHelper.addRoundGlow`.
+        GlowHelper.addRoundGlow(to: self, radius: baseRadius * 0.85, color: strokeColor, intensity: 0.16)
 
         self.name = "asteroid"
         self.zPosition = 10
+    }
+
+    /// The rock's hitbox radius: the mean distance of its mesh's vertices from the
+    /// centre. A circle cannot follow a tumbling outline, but this is close to what the
+    /// outline averages over every orientation — about 5% inside it for the subdivided
+    /// large and medium rocks, about 5% (half a point) outside it for the coarser small
+    /// ones, whose flat faces make for a slimmer silhouette than their corners suggest.
+    ///
+    /// The hitbox used to be a second, unrelated random polygon, 8–12 vertices at
+    /// 0.7–1.0 of the base radius, so it agreed with the rock drawn over it only by
+    /// chance. It was also often concave and had more than eight vertices, and
+    /// `SKPhysicsBody(polygonFrom:)` accepts neither.
+    static func hitRadius(of mesh: WireMesh) -> CGFloat {
+        guard !mesh.vertices.isEmpty else { return 0 }
+        let total = mesh.vertices.reduce(Float(0)) { $0 + simd_length($1) }
+        return CGFloat(total / Float(mesh.vertices.count))
     }
 
     /// Sunlit stone, as light: warm enough to tell from every hostile's red and

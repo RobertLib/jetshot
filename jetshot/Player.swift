@@ -633,11 +633,17 @@ class Player: SKShapeNode {
     // degradePowerUps(), and a new level builds a fresh Player from the arsenal
     // GameScene hands it, so there is never a live ship whose power-ups need clearing.
 
+    /// Pulls the ship back inside the flight area after the scene changes size.
+    ///
+    /// Clamps to the same `flightBounds` that steering does, and only where the ship is
+    /// now outside them. It used to put the ship back at its starting height and keep it
+    /// 30 pt off the sides — tighter than the 10 pt steering allows — so a resize
+    /// yanked a ship flying higher up the screen back down to where the level began.
     func updateBounds(sceneSize: CGSize, safeAreaBottom: CGFloat) {
-        // Update player position to stay within new bounds
-        let playerHeight = safeAreaBottom + GameConfiguration.playerBottomOffset
-        let clampedX = max(30, min(sceneSize.width - 30, position.x))
-        position = CGPoint(x: clampedX, y: playerHeight)
+        let bounds = Self.flightBounds(sceneWidth: sceneSize.width, sceneHeight: sceneSize.height,
+                                       safeAreaBottom: safeAreaBottom)
+        position.x = min(max(position.x, bounds.minX), bounds.maxX)
+        position.y = min(max(position.y, bounds.minY), bounds.maxY)
     }
 
     private func updateLightningVisuals() {

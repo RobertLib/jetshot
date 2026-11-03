@@ -68,19 +68,56 @@ class MenuScene: SKScene {
             }
         }
 
+        // ENDLESS, its record and the shot counter are read from stored progress once,
+        // as the screen is built. See `progressDidChange()`.
+        NotificationCenter.default.addObserver(self, selector: #selector(progressDidChange),
+                                               name: .progressDidChange, object: nil)
+
         SoundManager.shared.startBackgroundMusic()
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
         // Not while leaving — see `LevelCompleteScene.didChangeSize(_:)`.
         guard isInitialized, !exit.isTaken else { return }
+        // Read again rather than reused: the insets are the view's, and a view that has
+        // just changed size may well have changed them too. The bars and the credits
+        // were rebuilt for the new size around the old insets.
+        if let view = view {
+            readSafeArea(from: view)
+        }
         removeAllChildren()
         buildScene(animated: false)
     }
 
     override func willMove(from view: SKView) {
+        NotificationCenter.default.removeObserver(self, name: .progressDidChange, object: nil)
         removeAllActions()
         removeAllChildren()
+    }
+
+    /// An iCloud merge has changed the stored progress while the menu is up.
+    ///
+    /// Whether ENDLESS is offered, the record under it and the shot counter are all read
+    /// once, as the screen is built, so a merge landing afterwards — typically the first
+    /// sync on a new device, seconds after launch — left the menu showing a cold start
+    /// to a player with a whole campaign behind them until they left it and came back.
+    /// It is rebuilt instead, the way a resize rebuilds it. Not once a way out has been
+    /// taken: the screen is leaving, and its last frames are not worth disturbing.
+    @objc private func progressDidChange() {
+        guard isInitialized, !exit.isTaken, view != nil else { return }
+        // Only for a merge that changed something this screen shows. A rebuild replays
+        // the stack's fade-in, which holds every button out of reach for half a second,
+        // and most merges — a better score on some level — change nothing here.
+        guard MenuProgress.stored != shownProgress else { return }
+        // The settings panel stands on its own and shows no progress, so it is carried
+        // across the rebuild rather than closed under the player's finger.
+        let settings = childNode(withName: SettingsOverlay.nodeName)
+        settings?.removeFromParent()
+        removeAllChildren()
+        buildScene(animated: false)
+        if let settings = settings {
+            addChild(settings)
+        }
     }
 
     override func update(_ currentTime: TimeInterval) {
@@ -115,9 +152,10 @@ class MenuScene: SKScene {
         // The furniture the films print over the picture: a running timecode, and the
         // campaign as a shot counter — the level the player is on, of fifty.
         let total = LevelManager.shared.totalLevels
-        let current = (1...total).last(where: { LevelManager.shared.isLevelUnlocked($0) }) ?? 1
+        let progress = MenuProgress.stored
+        shownProgress = progress
         let labels = frame.addFurniture(left: "00:00:00",
-                                        right: String(format: "%02d / %02d", current, total),
+                                        right: String(format: "%02d / %02d", progress.currentLevel, total),
                                         recording: true)
         timecodeLabel = labels.left
         timecodeStart = nil
@@ -127,6 +165,29 @@ class MenuScene: SKScene {
         setupButtons()
         setupCredits(bottomDepth: depths.bottom)
     }
+
+    /// Everything the menu shows of the stored progress: whether ENDLESS is offered, the
+    /// record under it and the shot counter. See `progressDidChange()`.
+    private struct MenuProgress: Equatable {
+        let endlessUnlocked: Bool
+        let bestScore: Int
+        let bestRound: Int
+        let currentLevel: Int
+
+        static var stored: MenuProgress {
+            let levels = LevelManager.shared
+            let records = levels.getEndlessRecords()
+            return MenuProgress(
+                endlessUnlocked: levels.isLevelCompleted(1),
+                bestScore: records.bestScore,
+                bestRound: records.bestRound,
+                currentLevel: (1...levels.totalLevels).last(where: { levels.isLevelUnlocked($0) }) ?? 1
+            )
+        }
+    }
+
+    /// What the screen was last built from.
+    private var shownProgress: MenuProgress?
 
     /// How much larger everything is drawn on a wide screen; 1 on every phone. See
     /// `FilmUI.uiScale(for:)`.
@@ -380,8 +441,14 @@ class MenuScene: SKScene {
 
     /// Hit-tests a menu button against its own outline, so nothing soft and glowing
     /// around it can widen what counts as a tap on it.
+    ///
+    /// Only a button that can be seen answers. The stack fades in half a second after
+    /// the screen arrives, and until then a tap on where a button was going to be
+    /// pressed it — ENDLESS, which leaves on touch-down, started a run before it had
+    /// even appeared. The same threshold as `FilmUI.button(at:under:names:)`.
     private func isTap(_ location: CGPoint, on buttonName: String) -> Bool {
         guard let button = childNode(withName: buttonName) as? SKShapeNode,
+              button.alpha > 0.05, !button.isHidden,
               let bounds = button.path?.boundingBoxOfPath else { return false }
         // Converting into the button's space keeps any scale on it honest.
         let local = convert(location, to: button)

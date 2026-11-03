@@ -31,6 +31,7 @@ class BossManager {
     /// drawn on purpose: it is what makes this machine recognisably itself, and a fair
     /// random draw can starve it for half a fight.
     private var drawsSinceSignature = 0
+    private static let signatureOverdue = 3
 
     /// Hosts the attack sequences in flight, so a phase change can stop all of them at
     /// once. A child of the boss, so it pauses and dies with it.
@@ -72,7 +73,12 @@ class BossManager {
         // A boss arriving in the middle of SLOW MO arrives slowed.
         newBoss.speed = timeScale
         boss = newBoss
-        drawsSinceSignature = 0
+        // Starts the fight with the signature already due, so it is the first draw: the
+        // first thing a boss does is what says which machine it is (see
+        // `BossArchetype.signature`). Starting the count at zero left the opening to a
+        // random draw from the whole first act.
+        drawsSinceSignature = Self.signatureOverdue
+        lastPatternIndex = nil
 
         let host = SKNode()
         host.name = "bossVolleys"
@@ -136,8 +142,9 @@ class BossManager {
     static var debugForcedPattern: BossAttackPattern?
     #endif
 
-    /// Draws the next attack, or nil if the boss has nothing available.
-    private func nextAttack() -> BossAttackPattern? {
+    /// Draws the next attack, or nil if the boss has nothing available. Internal rather
+    /// than private so `jetshotTests` can check what a fight opens with.
+    func nextAttack() -> BossAttackPattern? {
         guard let boss = boss else { return nil }
         #if DEBUG
         if let forced = Self.debugForcedPattern { return forced }
@@ -148,7 +155,8 @@ class BossManager {
 
         let signature = boss.config.archetype.signature
         var index = Int.random(in: 0..<available.count)
-        if drawsSinceSignature >= 3, let wanted = available.firstIndex(of: signature), wanted != lastPatternIndex {
+        if drawsSinceSignature >= Self.signatureOverdue, let wanted = available.firstIndex(of: signature),
+           wanted != lastPatternIndex {
             index = wanted
         } else if available.count > 1, let last = lastPatternIndex, index == last {
             // One deterministic step aside rather than a re-roll loop: it cannot spin,
@@ -1302,22 +1310,18 @@ class BossManager {
         guard let scene = scene else { return 0 }
         let width = scene.size.width
         let walls = min(6, 4 + tier / 2)
-        let spacing: CGFloat = 30
-        let slots = Int((width - 24) / spacing) + 1
-        let gapWidth = 3
-        var gap = Int.random(in: 1...max(1, slots - gapWidth - 1))
-        var gaps: [Int] = []
-        for _ in 0..<walls {
-            gaps.append(gap)
-            gap = min(max(0, gap + Int.random(in: -3...3)), slots - gapWidth)
-        }
+        let lattice = Self.latticeLayout(width: width)
+        let gapWidth = lattice.gapWidth
+        var generator = SystemRandomNumberGenerator()
+        let gaps = Self.latticeGaps(walls: walls, slots: lattice.xs.count, gapWidth: gapWidth,
+                                    drift: lattice.drift, using: &generator)
 
         volley(gaps.enumerated().map { n, gapStart in
             (n == 0 ? 0 : 0.55, { [weak self] in
                 guard let self = self, let boss = self.boss else { return }
                 let y = boss.position.y - boss.bossSize * 0.45
-                for i in 0..<slots where i < gapStart || i >= gapStart + gapWidth {
-                    self.createBullet(at: CGPoint(x: 12 + CGFloat(i) * spacing, y: y), angle: -.pi / 2, speed: 165)
+                for (i, x) in lattice.xs.enumerated() where i < gapStart || i >= gapStart + gapWidth {
+                    self.createBullet(at: CGPoint(x: x, y: y), angle: -.pi / 2, speed: 165)
                 }
                 // A line of light where the wall is drawn.
                 let flash = LightSprite.tube(from: CGPoint(x: 0, y: y), to: CGPoint(x: width, y: y), width: 1.4,
@@ -1330,6 +1334,50 @@ class BossManager {
             })
         })
         return Double(walls) * 0.55
+    }
+
+    /// Where a lattice wall's rounds sit across a screen `width`; how many of them the
+    /// gap leaves out (`gapWidth`); and how many it may move along between one wall and
+    /// the next (`drift`). Internal for `jetshotTests`.
+    ///
+    /// The rounds are centred, the outermost 12 pt in from each edge, two points inside
+    /// the ship's flight area, and are spaced so that no ship fits between two of them:
+    /// under twice the distance between a round's centre and the ship's at which the two
+    /// touch, with a point and a half to spare for the ship's lean and the frame-by-frame
+    /// steps of both. They used to start at x = 12 and step 30 pt whatever the width,
+    /// so the far end fell short — on a 375 pt phone the last round stood at 342, and a
+    /// ship pinned right at 365 sat out every wall — and between each two rounds lay a
+    /// 6 pt lane that no round reached, at the same x in every wall.
+    ///
+    /// The gap is sized in points, as it was at the old spacing: the rounds either side
+    /// of it at least 120 pt apart, and moving no more than 90 pt from wall to wall.
+    static func latticeLayout(width: CGFloat) -> (xs: [CGFloat], gapWidth: Int, drift: Int) {
+        let inset: CGFloat = 12
+        let contact = ProjectileFX.HostileKind.boss.hitRadius + Player.hitboxRadius
+        let maxSpacing = 2 * contact - 1.5
+        let span = width - 2 * inset
+        guard span > maxSpacing else { return ([width / 2], 0, 0) }
+        let slots = Int((span / maxSpacing).rounded(.up)) + 1
+        let spacing = span / CGFloat(slots - 1)
+        let xs = (0..<slots).map { inset + CGFloat($0) * spacing }
+        let gapWidth = min(slots - 1, Int((120 / spacing).rounded(.up)) - 1)
+        let drift = max(1, Int(90 / spacing))
+        return (xs, gapWidth, drift)
+    }
+
+    /// Where each of `walls` lattice walls' gap starts, as a slot index: the first clear
+    /// of both edges, each after it a random step of up to `drift` slots along from the
+    /// one before. Internal for `jetshotTests`.
+    static func latticeGaps<G: RandomNumberGenerator>(walls: Int, slots: Int, gapWidth: Int, drift: Int,
+                                                      using generator: inout G) -> [Int] {
+        let last = max(0, slots - gapWidth)
+        var gap = min(Int.random(in: 1...max(1, last - 1), using: &generator), last)
+        var gaps: [Int] = []
+        for _ in 0..<walls {
+            gaps.append(gap)
+            gap = min(max(0, gap + Int.random(in: -drift...drift, using: &generator)), last)
+        }
+        return gaps
     }
 
     /// Tesseract: folds out of space, unfolds at another station and fires a cross —

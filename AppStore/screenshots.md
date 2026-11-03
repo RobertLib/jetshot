@@ -80,12 +80,14 @@ The pipeline needs states that are hours of play apart, twice per locale, on two
 devices. `jetshot/DebugLaunch.swift` is the harness that produces them from launch
 arguments — the full list is in that file's header. The three worth knowing here:
 
-- **`-unlockall` is on every launch, and it is what makes this safe to run.** It
-  puts `CloudStorageManager` into a read-only demo mode for the life of the
-  process: progress is served from memory and every write to UserDefaults and to
-  iCloud becomes a no-op. Without it, thirty-odd launches of a fabricated
-  fifty-level save would be pushed to your own iCloud account and land on every
-  device signed into it.
+- **`-unlockall` is on every launch**, so every shot shows a finished game rather
+  than whatever the simulator last saved. What makes the run safe is that *any*
+  `DebugLaunch` argument puts `CloudStorageManager` into a read-only mode for the
+  life of the process: progress is served from memory — the finished game with
+  `-unlockall`, the device's own save without it — and every write to UserDefaults
+  and to iCloud becomes a no-op. Without that, thirty-odd launches of staged runs
+  would be saved as real progress and pushed to your own iCloud account, to land on
+  every device signed into it.
 - **`-autopilot` flies the ship**, steering through the same `isTouching` /
   `touchLocation` pair a real drag sets. That is not a detail: the guns only fire
   while a finger is down, so a still frame of an idle game has no bullets in it at
@@ -93,7 +95,7 @@ arguments — the full list is in that file's header. The three worth knowing he
 - **`-invincible`** because the bot is not good enough to survive level 43 for
   twelve seconds, let alone a 28-second recording.
 - **`-cool`** keeps the heat gauge empty. The bot holds the trigger down for the
-  whole run, which no player does, and since 1.0.8's faster guns unbroken fire
+  whole run, which no player does, and at the guns' current rate unbroken fire
   locks them out for 1.5 s every nine — a full arsenal with no bullets on screen.
 
 A chain lapses after 1.8 s, a shield lasts five, and the endless round banner is
@@ -131,7 +133,7 @@ Notes on the shots themselves, for when one needs retuning:
   picture. A menu is ready in four seconds; a level needs eleven for the waves to
   fill the screen; the boss needs nine — five for its warning, its entrance and the
   damage burst that puts it into its third act, then a few for the barrage to fill
-  the screen. Not more: eight barrels at 1.0.8's cadence finish it in about seven.
+  the screen. Not more: eight barrels at the current cadence finish it in about seven.
   The iPad waits twelve (`9/12` in `SHOTS`): its clock runs a few seconds behind,
   and at ten the Wraith was mid-blink at the edge of the screen in both locales.
 - **Every run starts on freshly booted simulators.** One that has been up for a

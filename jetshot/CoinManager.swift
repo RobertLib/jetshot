@@ -91,8 +91,12 @@ class CoinManager {
             gameScene = nil
         }
 
+        // One speed for the whole formation, so it falls as the shape it was laid out in:
+        // the speed its lowest coin, just above the top edge, has always fallen at.
+        let pace = Coin.fallSpeed(from: positions.map(\.y).min() ?? scene.size.height)
+
         for position in positions {
-            let coin = Coin(position: position)
+            let coin = Coin(position: position, fallSpeed: pace)
             parentNode.addChild(coin)
 
             // Register coin in cache for optimized magnet updates

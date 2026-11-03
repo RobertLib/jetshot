@@ -22,12 +22,16 @@ enum NeonFX {
         .cacheIntermediates: false
     ])
 
-    private static var bloomCache: [String: BloomTexture] = [:]
-    private static var radialCache: [String: SKTexture] = [:]
-    private static var gradeCache: [String: SKTexture] = [:]
-
-    /// Textures are small but numerous; keep the caches bounded.
+    /// Blooms and glows are numerous: one per distinct shape and colour. They are kept
+    /// small by rendering them at no more than 1–2x (see `softScale`), and bounded by
+    /// dropping whichever has gone longest unused once the cache is full, so a run of
+    /// one-off shapes cannot push out the shared ones every wave keeps asking for.
     private static let maxCacheEntries = 96
+    private static var bloomCache = LRUCache<String, BloomTexture>(capacity: maxCacheEntries)
+    private static var radialCache = LRUCache<String, SKTexture>(capacity: maxCacheEntries)
+    /// One entry per screen shape, and a session sees one or two (portrait and the odd
+    /// split-view size), so a handful is plenty.
+    private static var gradeCache = LRUCache<String, SKTexture>(capacity: 4)
 
     struct BloomTexture {
         let texture: SKTexture
@@ -41,6 +45,62 @@ enum NeonFX {
         bloomCache.removeAll()
         radialCache.removeAll()
         gradeCache.removeAll()
+    }
+
+    /// A bounded cache that, when full, evicts the entry least recently asked for.
+    ///
+    /// The caches here used to empty themselves completely on reaching their limit, so
+    /// a level's worth of one-off shapes threw out every shared bloom with them — enemy
+    /// types, coins, power-ups, the player's shield — and each paid for a blur and a GPU
+    /// readback again in the middle of a wave. Dropping one stale entry at a time keeps
+    /// whatever is in steady use resident however many strays pass through.
+    ///
+    /// Eviction scans for the oldest entry, which is linear, but only happens on a miss
+    /// in a full cache — and a miss is followed by rendering a texture, which dwarfs it.
+    nonisolated struct LRUCache<Key: Hashable, Value> {
+        let capacity: Int
+        private var entries: [Key: (value: Value, lastUse: UInt64)] = [:]
+        private var tick: UInt64 = 0
+
+        init(capacity: Int) {
+            self.capacity = max(1, capacity)
+        }
+
+        var count: Int { entries.count }
+
+        /// Whether `key` is cached, without counting as a use.
+        func contains(_ key: Key) -> Bool { entries[key] != nil }
+
+        /// The cached value, marking it as just used.
+        mutating func value(forKey key: Key) -> Value? {
+            guard let entry = entries[key] else { return nil }
+            tick &+= 1
+            entries[key] = (entry.value, tick)
+            return entry.value
+        }
+
+        mutating func insert(_ value: Value, forKey key: Key) {
+            tick &+= 1
+            if entries[key] == nil, entries.count >= capacity,
+               let oldest = entries.min(by: { $0.value.lastUse < $1.value.lastUse })?.key {
+                entries.removeValue(forKey: oldest)
+            }
+            entries[key] = (value, tick)
+        }
+
+        mutating func removeAll() {
+            entries.removeAll()
+        }
+    }
+
+    /// Render scale for a texture that is blurred or soft by construction.
+    ///
+    /// A Gaussian halo or a radial falloff has no detail finer than its blur, so the
+    /// device's 3x buys nothing but nine times the pixels: nine times the memory and
+    /// nine times the CoreImage work for a bloom, at its first use, mid-wave. Upscaled
+    /// with linear filtering it is indistinguishable.
+    private static func softScale(cap: CGFloat) -> CGFloat {
+        min(UIGraphicsImageRendererFormat.preferred().scale, cap)
     }
 
     // MARK: - Shape bloom
@@ -143,7 +203,7 @@ enum NeonFX {
               box.width > 0.01, box.height > 0.01 else { return nil }
 
         let key = "\(pathKey(path))|\(colorKey(color))|\(Int(blur * 4))|\(Int(spread * 4))"
-        if let cached = bloomCache[key] {
+        if let cached = bloomCache.value(forKey: key) {
             return BloomTexture(
                 texture: cached.texture,
                 size: cached.size,
@@ -151,12 +211,19 @@ enum NeonFX {
             )
         }
 
-        // Pad enough for the Gaussian tail (~3 sigma) plus the dilation.
+        // A blur of a few points or more leaves nothing a 1x texture cannot hold. A
+        // tighter one keeps some of the silhouette's edge, so it gets 2x.
+        let scale = softScale(cap: blur >= 3 ? 1 : 2)
+
+        // Pad enough for the Gaussian tail (~3 sigma) plus the dilation, then round up
+        // to whole pixels so the silhouette lands exactly in the middle of the texture.
         let padding = blur * 3 + spread + 2
-        let canvas = CGSize(width: box.width + padding * 2, height: box.height + padding * 2)
+        let canvas = CGSize(width: ((box.width + padding * 2) * scale).rounded(.up) / scale,
+                            height: ((box.height + padding * 2) * scale).rounded(.up) / scale)
         guard canvas.width < 2048, canvas.height < 2048 else { return nil }
 
         let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = scale
         format.opaque = false
         let renderer = UIGraphicsImageRenderer(size: canvas, format: format)
 
@@ -182,22 +249,21 @@ enum NeonFX {
         }
 
         guard let cgImage = image.cgImage else { return nil }
-        let scale = image.scale
 
         let input = CIImage(cgImage: cgImage)
         // `clampedToExtent` keeps the blur from darkening at the canvas border;
-        // the border is transparent, so it extends transparency outwards.
+        // the border is transparent, so it extends transparency outwards. The radius
+        // is in pixels, so it scales with the texture to stay `blur` points wide.
         let blurred = input
             .clampedToExtent()
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blur * scale])
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blur * image.scale])
             .cropped(to: input.extent)
 
         guard let output = ciContext.createCGImage(blurred, from: input.extent) else { return nil }
-        let texture = SKTexture(image: UIImage(cgImage: output, scale: scale, orientation: .up))
+        let texture = SKTexture(image: UIImage(cgImage: output, scale: image.scale, orientation: .up))
         texture.filteringMode = .linear
 
-        if bloomCache.count >= maxCacheEntries { bloomCache.removeAll() }
-        bloomCache[key] = BloomTexture(texture: texture, size: canvas, center: .zero)
+        bloomCache.insert(BloomTexture(texture: texture, size: canvas, center: .zero), forKey: key)
 
         return BloomTexture(
             texture: texture,
@@ -242,6 +308,26 @@ enum NeonFX {
         label.addChild(effect)
     }
 
+    /// The view a text bloom has already been rendered through once.
+    private static weak var textBloomWarmView: SKView?
+
+    /// Renders a throwaway text bloom through `view`, off screen, once per view.
+    ///
+    /// The first blurred `SKEffectNode` a renderer meets has CoreImage set up its blur
+    /// for it, which can cost a frame. A title screen absorbs that unnoticed, but the
+    /// first in-game banner lands mid-fight. The menus and the game all attach the
+    /// grade while they set up, with their view at hand, so that is where the cost is
+    /// paid instead — by the first menu, long before any banner.
+    private static func prewarmTextBloom(in view: SKView) {
+        guard textBloomWarmView !== view else { return }
+        textBloomWarmView = view
+        let label = SKLabelNode(fontNamed: UITheme.Typography.fontBold)
+        label.text = "0"
+        label.fontSize = 28
+        addTextBloom(to: label)
+        _ = view.texture(from: label)
+    }
+
     /// Uppercase, letter-spaced text. Tracking is the difference between a label
     /// that looks typed and one that looks designed.
     static func trackedText(
@@ -276,10 +362,13 @@ enum NeonFX {
 
     private static func radialTexture(color: UIColor, softness: CGFloat) -> SKTexture {
         let key = "\(colorKey(color))|\(Int(softness * 100))"
-        if let cached = radialCache[key] { return cached }
+        if let cached = radialCache.value(forKey: key) { return cached }
 
+        // A falloff with no edges anywhere in it: 128 pixels, stretched to whatever
+        // size the glow is drawn at, reads the same as the 384 that 3x would make.
         let side: CGFloat = 128
         let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = softScale(cap: 1)
         format.opaque = false
         let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { ctx in
             let cg = ctx.cgContext
@@ -313,8 +402,7 @@ enum NeonFX {
 
         let texture = SKTexture(image: image)
         texture.filteringMode = .linear
-        if radialCache.count >= maxCacheEntries { radialCache.removeAll() }
-        radialCache[key] = texture
+        radialCache.insert(texture, forKey: key)
         return texture
     }
 
@@ -426,6 +514,10 @@ enum NeonFX {
     /// Costs one full-screen blended sprite and buys most of the "this was art
     /// directed" impression: it darkens the corners so the bright neon centre
     /// pops, and stops the flat navy background reading as washed out.
+    ///
+    /// The texture behind it is a thumbnail of the screen, stretched to fit: the
+    /// vignette is one smooth gradient, and a full-resolution copy of it held 14 MB
+    /// on a large phone and 23 MB on a large iPad for no visible difference.
     static func gradeOverlay(size: CGSize) -> SKSpriteNode {
         let texture = gradeTexture(size: size)
         let sprite = SKSpriteNode(texture: texture, size: size)
@@ -434,25 +526,36 @@ enum NeonFX {
         return sprite
     }
 
-    /// Adds (or re-sizes) the grade overlay on a scene.
+    /// Adds (or re-sizes) the grade overlay on a scene, and the first time a view is
+    /// seen here, warms it up for text bloom (see `prewarmTextBloom`).
     /// - Parameter zPosition: Should sit above gameplay entities but below the HUD.
     static func attachGrade(to scene: SKScene, zPosition: CGFloat = 60) {
         scene.childNode(withName: "screenGrade")?.removeFromParent()
         let grade = gradeOverlay(size: scene.size)
         grade.zPosition = zPosition
         scene.addChild(grade)
+        if let view = scene.view { prewarmTextBloom(in: view) }
     }
 
     private static func gradeTexture(size: CGSize) -> SKTexture {
-        let key = "grade|\(Int(size.width))x\(Int(size.height))"
-        if let cached = gradeCache[key] { return cached }
+        // The screen's shape at 128 pixels on its long side, so the stretch is the same
+        // both ways and the vignette stays round. Keyed by that shape rather than by the
+        // exact size, so a resize to the same proportions reuses it.
+        let long: CGFloat = 128
+        let width = max(size.width, 1), height = max(size.height, 1)
+        let canvas = width >= height
+            ? CGSize(width: long, height: max(1, (long * height / width).rounded()))
+            : CGSize(width: max(1, (long * width / height).rounded()), height: long)
+        let key = "grade|\(Int(canvas.width))x\(Int(canvas.height))"
+        if let cached = gradeCache.value(forKey: key) { return cached }
 
         let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = 1
         format.opaque = false
-        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+        let image = UIGraphicsImageRenderer(size: canvas, format: format).image { ctx in
             let cg = ctx.cgContext
-            let centre = CGPoint(x: size.width / 2, y: size.height / 2)
-            let radius = max(size.width, size.height) * 0.78
+            let centre = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
+            let radius = max(canvas.width, canvas.height) * 0.78
 
             // Vignette: transparent through the playfield, deep blue-black at
             // the corners. Tinted rather than pure black so it feels like space
@@ -482,7 +585,7 @@ enum NeonFX {
 
         let texture = SKTexture(image: image)
         texture.filteringMode = .linear
-        gradeCache[key] = texture
+        gradeCache.insert(texture, forKey: key)
         return texture
     }
 

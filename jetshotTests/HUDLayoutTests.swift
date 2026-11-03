@@ -134,6 +134,52 @@ final class HUDLayoutTests: XCTestCase {
         )
     }
 
+    // MARK: - Score
+
+    /// The score prints digit-grouped, so a long one is a separator wider for every three
+    /// digits. It shares its row with the lives on the left and the pause button
+    /// on the right, and has to clear both on the narrowest phone with every life full.
+    @MainActor
+    func testALongScoreClearsTheLivesAndThePauseButton() {
+        let harness = GameplayHarness(size: CGSize(width: 375, height: 667))
+        defer { harness.teardown() }
+        let scene = harness.startPlaying(level: 2)
+
+        while scene.currentLives < GameConfiguration.maxLives {
+            scene.debugApplyPerk(.armor)
+        }
+        scene.addScore(98_765_432, chainsCombo: false)
+        // Past the gain's scale punch, which is meant to swell over its neighbours briefly.
+        harness.spin(0.4)
+
+        let text = scene.currentScore.formatted()
+        var scoreLabel: SKLabelNode?
+        scene.enumerateChildNodes(withName: "//*") { node, stop in
+            if let label = node as? SKLabelNode, label.text == text {
+                scoreLabel = label
+                stop.pointee = true
+            }
+        }
+        guard let label = scoreLabel, let parent = label.parent,
+              let pause = pauseRect(in: scene) else {
+            return XCTFail("the HUD did not show the score as \(text)")
+        }
+        let scoreRect = CGRect(origin: parent.convert(label.frame.origin, to: scene), size: label.frame.size)
+
+        var lives: [CGRect] = []
+        scene.enumerateChildNodes(withName: "//\(GameScene.lifeIconName)") { node, _ in
+            if let ship = node as? SKShapeNode, let box = ship.path?.boundingBoxOfPath {
+                lives.append(box.offsetBy(dx: ship.position.x, dy: ship.position.y))
+            }
+        }
+        XCTAssertEqual(lives.count, GameConfiguration.maxLives, "the lives row is not full")
+
+        for life in lives {
+            XCTAssertLessThan(life.maxX, scoreRect.minX, "the score ran into the lives row")
+        }
+        XCTAssertLessThan(scoreRect.maxX, pause.minX, "the score ran into the pause button")
+    }
+
     // MARK: - Overdrive gauge
 
     /// The gauge is a thumb target at the bottom of the screen, so it has to stay above

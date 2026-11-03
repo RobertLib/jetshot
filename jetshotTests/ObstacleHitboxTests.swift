@@ -80,6 +80,57 @@ final class ObstacleHitboxTests: XCTestCase {
         }
     }
 
+    // MARK: - Spinner
+
+    /// Arm 0 points along +y: 7.5 pt either side at the root, 5 at 60 pt out, a point
+    /// at 75. The hitbox used to be a "+" of two full 15 x 150 rectangles.
+    func testSpinnerIsSolidOnlyWhereItsArmsAndCoreAreDrawn() {
+        let harness = GameplayHarness()
+        let scene = hostedScene(harness)
+        _ = parkedObstacle(.spinner, in: scene, harness: harness)
+
+        for arm in 0..<4 {
+            let angle = CGFloat(arm) * .pi / 2
+            for probe in [CGPoint(x: 0, y: 72), CGPoint(x: 4, y: 30), CGPoint(x: -3.5, y: 55)] {
+                XCTAssertTrue(isSolid(scene, at: rotated(probe, by: angle)),
+                              "arm \(arm) of the spinner is drawn at \(probe) but has no hitbox there")
+            }
+            // Beside the tapering tip, where the rectangle's square corners were.
+            for probe in [CGPoint(x: 6, y: 70), CGPoint(x: -6, y: 72), CGPoint(x: 7, y: 60), CGPoint(x: -7, y: 62)] {
+                XCTAssertFalse(isSolid(scene, at: rotated(probe, by: angle)),
+                               "arm \(arm) of the spinner hurts at \(probe), beside its drawn tip")
+            }
+        }
+        // The core between the arms, which the cross never covered.
+        for probe in [CGPoint(x: 10, y: 10), CGPoint(x: -10, y: 10), CGPoint(x: -10, y: -10), CGPoint(x: 10, y: -10)] {
+            XCTAssertTrue(isSolid(scene, at: probe), "the spinner's drawn core is not solid at \(probe)")
+        }
+        XCTAssertFalse(isSolid(scene, at: CGPoint(x: 14, y: 14)), "the spinner is solid between its arms, off its core")
+    }
+
+    // MARK: - Wave wall
+
+    /// The wave wall is a band of constant width whose edges both weave 6 pt. Where it
+    /// leans right (the first half-wave, ~46 pt below its middle) it spans about −7…18;
+    /// where it leans left (~28 pt below) about −18…7. The hitbox used to be the plain
+    /// rectangle, ±12.5.
+    func testWaveWallHitboxWeavesWithItsEdges() {
+        let harness = GameplayHarness()
+        let scene = hostedScene(harness)
+        _ = parkedObstacle(.waveWall, in: scene, harness: harness)
+
+        let leansRight: CGFloat = -55 + 110 * 1.5 / 18
+        let leansLeft: CGFloat = -55 + 110 * 4.5 / 18
+        XCTAssertTrue(isSolid(scene, at: CGPoint(x: 15, y: leansRight)), "the wall is drawn here but not solid")
+        XCTAssertFalse(isSolid(scene, at: CGPoint(x: -10, y: leansRight)), "the wall leans away from here but still hurts")
+        XCTAssertTrue(isSolid(scene, at: CGPoint(x: -15, y: leansLeft)), "the wall is drawn here but not solid")
+        XCTAssertFalse(isSolid(scene, at: CGPoint(x: 10, y: leansLeft)), "the wall leans away from here but still hurts")
+        for y in stride(from: CGFloat(-50), through: 50, by: 10) {
+            XCTAssertTrue(isSolid(scene, at: CGPoint(x: 0, y: y)), "the wall's middle is not solid at \(y)")
+        }
+        XCTAssertFalse(isSolid(scene, at: CGPoint(x: 0, y: 58)), "the wall is solid above its top")
+    }
+
     // MARK: - Pulsating ring
 
     func testRingCentreIsOpenAndItsBandIsSolid() {

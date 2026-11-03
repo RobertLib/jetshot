@@ -79,7 +79,7 @@ final class LocalizationTests: XCTestCase {
         "powerUp.missilesMax",
         "levelComplete.title", "levelComplete.newBest", "levelComplete.personalBestSet",
         "levelComplete.bestChain", "levelComplete.grazes", "levelComplete.next", "levelComplete.continue",
-        "gameOver.title", "gameOver.reachedRound", "gameOver.newRecord",
+        "gameOver.title", "gameOver.endlessTitle", "gameOver.reachedRound", "gameOver.newRecord",
         "completion.title", "completion.congratulations", "completion.success",
         "completion.thanks", "completion.totalScore", "completion.playAgain",
         "story.skipHint", "story.shipName", "story.protocolName",
@@ -140,6 +140,21 @@ final class LocalizationTests: XCTestCase {
         return pattern.matches(in: text, range: range).compactMap {
             Range($0.range, in: text).map { String(text[$0]) }
         }
+    }
+
+    /// The score lines print their figure grouped, as the results card's own figure and
+    /// the level grid's total do. They interpolated the raw `Int` through `%lld`, so a
+    /// card read "61,420" over "BEST  58210".
+    func testScoreLinesGroupTheirFiguresLikeEveryOtherScore() {
+        let score = 486_300
+        XCTAssertTrue(L10n.Common.best(score).contains(score.formatted()),
+                      "\(L10n.Common.best(score)) does not print \(score.formatted())")
+        XCTAssertTrue(L10n.Common.endlessRecord(score: score, round: 27).contains(score.formatted()),
+                      "\(L10n.Common.endlessRecord(score: score, round: 27)) does not print \(score.formatted())")
+        XCTAssertTrue(L10n.LevelComplete.newBest(improvement: 12_500).contains(12_500.formatted()),
+                      "\(L10n.LevelComplete.newBest(improvement: 12_500)) does not print \(12_500.formatted())")
+        // The round is not a score, and stays a plain number.
+        XCTAssertTrue(L10n.Common.endlessRecord(score: score, round: 27).hasSuffix("27"))
     }
 
     // MARK: - Layout

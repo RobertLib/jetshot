@@ -1,16 +1,14 @@
-Deset nových bossů, Přepětí, medaile, vylepšení v nekonečné hře a rychlejší, hustší boj — s novým ovládáním a ostřejším vzhledem.
+Spolehlivější synchronizace přes iCloud, zpomalení času, které zpomalí celý boj, zásahové zóny přesně podle toho, co vidíš, a dlouhá řada oprav.
 
-• DESET NOVÝCH BOSSŮ — místo jednoho bosse na tebe čeká deset strojů. Každý je vykreslený drátěným modelem jako tvoje loď, pohybuje se po svém, má vlastní typický útok a výzbroj, kterou mu můžeš ustřelit: strážce, střemhlav útočící kudlanka, orbitální vír, úl kladoucí miny, krystalový kopiník, had, přízrak přeskakující po obrazovce, teserakt, chřtán — a nakonec samotné epicentrum. Každý souboj má tři dějství vyznačená na ukazateli životů a v pozdějších sektorech se bossové vracejí lépe vyzbrojení.
-• PŘEPĚTÍ — každé zničení se rozletí v krystaly energie, které se stahují do tvé lodi. Naplň ukazatel a odpal ho druhým prstem nebo dvojklepem: všechna nepřátelská palba na obrazovce se rozpadne v krystaly a tvé zbraně na šest sekund zezlátnou. Nebo si ho šetři — plný ukazatel se odpálí sám a pohltí zásah.
-• MEDAILE — každá úroveň nově skrývá tři: bez zásahu, dlouhá série a 85 % zničených nepřátel. Uvidíš je ve výběru úrovní i na úvodní kartě každé úrovně jako cíle pro další pokus.
-• VYLEPŠENÍ V NEKONEČNÉ HŘE — po každém poraženém bossovi si vybereš jedno ze tří vylepšení na zbytek běhu: rychlejší zbraně, delší Přepětí, širší pásmo průletů, život navíc a další. Skládej je do vlastní sestavy.
-• TĚSNÉ PRŮLETY — loď má nově malý zásahový bod, který se na trupu rozsvítí, když je palba blízko. Střely, které jen těsně prolétnou kolem, dávají body, nabíjejí Přepětí a chladí zbraně.
-• Relativní ovládání — loď se pohybuje s prstem, místo aby k němu skočila, takže palec může ležet kdekoli a loď nikdy nezakryje. Přidržený prst střílí, ať je kdekoli.
-• Opravdový proud palby: zbraně střílejí víc než dvakrát rychleji a nepřátelé snesou několik zásahů, při kterých bíle blikají a jiskří. Ti nejodolnější mají ukazatel životů a těžká zničení dopadnou se zastavením času, které smete palbu kolem.
-• Rychlejší úrovně — vlny přilétají hustěji, boss dorazí dřív a každý zlom jeho fáze vyčistí obrazovku ve sprše krystalů.
-• Veškerá nepřátelská palba má teď jednu barvu — sytě růžovou s bílým jádrem — takže je na první pohled odlišitelná od výbuchů, mincí i tvých střel. Mířené střely letí pomaleji a férověji.
-• Odstřelovači konečně odstřelují: kvůli chybě jejich zamířená rána nikdy nevystřelila.
-• Větší nepřátelé, laserové paprsky místo čárek, vzdálené planety, které už nevypadají jako asteroidy, a obloha, která ubíhá rychleji.
-• Nový vzhled mimo samotnou hru: menu, výběr úrovní, pauza i výsledky mají teď stejný filmový rámec jako příběh — černé pruhy, rohy hledáčku a písmo kreslené světlem.
-• Zvuk se při plné obrazovce už nesčítá v jeden šum.
-• Opravy: nekonečná hra ukončená z menu pauzy se teď započítá do rekordu, reset postupu už vydrží na všech zařízeních se stejným iCloudem a časovače vylepšení jsou nově česky.
+• Postup v iCloudu, na který se dá spolehnout: nové zařízení hrané offline už nepřijde o postup, když mu první synchronizace přinese starý reset, zařízení, ke kterému reset nedorazil, už smazaný postup nevrátí, a přepnutí Apple ID už nepřepíše postup na tvých ostatních zařízeních. Menu i výběr úrovní se navíc srovnají hned, jak synchronizace dorazí — žádné zámky na úrovních dohraných na jiném zařízení a NEKONEČNÁ HRA se v menu objeví bez odcházení.
+• Zpomalení času teď zpomalí celou nepřátelskou stranu. Nové vlny, stěny i asteroidy dřív dál přilétaly plným tempem, takže se obrazovka během zpomalení plnila dvakrát rychleji.
+• Zásahové zóny odpovídají tomu, co je nakreslené: asteroidy, rotující kříže i vlnité stěny jsou pevné přesně tam, kde je vidíš, a bossovou stěnou střel se dá proletět jen její mezerou — žádný bezpečný pruh u okraje.
+• Každý boss teď začíná svým typickým útokem, takže hned z prvního tahu poznáš, s jakým strojem bojuješ.
+• Mrazivá bomba: zamrzlí nepřátelé zůstanou zamrzlí i po telefonátu nebo Ovládacím centru, už nezůstávají zaseknutí v bílém záblesku a teleportér zmrazený uprostřed přeskoku je celý vidět.
+• Blesk zasáhne jen nepřátele na obrazovce, naváděné rakety už nevisí uvnitř zprůhledněného ducha, zaměřovač odstřelovače při zpomalení času drží krok s jeho ranou a formace už nestřílejí zpoza horního okraje obrazovky.
+• Férovější konce: střely, které jsou ještě ve vzduchu, když tvá loď padne, už nepřidávají body ani nedorazí bosse, a loď, která po vypršení štítu zůstane ve stěně, dostane zásah.
+• Nepřítel, kterému nezbyla žádná dráha, už nezůstane viset na obrazovce a nebrání dokončení úrovně.
+• Skóre se všude píše s mezerami po tisících, i v horní liště a v řádku REKORD, a dlouhé skóre se zmenší, aby se vešlo. Nekonečná hra teď končí nápisem BĚH SKONČIL místo ÚROVEŇ NESPLNĚNA.
+• Ovládání: tah, který sjede na spodní okraj, tě už uprostřed hry nevyhodí na plochu, prst posunutý pod menu pauzy už po POKRAČOVAT loď necukne a menu nereaguje na klepnutí, dokud se tlačítka neobjeví.
+• Plynulejší a úspornější: méně zadrhnutí uprostřed vlny, klidnější rotace drátěných modelů, menší spotřeba paměti, hudba, která se vzpamatuje po restartu systémového zvuku, a žádný bílý záblesk při spuštění. Na ploše se aplikace teď jmenuje prostě „Jetshot“.
+• Formace mincí si při pádu drží tvar, magnet nechá na pokoji mince, které už máš, úlomky asteroidů se rozletí na obě strany a houpající se stěny zůstávají na obrazovce.

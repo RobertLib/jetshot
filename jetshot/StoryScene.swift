@@ -95,6 +95,11 @@ class StoryScene: SKScene {
 
     // MARK: - Lifecycle
 
+    /// The frame is laid out once, here, and `didChangeSize(_:)` is deliberately not
+    /// handled: rebuilding a film mid-shot is a great deal of machinery for a resize that
+    /// cannot happen. The app is portrait-only and full-screen (`UIRequiresFullScreen`),
+    /// and since `GameViewController` waits for the real screen before presenting the
+    /// first scene, even `-story` launches arrive at their final size.
     override func didMove(to view: SKView) {
         backgroundColor = UIColor(red: 0.005, green: 0.006, blue: 0.02, alpha: 1)
         safeAreaBottom = GameConfiguration.safeAreaBottom(in: view)

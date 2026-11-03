@@ -180,6 +180,46 @@ final class GameplayInputTests: XCTestCase {
         )
     }
 
+    /// Steer with one finger, pause with another, slide the steering finger while the
+    /// menu is up, resume with a tap off the menu. Steering is relative to where the
+    /// finger was last seen, and a move made under the menu was not seen: the first move
+    /// after RESUME threw the ship the whole distance at once.
+    @MainActor
+    func testAFingerMovedUnderThePauseMenuDoesNotThrowTheShipOnResume() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        let finger = CGPoint(x: harness.player.position.x, y: harness.player.position.y - 30)
+        harness.touchDown(at: finger)
+        harness.spin(0.1)
+
+        guard let pauseButton = harness.node(named: "pauseButton") else {
+            return XCTFail("no pause button to tap")
+        }
+        harness.secondFingerTap(at: harness.scenePosition(of: pauseButton))
+        harness.spin(0.3)
+        XCTAssertTrue(harness.gameContent.isPaused, "a second finger on the pause button did not pause")
+
+        let slid = CGPoint(x: finger.x - 150, y: finger.y + 120)
+        harness.touchMove(to: slid)
+        harness.spin(0.1)
+
+        // Off the menu column: the dimmed picture at the left edge.
+        harness.secondFingerTap(at: CGPoint(x: 14, y: harness.scene.size.height / 2))
+        harness.spin(0.3)
+        XCTAssertFalse(harness.gameContent.isPaused, "a tap off the menu did not resume")
+
+        let resumedAt = harness.player.position
+        harness.touchMove(to: CGPoint(x: slid.x + 10, y: slid.y))
+        harness.spin(0.05)
+
+        XCTAssertEqual(harness.player.position.x, resumedAt.x + 10 * GameConfiguration.dragSensitivity,
+                       accuracy: 1.0, "the first move after RESUME carried the move made while paused")
+        XCTAssertEqual(harness.player.position.y, resumedAt.y, accuracy: 1.0,
+                       "the first move after RESUME carried the move made while paused")
+    }
+
     // MARK: - Firing
 
     @MainActor

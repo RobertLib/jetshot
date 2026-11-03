@@ -17,6 +17,7 @@ extension NSUbiquitousKeyValueStore: ProgressKeyValueStore {}
 nonisolated final class MemoryProgressStore: ProgressKeyValueStore, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: Any] = [:]
+    private var writes = 0
 
     func object(forKey key: String) -> Any? {
         lock.lock()
@@ -28,6 +29,16 @@ nonisolated final class MemoryProgressStore: ProgressKeyValueStore, @unchecked S
         lock.lock()
         defer { lock.unlock() }
         values[key] = value
+        writes += 1
+    }
+
+    /// Every `set` and `removeObject` so far, `restore` excluded. A write of an
+    /// unchanged value leaves the contents as they were, so only this can tell a test
+    /// that one happened.
+    var writeCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return writes
     }
 
     func removeObject(forKey key: String) {

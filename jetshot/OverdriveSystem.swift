@@ -222,7 +222,14 @@ final class OverdriveSystem {
         let mode = isActive ? 2 : (isReady ? 1 : 0)
         let fraction = isActive ? remainingFraction : charge
 
-        if abs(fraction - drawnFraction) > 0.004 || mode != drawnMode {
+        // How far the arc has to move before it is rebuilt. Charging moves in steps (a
+        // shard is 0.008, a graze 0.02), so every one of them is drawn. An active
+        // overdrive drains every frame, and at the charging threshold of 0.004 the path
+        // was rebuilt every frame or two for the whole 6 s. One percent of the ring is
+        // 1.5 pt of arc, less than the 4 pt round cap at its tip, so the drain still
+        // reads as continuous, and over 6 s it is one rebuild every 0.06 s.
+        let redrawStep = isActive ? 0.01 : 0.004
+        if abs(fraction - drawnFraction) > redrawStep || mode != drawnMode {
             let r = Self.radius
             let path = CGMutablePath()
             if fraction > 0.001 {

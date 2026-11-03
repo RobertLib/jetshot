@@ -12,7 +12,21 @@ class Coin: SKNode {
     private let size: CGFloat = 24
     let pointValue: Int = 10
 
-    init(position: CGPoint) {
+    /// Where a coin nobody picked up leaves the playfield, and how long a coin falling
+    /// alone takes to get there from wherever it starts.
+    static let exitY: CGFloat = -50
+    static let soloFallDuration: TimeInterval = 10
+
+    /// The speed a coin starting at `y` falls at on its own: out of the bottom in
+    /// `soloFallDuration`.
+    static func fallSpeed(from y: CGFloat) -> CGFloat {
+        return max(1, (y - exitY) / CGFloat(soloFallDuration))
+    }
+
+    /// - Parameter fallSpeed: Points per second. A formation passes one speed to all of
+    ///   its coins so the shape holds as it falls; nil falls at `fallSpeed(from:)` for
+    ///   the coin's own height.
+    init(position: CGPoint, fallSpeed: CGFloat? = nil) {
         super.init()
 
         self.position = position
@@ -20,7 +34,7 @@ class Coin: SKNode {
 
         setupVisuals()
         setupPhysics()
-        addAnimations()
+        addAnimations(fallSpeed: fallSpeed ?? Self.fallSpeed(from: position.y))
     }
 
     required init?(coder aDecoder: NSCoder) {
@@ -148,6 +162,7 @@ class Coin: SKNode {
     /// row of identical pickups feel alive instead of stamped.
     private func addGlint(radius: CGFloat) {
         let glint = SKNode()
+        glint.name = Self.glintName
         glint.zPosition = 3
         glint.alpha = 0
         addChild(glint)
@@ -161,15 +176,21 @@ class Coin: SKNode {
             glint.addChild(ray)
         }
 
+        // The reset is an instant scale, not a `.run { glint.setScale(1) }`: that closure
+        // held the glint strongly from an action the glint itself runs forever, so the
+        // glint and its rays outlived every coin, collected or fallen.
         let flash = SKAction.sequence([
             .wait(forDuration: Double.random(in: 0.4...2.6)),
             .group([.fadeAlpha(to: 0.9, duration: 0.09), .scale(to: 1.25, duration: 0.09)]),
             .group([.fadeOut(withDuration: 0.24), .scale(to: 0.7, duration: 0.24)]),
-            .run { glint.setScale(1.0) },
+            .scale(to: 1.0, duration: 0),
             .wait(forDuration: Double.random(in: 1.4...3.4))
         ])
         glint.run(.repeatForever(flash))
     }
+
+    /// The glint's node name, for `jetshotTests`.
+    static let glintName = "coinGlint"
 
     private func setupPhysics() {
         let physicsBody = SKPhysicsBody(circleOfRadius: size / 2)
@@ -181,7 +202,7 @@ class Coin: SKNode {
         self.physicsBody = physicsBody
     }
 
-    private func addAnimations() {
+    private func addAnimations(fallSpeed: CGFloat) {
         // Random rotation direction (left or right)
         let rotationDirection: CGFloat = Bool.random() ? 1.0 : -1.0
 
@@ -198,8 +219,12 @@ class Coin: SKNode {
         let bob = SKAction.sequence([moveUp, moveDown])
         shape.run(SKAction.repeatForever(bob))
 
-        // Slow downward movement
-        let moveDownScreen = SKAction.moveTo(y: -50, duration: 10.0)
+        // Slow downward movement, at a set speed rather than in a set time. Every coin
+        // used to take ten seconds to the bottom from wherever it started, so a higher
+        // coin in a formation fell faster than a lower one and the shape flattened as
+        // it came down.
+        let drop = max(0, position.y - Self.exitY)
+        let moveDownScreen = SKAction.moveBy(x: 0, y: -drop, duration: TimeInterval(drop / fallSpeed))
         let remove = SKAction.removeFromParent()
         run(SKAction.sequence([moveDownScreen, remove]))
     }

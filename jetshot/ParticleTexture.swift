@@ -15,8 +15,8 @@ import UIKit
 /// every bullet absorbed by a vortex, and every meteor/flanker spawn. The results
 /// were byte-identical.
 ///
-/// `NeonFX`, `SurfaceFX`, `Player` and `ParallaxBackgroundHelper` already cache
-/// their textures; this is the same idea for the plain shapes. Keyed by shape and
+/// `NeonFX`, `SurfaceFX`, `ProjectileFX` and `ShardSystem` already cache their
+/// textures; this is the same idea for the plain shapes. Keyed by shape and
 /// diameter so the existing `particleScale` values at each call site keep working
 /// unchanged.
 enum ParticleTexture {

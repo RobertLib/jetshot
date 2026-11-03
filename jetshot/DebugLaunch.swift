@@ -21,12 +21,20 @@ import UIKit
 /// the arguments cannot be reached on a shipped app however they are passed. The
 /// `GameScene` and `CloudStorageManager` seams it calls are `#if DEBUG` too.
 ///
-/// **Nothing written here reaches disk.** `-unlockall` seeds an in-memory store and
+/// **Nothing a debug launch writes reaches disk.** Any argument below at all — a
+/// destination or a gameplay seam — serves progress from an in-memory store and
 /// switches every write in `CloudStorageManager` into a no-op for the life of the
-/// process — see `CloudStorageManager.installDemoStore(_:)`. Without that, one
-/// screenshot run would overwrite the real save and then push the demo progress up to
-/// iCloud, wiping it on every other device signed into the same account. That is a
-/// mistake you get to make exactly once, so it is designed out rather than remembered.
+/// process — see `CloudStorageManager.installDemoStore(_:)` and `prepare()`.
+/// `-unlockall` seeds that store with a finished game; without it, it holds this
+/// device's own stored progress, so the screens still show the real save.
+///
+/// Without that, one screenshot run would overwrite the real save and then push the
+/// demo progress up to iCloud, wiping it on every other device signed into the same
+/// account. That is a mistake you get to make exactly once, so it is designed out
+/// rather than remembered — and it used to be designed out for `-unlockall` only:
+/// `-results` on its own saved level 15 as cleared, with the sample run's score and
+/// arsenal, and `-level 34 -guns 8 -autopilot -invincible` let the bot clear the
+/// level and stored its eight-gun loadout as the one level 35 starts with.
 ///
 /// ## Arguments
 ///
@@ -239,10 +247,30 @@ enum DebugLaunch {
     /// its own initialiser, so the demo store has to be installed before the singleton
     /// is first resolved or the merge will have already read — and, worse, be about to
     /// write — the real account's progress.
+    ///
+    /// For every debug launch, not just `-unlockall` — see the type comment. An
+    /// ordinary launch passes none of these arguments and installs nothing.
     static func prepare() {
-        guard options.unlockAll else { return }
-        CloudStorageManager.installDemoStore(demoProgress())
-        print("[DEBUG] Demo progress installed — all writes to UserDefaults and iCloud are no-ops")
+        let options = self.options
+        guard options.isActive else { return }
+        CloudStorageManager.installDemoStore(options.unlockAll ? demoProgress() : storedProgress())
+        print("[DEBUG] Debug launch: progress is read-only — all writes to UserDefaults and iCloud are no-ops")
+    }
+
+    /// The player's own progress, as this device last stored it.
+    ///
+    /// Read from `UserDefaults` directly, because `CloudStorageManager.shared` must not
+    /// be resolved yet (see `prepare()`), and the local store is what it reads from
+    /// anyway. With the demo store installed the iCloud merge never runs, so this is the
+    /// device's copy as it stands, without whatever iCloud may hold beyond it.
+    private static func storedProgress() -> [String: Any] {
+        var values: [String: Any] = [:]
+        for key in CloudStorageManager.Keys.progress {
+            if let value = UserDefaults.standard.object(forKey: key) {
+                values[key] = value
+            }
+        }
+        return values
     }
 
     /// A finished game, in memory. Fifty levels cleared, three stars on most of them,

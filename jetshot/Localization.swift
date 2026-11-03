@@ -24,8 +24,20 @@ import Foundation
 /// The `defaultValue:` on every entry is the English text itself, which means a key
 /// missing from `Localizable.xcstrings` degrades to readable English rather than to
 /// the raw key. Interpolations in a default value are what Xcode turns into the
-/// format specifiers (`%lld` for `Int`) that the translations reuse.
+/// format specifiers (`%lld` for `Int`, `%@` for `String`) that the translations reuse.
 enum L10n {
+
+    /// A score as every screen prints one: grouped the player's way — "61,420" in
+    /// English, "61 420" in Czech — as `ResultsCard.figure` and the level grid's total
+    /// have always printed theirs.
+    ///
+    /// The lines below used to interpolate the `Int` itself, which `%lld` prints with no
+    /// grouping at all, so the results card showed "61,420" over "BEST  58210". Scores
+    /// reach the catalog already formatted, as `%@`; rounds, levels and counts stay
+    /// `%lld`, since they are never large enough to group.
+    fileprivate static func formattedScore(_ value: Int) -> String {
+        value.formatted()
+    }
 
     // MARK: - Shared
 
@@ -58,10 +70,12 @@ enum L10n {
         }
         /// The endless record line, shown under the menu button and again on game over.
         static func endlessRecord(score: Int, round: Int) -> String {
-            String(localized: "common.endlessRecord", defaultValue: "BEST  \(score)  ·  ROUND \(round)")
+            let score = L10n.formattedScore(score)
+            return String(localized: "common.endlessRecord", defaultValue: "BEST  \(score)  ·  ROUND \(round)")
         }
         static func best(_ score: Int) -> String {
-            String(localized: "common.best", defaultValue: "BEST  \(score)")
+            let score = L10n.formattedScore(score)
+            return String(localized: "common.best", defaultValue: "BEST  \(score)")
         }
     }
 
@@ -405,7 +419,8 @@ enum L10n {
             String(localized: "levelComplete.title", defaultValue: "LEVEL COMPLETE")
         }
         static func newBest(improvement: Int) -> String {
-            String(localized: "levelComplete.newBest", defaultValue: "NEW BEST  +\(improvement)")
+            let improvement = L10n.formattedScore(improvement)
+            return String(localized: "levelComplete.newBest", defaultValue: "NEW BEST  +\(improvement)")
         }
         static var personalBestSet: String {
             String(localized: "levelComplete.personalBestSet", defaultValue: "PERSONAL BEST SET")
@@ -429,6 +444,11 @@ enum L10n {
     enum GameOver {
         static var title: String {
             String(localized: "gameOver.title", defaultValue: "LEVEL FAILED")
+        }
+        /// The title over an endless run's end. There is no level to have failed, and
+        /// the tag above it already says ENDLESS and the round.
+        static var endlessTitle: String {
+            String(localized: "gameOver.endlessTitle", defaultValue: "RUN OVER")
         }
         static func reachedRound(_ round: Int) -> String {
             String(localized: "gameOver.reachedRound", defaultValue: "REACHED ROUND \(round)")

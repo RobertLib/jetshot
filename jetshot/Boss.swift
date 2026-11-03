@@ -73,10 +73,9 @@ class Boss: SKNode {
     private var lastHitDressing: CFTimeInterval = 0
     private static let hitDressingInterval: CFTimeInterval = 0.07
     private var healthBar: SKShapeNode!
+    /// The charge: built once, full width, and narrowed with `xScale` as it drains, so
+    /// it always drains inside the frame it was built for.
     private var healthBarFill: SKShapeNode!
-    /// The charge's width at full health. Kept rather than recomputed from the scene on
-    /// each hit, so the charge always drains inside the frame it was built for.
-    private var healthFillWidth: CGFloat = 0
     private var isActive: Bool = false
     private var damageLevel: Int = 0
 
@@ -271,8 +270,7 @@ class Boss: SKNode {
         healthBar.lineWidth = 1
         healthBar.zPosition = 150
 
-        healthFillWidth = barWidth - 4
-        healthBarFill = SKShapeNode(rectOf: CGSize(width: healthFillWidth, height: barHeight - 4), cornerRadius: 2)
+        healthBarFill = SKShapeNode(rectOf: CGSize(width: barWidth - 4, height: barHeight - 4), cornerRadius: 2)
         healthBarFill.fillColor = Self.gaugeColor(for: 1)
         healthBarFill.strokeColor = .clear
         healthBarFill.blendMode = .add
@@ -341,8 +339,11 @@ class Boss: SKNode {
     /// Half the width of the charge left in the bar, for `jetshotTests`: where each end
     /// of it sits, measured from the middle.
     var healthBarFillHalfWidth: CGFloat {
-        (healthBarFill.path?.boundingBox.width ?? 0) / 2
+        (healthBarFill.path?.boundingBox.width ?? 0) * healthBarFill.xScale / 2
     }
+
+    /// The charge's shape, for `jetshotTests`: it should be the one built with the bar.
+    var healthBarFillPath: CGPath? { healthBarFill.path }
 
     /// The gauge's light: red at full strength, burning down through ember to gold, one
     /// colour per act. Keyed to `BossPhaseRules` itself — it used to change at 0.6 and
@@ -674,15 +675,14 @@ class Boss: SKNode {
         // Update health bar only if boss is still alive
         let healthPercent = CGFloat(currentHealth) / CGFloat(maxHealthPoints)
         guard scene != nil else { return false }
-        let newSize = CGSize(width: healthFillWidth * healthPercent, height: 16)
-
-        healthBarFill.path = CGPath(
-            roundedRect: CGRect(x: -newSize.width / 2, y: -newSize.height / 2, width: newSize.width, height: newSize.height),
-            cornerWidth: min(2, newSize.width / 2),
-            cornerHeight: 2,
-            transform: nil
-        )
-        healthBarFill.fillColor = Self.gaugeColor(for: healthPercent)
+        // The charge keeps the shape it was built with at full health and is narrowed
+        // about the middle of the bar, where it drains to. It used to be rebuilt as a
+        // new path, and re-tessellated, for every round that landed: outside the
+        // dressing throttle below, so dozens of times a second under a full arsenal.
+        // Only its 2 pt corners narrow with it, which on a 16 pt bar does not show.
+        healthBarFill.xScale = healthPercent
+        let gauge = Self.gaugeColor(for: healthPercent)
+        if healthBarFill.fillColor != gauge { healthBarFill.fillColor = gauge }
 
         let now = CACurrentMediaTime()
         guard now - lastHitDressing >= Self.hitDressingInterval else { return false }

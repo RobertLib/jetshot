@@ -68,6 +68,41 @@ final class AppLifecyclePauseTests: XCTestCase {
         XCTAssertEqual(pauseOverlays(in: harness), 0, "the pause menu is still up after RESUME")
     }
 
+    /// A freeze bomb's freeze is `isPaused` on each frozen enemy, and the same first-frame
+    /// unpause clears it on them too. Nothing put it back: after RESUME the "frozen"
+    /// enemies flew and fired for the rest of the freeze, their ice left where they were.
+    func testAFrozenEnemyStaysFrozenThroughATripToTheBackground() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        let enemy = harness.addEnemy(.basic, at: CGPoint(x: 200, y: harness.scene.size.height - 150))
+        enemy.startMovement {}
+        harness.spin(0.2)
+        // Long enough to outlast the test: the detonation at its end would retire it.
+        enemy.freeze(duration: 30)
+        let frozenAt = enemy.position
+
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        // Stand in for `-[SKView _update:]` unpausing the whole tree on the first frame
+        // back, the frozen enemy with everything else.
+        harness.gameContent.isPaused = false
+        enemy.isPaused = false
+        harness.spin(0.3)
+
+        guard let resume = harness.node(named: "resumeButton") else {
+            return XCTFail("the pause menu was lost on the way back")
+        }
+        harness.touchDown(at: harness.scenePosition(of: resume))
+        harness.spin(1.0)
+
+        XCTAssertFalse(harness.gameContent.isPaused, "RESUME did not resume the game")
+        XCTAssertTrue(enemy.isPaused, "the frozen enemy thawed on the way back from the background")
+        XCTAssertEqual(enemy.position.x, frozenAt.x, accuracy: 0.5, "the frozen enemy moved after RESUME")
+        XCTAssertEqual(enemy.position.y, frozenAt.y, accuracy: 0.5, "the frozen enemy moved after RESUME")
+    }
+
     /// The intro asks for a pause as well, but its entry animation runs on the gameplay
     /// clock — re-asserting that pause on the way back would freeze the intro for good.
     func testComingBackDuringTheIntroLetsItFinish() {

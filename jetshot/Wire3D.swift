@@ -7,8 +7,10 @@
 //  The game is all neon vector, so the cutscenes are too: real perspective
 //  projection of 3D line meshes, depth fog, near-plane clipping and a moving
 //  camera, drawn with nothing but SpriteKit sprites. Every edge is one pooled
-//  sprite stretched over a soft "light tube" texture, so a frame of a thousand
-//  lines is a single batched draw call and nothing is allocated per frame —
+//  sprite stretched over a soft "light tube" texture and every light one sprite of
+//  a dot texture, so a frame of a thousand lines costs a handful of batched draw
+//  calls — one per texture in each of the canvas's back, occluder and front layers,
+//  usually just the front's lines and dots — and nothing is allocated per frame:
 //  no CGPaths, no shape nodes, no tessellation.
 //
 

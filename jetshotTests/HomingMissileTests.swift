@@ -73,6 +73,43 @@ final class HomingMissileTests: XCTestCase {
         XCTAssertTrue(loitering.isEmpty, "\(loitering.count) missiles hovered over a dead target")
     }
 
+    /// A phased ghost lets rounds through, but the missiles kept their lock on it: they
+    /// flew to its centre and hovered there for as long as it stayed phased, while an
+    /// enemy they could have hit went untouched. Once it is solid again it is a target
+    /// like any other.
+    func testMissilesDoNotHoverInsideAPhasedGhost() {
+        let harness = GameplayHarness()
+        harness.startPlayingWithControl()
+        defer { harness.teardown() }
+
+        let ship = harness.player.position
+        let ghost = harness.addEnemy(.ghost, at: CGPoint(x: ship.x, y: ship.y + 200))
+        // Held phased out where the test puts it, rather than left to fade on its own.
+        ghost.removeAllActions()
+        ghost.alpha = 0.3
+        let health = ghost.health
+        // Further off than the ghost, so the ghost is the nearest target.
+        let other = harness.addEnemy(.basic, at: CGPoint(x: ship.x + 120, y: ship.y + 420))
+        other.health = 1
+
+        launchSalvo(harness)
+        // Long enough for the whole salvo to have reached the ghost's centre.
+        harness.spin(2.0)
+
+        XCTAssertEqual(ghost.health, health, "a phased-out ghost was hit")
+        XCTAssertNil(other.parent, "the salvo never went after the enemy it could hit")
+        let hovering = missiles(in: harness).filter {
+            hypot($0.position.x - ghost.position.x, $0.position.y - ghost.position.y) < 12
+        }
+        XCTAssertTrue(hovering.isEmpty, "\(hovering.count) missiles hovered inside a phased-out ghost")
+
+        ghost.alpha = 1
+        harness.spin(2.0)
+
+        XCTAssertTrue(ghost.parent == nil || ghost.health < health,
+                      "the salvo never hit the ghost once it was solid again")
+    }
+
     /// Homing missiles fly over walls. A wall tests against every player round, so its
     /// contact arrived even though the missile's own mask leaves walls out.
     func testAWallDoesNotStopAHomingMissile() {

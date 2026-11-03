@@ -58,6 +58,10 @@ class LevelSelectScene: SKScene {
     }
     private var resetDialog: ResetDialogState = .closed
 
+    /// Set when an iCloud merge changed the stored progress while the reset confirmation
+    /// owned the screen; the grid catches up once it has gone. See `progressDidChange()`.
+    private var isProgressRefreshPending = false
+
     /// A locked tile's padlock at rest. The refusal flash restores this rather than
     /// whatever colour the padlock had when it was tapped, which during a flash already
     /// in progress is the flash's own red.
@@ -116,6 +120,11 @@ class LevelSelectScene: SKScene {
             }
         }
 
+        // Every tile, the tallies and the furniture are read from stored progress once,
+        // as they are built. See `progressDidChange()`.
+        NotificationCenter.default.addObserver(self, selector: #selector(progressDidChange),
+                                               name: .progressDidChange, object: nil)
+
         SoundManager.shared.startBackgroundMusic()
     }
 
@@ -133,8 +142,31 @@ class LevelSelectScene: SKScene {
     }
 
     override func willMove(from view: SKView) {
+        NotificationCenter.default.removeObserver(self, name: .progressDidChange, object: nil)
         removeAllActions()
         removeAllChildren()
+    }
+
+    /// An iCloud merge has changed the stored progress while the grid is up.
+    ///
+    /// Which tiles are open, their stars and medals, the sector counts, the medal tally
+    /// and the running score are all read once, as the page is built. A merge landing
+    /// afterwards — the first sync on a new device, or a level cleared on another one —
+    /// left the grid showing the pre-merge state: a level the player had unlocked
+    /// elsewhere stayed padlocked, and the tallies stayed short. The scene is rebuilt on
+    /// the page it is on, the way a resize rebuilds it.
+    ///
+    /// Not once a way out has been taken, as the resize is not. And not under the reset
+    /// confirmation, which a rebuild would take down mid-question; that waits for it to
+    /// go (see `dismissConfirmationDialog(then:)`).
+    @objc private func progressDidChange() {
+        guard isInitialized, !exit.isTaken, view != nil else { return }
+        if isConfirmingReset {
+            isProgressRefreshPending = true
+            return
+        }
+        removeAllChildren()
+        buildScene(animated: false)
     }
 
     // MARK: - Layout
@@ -144,6 +176,8 @@ class LevelSelectScene: SKScene {
         // reset dialog with it — so its state has to go too, or the grid would stay
         // locked behind a dialog that no longer exists.
         resetDialog = .closed
+        // A rebuild reads the progress afresh, so a refresh waiting on the dialog is met.
+        isProgressRefreshPending = false
         // Rebuilding also removes the node running the page-change completion.
         isChangingPage = false
         touchStartLocation = nil
@@ -874,7 +908,13 @@ class LevelSelectScene: SKScene {
             overlay?.removeFromParent()
             dialog?.removeFromParent()
             then?()
-            self?.resetDialog = .closed
+            guard let self = self else { return }
+            self.resetDialog = .closed
+            // Progress changed under the dialog and nothing above has rebuilt since.
+            if self.isProgressRefreshPending, !self.exit.isTaken {
+                self.removeAllChildren()
+                self.buildScene(animated: false)
+            }
         }
     }
 

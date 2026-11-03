@@ -114,7 +114,7 @@ class LevelManager {
         return cloudStorage.loadDictionary(forKey: levelStarsKey) as? [String: Int] ?? [:]
     }
 
-    // Reset all progress (for testing)
+    // Reset all progress: the player-facing RESET button on the level select.
     func resetProgress() {
         // Every progress key, in both stores, and a new reset epoch with it: clearing
         // the keys alone was undone by the next iCloud merge with any other device that

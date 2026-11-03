@@ -7,13 +7,13 @@
         "cs" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Jetshot – Vesmírná střílečka"
+            "value" : "Jetshot"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Jetshot – Space Shooter"
+            "value" : "Jetshot"
           }
         }
       }
@@ -28,7 +28,8 @@
             "value" : "jetshot"
           }
         }
-      }
+      },
+      "shouldTranslate" : false
     }
   },
   "version" : "1.0"

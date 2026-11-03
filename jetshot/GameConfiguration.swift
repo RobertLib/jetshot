@@ -248,7 +248,7 @@ nonisolated struct GameConfiguration {
     static let minSpawnInterval: TimeInterval = 0.28
 
     /// Multiplier and floor for the lead-in before each wave. The authored 2.0 s
-    /// becomes 0.9 s: enough to read as a new wave arriving, not enough to be a lull.
+    /// becomes 0.7 s: enough to read as a new wave arriving, not enough to be a lull.
     static let waveDelayScale: TimeInterval = 0.35
     static let minWaveDelay: TimeInterval = 0.4
 

@@ -71,6 +71,42 @@ final class UIInputGuardTests: XCTestCase {
         }
     }
 
+    /// The menu's buttons fade in half a second after it arrives. Until then they are
+    /// not there to be pressed: a tap on where they will be used to press them anyway,
+    /// and ENDLESS, which leaves on touch-down, started a run from a blank screen.
+    func testTheMenuStackIgnoresTapsUntilItHasFadedIn() {
+        let harness = GameplayHarness()
+        defer { harness.teardown() }
+
+        withCleanProgress {
+            LevelManager.shared.completeLevel(1, score: 5_000)
+            let menu = MenuScene(size: harness.view.bounds.size)
+            harness.present(menu, settle: 0.1)
+
+            guard let start = menu.childNode(withName: "startButton"),
+                  let endless = menu.childNode(withName: "endlessButton"),
+                  let settings = menu.childNode(withName: "settingsButton") else {
+                return XCTFail("the menu did not build START, ENDLESS and SETTINGS")
+            }
+            XCTAssertLessThan(endless.alpha, 0.05, "the stack had already arrived, so this proves nothing")
+
+            tapDown(endless, in: menu)
+            tapDown(start, in: menu)
+            tapDown(settings, in: menu)
+            harness.spin(0.05)
+
+            XCTAssertEqual(start.xScale, 1, accuracy: 0.001, "START pressed before it could be seen")
+            XCTAssertNil(menu.childNode(withName: SettingsOverlay.nodeName),
+                         "SETTINGS opened before it could be seen")
+
+            // Neither did ENDLESS take the way out: once the stack is up, it all answers.
+            harness.spin(1.2)
+            tapDown(settings, in: menu)
+            XCTAssertNotNil(menu.childNode(withName: SettingsOverlay.nodeName),
+                            "the menu stopped answering, so a hidden button had already been taken")
+        }
+    }
+
     /// A results screen takes one way out. A second button tapped while the first is
     /// still pressing must not start a press — and with it a transition — of its own.
     func testAResultsScreenTakesOnlyOneWayOut() {

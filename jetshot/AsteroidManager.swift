@@ -154,14 +154,9 @@ class AsteroidManager {
             // Add to scene
             parentNode.addChild(piece)
 
-            // Calculate direction for split - favor downward direction to threaten player
-            // Instead of full circle, use lower hemisphere (π to 2π) which means downward angles
-            let angleRange: CGFloat = .pi // 180 degrees range
-            let angleStart: CGFloat = .pi * 0.75 // Start from lower-left
-            let angleStep = angleRange / CGFloat(max(splitPieces.count - 1, 1))
-            let baseAngle = angleStart + (angleStep * CGFloat(index))
+            // Calculate direction for split, with a little wobble. See `splitAngle`.
             let randomOffset = CGFloat.random(in: -0.3...0.3)
-            let angle = baseAngle + randomOffset
+            let angle = Self.splitAngle(index, of: splitPieces.count) + randomOffset
 
             // Calculate split velocity. Only the horizontal component is used: the
             // downward travel comes from the fall below, which is deliberately
@@ -198,6 +193,18 @@ class AsteroidManager {
 
             piece.run(sequence, withKey: "asteroidMovement")
         }
+    }
+
+    /// The direction piece `index` of a `count`-piece split leaves in: spread evenly
+    /// across the lower half-turn, π to 2π, from hard left to hard right — two pieces go
+    /// one each way, three add one straight down the middle. A lone piece goes down.
+    ///
+    /// The range used to start at 0.75π, so it ran from lower left round to *upper*
+    /// right. Only the cosine is used, and cos(0.75π) = cos(1.25π): of three pieces, two
+    /// drifted left on near-identical paths and the screen's right side stayed clear.
+    nonisolated static func splitAngle(_ index: Int, of count: Int) -> CGFloat {
+        guard count > 1 else { return .pi * 1.5 }
+        return .pi + .pi * CGFloat(index) / CGFloat(count - 1)
     }
 
     /// Where a split piece falls to, and how long it takes: from where the rock broke

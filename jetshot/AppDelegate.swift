@@ -17,11 +17,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Override point for customization after application launch.
 
-        // Before the line below, and that ordering is the whole point: `-unlockall`
-        // installs an in-memory store that turns every write in CloudStorageManager
-        // into a no-op, and CloudStorageManager kicks off its iCloud merge from its
-        // own initialiser. Install it after the singleton resolves and the merge has
-        // already read — and is about to write — the real account's progress.
+        // Before the line below, and that ordering is the whole point: a debug launch
+        // (any `DebugLaunch` argument) installs an in-memory store that turns every
+        // write in CloudStorageManager into a no-op, and CloudStorageManager kicks off
+        // its iCloud merge from its own initialiser. Install it after the singleton
+        // resolves and the merge has already read — and is about to write — the real
+        // account's progress.
         #if DEBUG
         DebugLaunch.prepare()
         #endif

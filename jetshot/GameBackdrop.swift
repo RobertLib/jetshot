@@ -20,7 +20,9 @@
 //
 //  Two canvases: `sky` holds what is effectively at infinity (stars, nebulae, the
 //  bodies on the horizon) and only redraws at 30 Hz; `world` holds the scenery the
-//  camera flies over and redraws every frame. Both are single batched draws.
+//  camera flies over and redraws every frame. Each is a handful of batched draws
+//  however many lines it holds: one per texture (lines, lights, occluding discs) in
+//  each of its back, occluder and front layers — see `WireCanvas`.
 //
 
 import SpriteKit
@@ -101,8 +103,14 @@ final class GameBackdrop: SKNode {
     /// Visibility of the current world, for cross-fades between sectors.
     private var fade: Float = 0
 
+    /// The world's clocks: seconds, and distance flown. Both are Float, as is all the
+    /// geometry built from them, so they start over whenever the world is faded out
+    /// (see `update(dt:)`) rather than growing until a Float can no longer place a
+    /// grid line smoothly.
     private var t: Float = 0
     private var travelled: Float = 0
+    /// A few seconds of flight already behind it, so the first frame is mid-journey.
+    private static let startDistance: Float = 400
     private var currentSpeed: Float = 0
     private var rush: Float = 0
     private var rushTarget: Float = 0
@@ -112,7 +120,7 @@ final class GameBackdrop: SKNode {
     private var glitchAmount: Float = 0
     private var focus: Float = 0
     private var focusTarget: Float = 0
-    private var skyTimer: Float = .infinity
+    private var skyPacer = FramePacer(interval: 1.0 / 30)
     /// How far through the level the player is, 0...1, eased.
     private var progress: Float = 0
     private var progressTarget: Float = 0
@@ -176,8 +184,7 @@ final class GameBackdrop: SKNode {
         addChild(sky)
         addChild(world)
         currentSpeed = rig.cruise
-        // A few seconds of flight already behind it, so the first frame is mid-journey.
-        travelled = 400
+        travelled = Self.startDistance
         update(dt: 0)
     }
 
@@ -228,7 +235,7 @@ final class GameBackdrop: SKNode {
         viewport = CGRect(origin: .zero, size: size)
         sky.resize(viewport: viewport)
         world.resize(viewport: viewport)
-        skyTimer = .infinity
+        skyPacer.force()
     }
 
     /// Overdrive: the world rushes, the grid burns gold, the stars stretch.
@@ -271,6 +278,19 @@ final class GameBackdrop: SKNode {
         flash = max(0, flash - dt * 3.2)
         pulseAge += dt
 
+        // The clocks cannot wrap in plain sight: the world is not periodic in either
+        // (scenery is seeded per anchor, the tunnel and the dunes wind on incommensurate
+        // sines), so any wrap would jump. They only start over while it is faded out.
+        // A level or an endless round never gets near the limit, but a menu's backdrop
+        // can run for hours with no transition to hide behind, so past it the world
+        // fades through to itself. 2^18 world units keeps a Float to 1/32 of a unit —
+        // well under a point where the camera meets the ground — and takes about half
+        // an hour at the fastest cruise; 2^12 seconds keeps the animation clock to half
+        // a millisecond.
+        if pending == nil, travelled > 262_144 || t > 4_096 {
+            pending = look
+        }
+
         if let next = pending {
             fade -= dt / 0.8
             if fade <= 0 {
@@ -282,7 +302,10 @@ final class GameBackdrop: SKNode {
                 meteors.removeAll()
                 bolts.removeAll()
                 pending = nil
-                skyTimer = .infinity
+                skyPacer.force()
+                // Nothing is drawn at zero fade, so the clocks can start over unseen.
+                t = 0
+                travelled = Self.startDistance
             }
         } else if fade < 1 {
             fade = min(1, fade + dt / 1.4)
@@ -312,9 +335,10 @@ final class GameBackdrop: SKNode {
         stepEvents(dt: dt, eye: eye)
 
         renderWorld(eye: eye)
-        skyTimer += dt
-        if skyTimer >= 1.0 / 30 || glitchAmount > 0 {
-            skyTimer = 0
+        skyPacer.advance(by: dt)
+        // Asked even on a glitch frame, which redraws regardless, so the schedule keeps
+        // running through the glitch.
+        if skyPacer.claimRedraw(frame: dt) || glitchAmount > 0 {
             renderSky()
         }
     }
@@ -454,11 +478,11 @@ final class GameBackdrop: SKNode {
         default: spacing = 40; alpha = 0.26
         }
         let wells = stage.has(.funnels) ? funnels(near: eye) : []
-        drawGround(eye: eye, spacing: spacing, alpha: alpha * (1 + 0.6 * flash), far: look.theme == .ruins ? 950 : 1000) { x, _ in
-            // The funnels sit over the rows as holes in the grid, which is what a
-            // well in spacetime looks like from above anyway.
-            wells.contains { abs($0.centre.x - x) < $0.radius * 0.9 }
-        }
+        // The funnels open holes in the grid's columns, which is what a well in
+        // spacetime looks like from above anyway; the rows run on over them.
+        let holes = wells.map { Hole(x: $0.centre.x, z: $0.centre.z, radius: $0.radius * 0.9) }
+        drawGround(eye: eye, spacing: spacing, alpha: alpha * (1 + 0.6 * flash), far: look.theme == .ruins ? 950 : 1000,
+                   holes: holes)
         drawAlertScan(eye: eye)
         if stage.ground == .canyon { drawCanyonEdges(eye: eye) }
 
@@ -568,13 +592,19 @@ final class GameBackdrop: SKNode {
         return glow
     }
 
-    private func drawGround(eye: Vec3, spacing g: Float, alpha: Float, far: Float,
-                            gap: ((Float, Float) -> Bool)? = nil) {
+    /// A round hole in the ground grid, in the ground plane.
+    private struct Hole {
+        let x: Float
+        let z: Float
+        let radius: Float
+    }
+
+    private func drawGround(eye: Vec3, spacing g: Float, alpha: Float, far: Float, holes: [Hole] = []) {
         switch stage.ground {
         case .shattered:
             drawShatteredFloor(eye: eye, spacing: g, alpha: alpha, far: far)
         case .flat where fronts.isEmpty:
-            drawFloor(eye: eye, spacing: g, color: gridColor, alpha: alpha, far: far, gap: gap)
+            drawFloor(eye: eye, spacing: g, color: gridColor, alpha: alpha, far: far, holes: holes)
         default:
             drawHeightfield(eye: eye, spacing: g, alpha: alpha, far: far)
         }
@@ -582,9 +612,14 @@ final class GameBackdrop: SKNode {
 
     /// The flat ground grid. Rows are anchored in the world, so they stream at the
     /// speed of flight; columns run along the flight path.
+    ///
+    /// A column crossing one of `holes` is cut for the length of the chord it crosses,
+    /// so the hole moves down the screen with the ground. It used to be all or nothing,
+    /// the whole column dropped while any hole near it was in range: trenches the full
+    /// depth of the view, popping in and out end to end as wells came and went.
     private func drawFloor(eye: Vec3, spacing g: Float, color: UIColor, alpha: Float,
                            halfWidth: Float = 560, far: Float = 1000, y: Float = 0,
-                           gap: ((Float, Float) -> Bool)? = nil) {
+                           holes: [Hole] = []) {
         let near = eye.z + 40
         let end = eye.z - far
         var k = Int((near / g).rounded(.down))
@@ -598,10 +633,30 @@ final class GameBackdrop: SKNode {
         let first = Int((left / g).rounded(.up))
         let lastColumn = Int((right / g).rounded(.down))
         guard first <= lastColumn else { return }
+        var cuts: [(near: Float, far: Float)] = []
         for i in first...lastColumn {
             let x = Float(i) * g
-            if let gap, gap(x, eye.z) { continue }
-            world.line(Vec3(x, y, near), Vec3(x, y, end), color: color, alpha: alpha, width: 1.1)
+            cuts.removeAll(keepingCapacity: true)
+            for hole in holes where abs(hole.x - x) < hole.radius {
+                let dx = hole.x - x
+                let half = (hole.radius * hole.radius - dx * dx).squareRoot()
+                cuts.append((hole.z + half, hole.z - half))
+            }
+            // Walk the column from the near end, drawing up to each cut and resuming
+            // past it. Nearest first, so overlapping cuts merge.
+            cuts.sort { $0.near > $1.near }
+            var from = near
+            for cut in cuts where cut.far < from {
+                if cut.near < from {
+                    let to = max(cut.near, end)
+                    if to < from { world.line(Vec3(x, y, from), Vec3(x, y, to), color: color, alpha: alpha, width: 1.1) }
+                }
+                from = cut.far
+                if from <= end { break }
+            }
+            if from > end {
+                world.line(Vec3(x, y, from), Vec3(x, y, end), color: color, alpha: alpha, width: 1.1)
+            }
         }
     }
 

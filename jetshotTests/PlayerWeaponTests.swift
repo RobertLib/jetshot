@@ -201,6 +201,32 @@ final class PlayerWeaponTests: XCTestCase {
         )
     }
 
+    /// A resize pulls the ship back into the flight area that steering uses, and does
+    /// nothing else. It used to drop the ship to its starting height wherever it was
+    /// flying, and to keep it 30 pt off the sides where steering allows 10.
+    @MainActor
+    func testUpdateBoundsOnlyClampsIntoTheFlightArea() {
+        let player = makePlayer()
+        let safeAreaBottom: CGFloat = 34
+        let bounds = Player.flightBounds(sceneWidth: Self.sceneSize.width, sceneHeight: Self.sceneSize.height,
+                                         safeAreaBottom: safeAreaBottom)
+
+        // Inside the area, high up and near the edge: left exactly where it is.
+        let flying = CGPoint(x: bounds.maxX - 5, y: bounds.minY + 250)
+        player.position = flying
+        player.updateBounds(sceneSize: Self.sceneSize, safeAreaBottom: safeAreaBottom)
+        XCTAssertEqual(player.position, flying, "a resize moved a ship that was inside the flight area")
+
+        // Outside a smaller area: pulled to its nearest edge on each axis.
+        let smaller = CGSize(width: 200, height: 300)
+        let smallerBounds = Player.flightBounds(sceneWidth: smaller.width, sceneHeight: smaller.height,
+                                                safeAreaBottom: 0)
+        player.position = CGPoint(x: 380, y: 600)
+        player.updateBounds(sceneSize: smaller, safeAreaBottom: 0)
+        XCTAssertEqual(player.position.x, smallerBounds.maxX, accuracy: 0.001)
+        XCTAssertEqual(player.position.y, smallerBounds.maxY, accuracy: 0.001)
+    }
+
     @MainActor
     func testUpdateBoundsKeepsTheShipOnScreenAfterAResize() {
         // Rotation and iPad Split View both resize the scene under the player.

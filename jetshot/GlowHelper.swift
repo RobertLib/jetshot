@@ -67,4 +67,32 @@ class GlowHelper {
         )
     }
 
+    /// Adds the standard glow, bloomed from a disc of `radius` instead of the node's
+    /// own outline.
+    ///
+    /// For anything whose outline is one of a kind. The bloom is cached by silhouette,
+    /// so each asteroid — every one cut at random — cost a fresh Gaussian blur and a
+    /// synchronous GPU readback on the main thread, three in one frame when a rock
+    /// split, and its one-off textures pushed the shared glows out of the bounded cache.
+    /// A disc per size is one texture per size, rendered once. Under a faint halo the
+    /// difference from the true outline does not show.
+    static func addRoundGlow(to node: SKNode, radius: CGFloat, color: UIColor, intensity: CGFloat = 1.0) {
+        node.childNode(withName: "enhancedGlow")?.removeFromParent()
+        // A stand-in to bloom from, built from a plain ellipse so equal radii give
+        // identical paths and so the same cache entry.
+        let disc = SKShapeNode(path: CGPath(ellipseIn: CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2),
+                                            transform: nil))
+        let profile = lightProfile(for: disc)
+        guard let glow = NeonFX.addBloom(
+            to: disc,
+            color: color,
+            intensity: intensity,
+            blur: profile.blur,
+            spread: profile.spread,
+            name: "enhancedGlow"
+        ) else { return }
+        glow.removeFromParent()
+        node.addChild(glow)
+    }
+
 }
